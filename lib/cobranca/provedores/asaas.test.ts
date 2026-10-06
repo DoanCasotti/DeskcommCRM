@@ -15,6 +15,7 @@ import {
   fimDoDiaEmSaoPaulo,
   somarCiclo,
   verificarWebhookAsaas,
+  EVENTOS_DO_WEBHOOK_ASAAS,
   type DependenciasDoAsaas,
 } from "./asaas";
 
@@ -389,5 +390,105 @@ describe("verificarWebhook", () => {
 
   it("é o verificarWebhook do adaptador", () => {
     expect(montar({}).adaptador.verificarWebhook(CORPO, cab(TOKEN), TOKEN, AGORA)?.eventoId).toBe(EVENTO.id);
+  });
+});
+
+describe("prepararWebhook e removerWebhooks", () => {
+  const URL_DO_AVISO = "https://crm.example.com/api/v1/webhooks/cobranca/asaas";
+  const NOME = `Cobrança do revendedor ${MARCA}`;
+  const CRIADO = { corpo: { object: "webhook", id: "wh_novo", name: NOME, url: URL_DO_AVISO } };
+  const TOKEN_43 = /^[A-Za-z0-9_-]{43}$/;
+
+  it("⭐ cria com os 11 eventos e o token que devolve, e NÃO apaga nada antes de confirmar", async () => {
+    const { adaptador, chamadas } = montar({ "POST /webhooks": CRIADO });
+    const preparo = await adaptador.prepararWebhook(URL_DO_AVISO, "dono@example.com");
+    if (!("segredo" in preparo)) throw new Error("esperava o ramo automático");
+    expect(preparo.segredo).toMatch(TOKEN_43);
+    expect(Buffer.from(preparo.segredo, "base64url")).toHaveLength(32);
+    expect(chamadas.map((c) => c.rota)).toEqual(["POST /webhooks"]);
+    expect(chamadas[0]?.corpo).toEqual({
+      name: NOME,
+      url: URL_DO_AVISO,
+      email: "dono@example.com",
+      enabled: true,
+      interrupted: false,
+      apiVersion: 3,
+      sendType: "SEQUENTIALLY",
+      authToken: preparo.segredo,
+      events: [...EVENTOS_DO_WEBHOOK_ASAAS],
+    });
+    expect(EVENTOS_DO_WEBHOOK_ASAAS).toHaveLength(11);
+  });
+
+  it("cada conexão gera um token novo", async () => {
+    const a = await montar({ "POST /webhooks": CRIADO }).adaptador.prepararWebhook(URL_DO_AVISO, "d@example.com");
+    const b = await montar({ "POST /webhooks": CRIADO }).adaptador.prepararWebhook(URL_DO_AVISO, "d@example.com");
+    expect("segredo" in a && "segredo" in b && a.segredo !== b.segredo).toBe(true);
+  });
+
+  it("⭐ confirmar apaga os desta instalação (mesma URL ou mesmo nome), poupa o novo e o de outra instalação; 404 é sucesso", async () => {
+    const { adaptador, chamadas } = montar({
+      "POST /webhooks": CRIADO,
+      "GET /webhooks": lista(
+        { id: "wh_novo", name: NOME, url: URL_DO_AVISO },
+        { id: "wh_velho", name: "Outro nome", url: URL_DO_AVISO },
+        { id: "wh_marca", name: NOME, url: "https://antigo.example.com/api/v1/webhooks/cobranca/asaas" },
+        { id: "wh_outra", name: "Cobrança do revendedor 0000000000000000", url: "https://homolog.example.com/x" },
+      ),
+      "DELETE /webhooks/wh_velho": { corpo: { deleted: true, id: "wh_velho" } },
+      "DELETE /webhooks/wh_marca": { status: 404 },
+    });
+    const preparo = await adaptador.prepararWebhook(URL_DO_AVISO, "d@example.com");
+    if (!("segredo" in preparo)) throw new Error("esperava o ramo automático");
+    await preparo.confirmar();
+    expect(chamadas.filter((c) => c.rota.startsWith("DELETE")).map((c) => c.rota)).toEqual([
+      "DELETE /webhooks/wh_velho",
+      "DELETE /webhooks/wh_marca",
+    ]);
+  });
+
+  it("desfazer apaga só o novo", async () => {
+    const { adaptador, chamadas } = montar({ "POST /webhooks": CRIADO, "DELETE /webhooks/wh_novo": { corpo: { deleted: true } } });
+    const preparo = await adaptador.prepararWebhook(URL_DO_AVISO, "d@example.com");
+    if (!("segredo" in preparo)) throw new Error("esperava o ramo automático");
+    await preparo.desfazer();
+    expect(chamadas.map((c) => c.rota)).toEqual(["POST /webhooks", "DELETE /webhooks/wh_novo"]);
+  });
+
+  it.each([
+    [400, { errors: [{ code: "invalid_action" }] }],
+    [403, null],
+  ])("⭐ recusa definitiva (%i) → ramo manual com URL, token e eventos; nada apagado, nada repetido", async (status, corpo) => {
+    const { adaptador, chamadas } = montar({ "POST /webhooks": { status, corpo } });
+    expect(await adaptador.prepararWebhook(URL_DO_AVISO, "d@example.com")).toEqual({
+      manual: { url: URL_DO_AVISO, segredo: expect.stringMatching(TOKEN_43), eventos: [...EVENTOS_DO_WEBHOOK_ASAAS] },
+    });
+    expect(chamadas).toHaveLength(1);
+  });
+
+  it("401 sobe como credencial inválida (chave errada não é passo a passo manual)", async () => {
+    await expect(
+      montar({ "POST /webhooks": { status: 401 } }).adaptador.prepararWebhook(URL_DO_AVISO, "d@example.com"),
+    ).rejects.toMatchObject({ credencialInvalida: true });
+  });
+
+  it("⭐ POST não repete 5xx nem rede (sem chave de idempotência, criaria dois); repete 429", async () => {
+    const fora = montar({ "POST /webhooks": { status: 503 } });
+    await expect(fora.adaptador.prepararWebhook(URL_DO_AVISO, "d@example.com")).rejects.toMatchObject({ transitorio: true });
+    expect(fora.chamadas).toHaveLength(1);
+    const rede = montar({ "POST /webhooks": ["rede_caiu", CRIADO] });
+    await expect(rede.adaptador.prepararWebhook(URL_DO_AVISO, "d@example.com")).rejects.toMatchObject({ codigo: "sem_resposta" });
+    expect(rede.chamadas).toHaveLength(1);
+    const limite = montar({ "POST /webhooks": [{ status: 429 }, CRIADO] });
+    expect("segredo" in (await limite.adaptador.prepararWebhook(URL_DO_AVISO, "d@example.com"))).toBe(true);
+    expect(limite.chamadas).toHaveLength(2);
+  });
+
+  it("removerWebhooks devolve quantos apagou", async () => {
+    const { adaptador } = montar({
+      "GET /webhooks": lista({ id: "wh_1", name: NOME, url: URL_DO_AVISO }, { id: "wh_2", name: "x", url: "https://x.example.com" }),
+      "DELETE /webhooks/wh_1": { corpo: { deleted: true } },
+    });
+    expect(await adaptador.removerWebhooks(URL_DO_AVISO)).toBe(1);
   });
 });

@@ -20,14 +20,14 @@
  *   `ErroDoProvedor(200, "resposta_invalida")`, que `sincronizar` grava como
  *   `leitura_invalida` sem tocar o estado.
  */
-import { createHash, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 
 import { z } from "zod";
 
 import { FUSO_PADRAO } from "@/lib/cobranca/fuso";
 import { logger } from "@/lib/logger";
 
-import { ErroDoProvedor, type AdaptadorDeCobranca, type Modo, type SinalDoWebhook } from "./contrato";
+import { ErroDoProvedor, type AdaptadorDeCobranca, type Modo, type SinalDoWebhook, type WebhookPreparado } from "./contrato";
 
 /** A base de cada ambiente. Qual vale sai do prefixo da chave. */
 export const ASAAS_API_BASE = {
@@ -160,6 +160,23 @@ export function somarCiclo(data: string, ciclo: string): string {
   return new Date(Date.UTC(a, m - 1 + meses, Math.min(d, ultimoDia))).toISOString().slice(0, 10);
 }
 
+/** Os 11 avisos que acordam a releitura (§6.2). Nenhum carrega estado: é só o "releia". */
+export const EVENTOS_DO_WEBHOOK_ASAAS = [
+  "PAYMENT_CONFIRMED",
+  "PAYMENT_RECEIVED",
+  "PAYMENT_OVERDUE",
+  "PAYMENT_DELETED",
+  "PAYMENT_RESTORED",
+  "PAYMENT_REFUNDED",
+  "PAYMENT_CHARGEBACK_REQUESTED",
+  "SUBSCRIPTION_CREATED",
+  "SUBSCRIPTION_UPDATED",
+  "SUBSCRIPTION_INACTIVATED",
+  "SUBSCRIPTION_DELETED",
+] as const;
+
+const webhookDoAsaas = z.object({ id: z.string().min(1), url: z.string().nullish(), name: z.string().nullish() });
+
 const eventoDoAsaas = z.object({
   // Tetos de tamanho: com o token vazado, cada aviso válido vira uma linha no arquivo de avisos.
   id: z.string().min(1).max(100),
@@ -286,10 +303,80 @@ export function criarAdaptadorAsaas(dep: DependenciasDoAsaas) {
     }
   }
 
+  /** O webhook do Asaas não tem metadados: a marca DESTA instalação vai no nome. */
+  const nomeDoWebhook = `Cobrança do revendedor ${dep.marca}`;
+
+  /** 404 é o efeito desejado (alguém apagou antes, ou é a 2ª tentativa): não é falha. */
+  async function apagarWebhook(id: string): Promise<void> {
+    try {
+      await chamar("DELETE", `/webhooks/${encodeURIComponent(id)}`);
+    } catch (e) {
+      if (!(e instanceof ErroDoProvedor && e.status === 404)) throw e;
+    }
+  }
+
+  /** Apaga os webhooks DESTA instalação (mesma URL ou mesmo nome), menos `exceto`. Devolve quantos. */
+  async function removerWebhooks(url: string, exceto?: string): Promise<number> {
+    const nossos = ler(listaDoAsaas(webhookDoAsaas), await chamar("GET", "/webhooks?limit=100")).data.filter(
+      (w) => w.id !== exceto && (w.url === url || w.name === nomeDoWebhook),
+    );
+    for (const w of nossos) await apagarWebhook(w.id);
+    return nossos.length;
+  }
+
+  /**
+   * O token (32 bytes aleatórios) é NOSSO; o Asaas o ecoa em cada aviso. Cria o
+   * novo e não apaga nada: `confirmar()` apaga os antigos depois que quem chama
+   * gravou o token, `desfazer()` apaga o novo se a gravação falhar (molde da
+   * Stripe). Recusa definitiva (4xx que não é 401: conta sem webhook por API,
+   * limite de webhooks, e-mail recusado) vira o ramo `manual`: a tela mostra
+   * URL, token e eventos para o dono cadastrar no painel, com o MESMO token.
+   * Rede, 5xx e 401 sobem: são "tente de novo" e "chave errada".
+   */
+  async function prepararWebhook(
+    url: string,
+    emailDoDono: string,
+  ): Promise<WebhookPreparado | { manual: { url: string; segredo: string; eventos: string[] } }> {
+    const segredo = randomBytes(32).toString("base64url");
+    let criado: string;
+    try {
+      criado = ler(
+        comId,
+        await chamar("POST", "/webhooks", {
+          name: nomeDoWebhook,
+          url,
+          email: emailDoDono,
+          enabled: true,
+          interrupted: false,
+          apiVersion: 3,
+          sendType: "SEQUENTIALLY",
+          authToken: segredo,
+          events: [...EVENTOS_DO_WEBHOOK_ASAAS],
+        }),
+      ).id;
+    } catch (e) {
+      const definitiva = e instanceof ErroDoProvedor && !e.transitorio && e.status !== null && e.status >= 400 && e.status !== 401;
+      if (!definitiva) throw e;
+      logger.warn("cobranca.asaas.webhook_manual", { status: e.status, codigo: e.codigo });
+      return { manual: { url, segredo, eventos: [...EVENTOS_DO_WEBHOOK_ASAAS] } };
+    }
+    return {
+      segredo,
+      confirmar: async () => {
+        await removerWebhooks(url, criado);
+      },
+      desfazer: async () => {
+        await apagarWebhook(criado);
+      },
+    };
+  }
+
   return {
     id: "asaas" as const,
     clienteExiste,
     testarChave,
     verificarWebhook: verificarWebhookAsaas,
+    prepararWebhook,
+    removerWebhooks,
   };
 }
