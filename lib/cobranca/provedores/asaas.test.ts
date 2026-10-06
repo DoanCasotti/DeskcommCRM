@@ -3,12 +3,17 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { formatadorDeData } from "@/lib/cobranca/fuso";
+
 import { ErroDoProvedor } from "./contrato";
 import {
   ASAAS_API_BASE,
   criarAdaptadorAsaas,
   erroDoAsaas,
   modoDaChaveAsaas,
+  dataCivilEmSaoPaulo,
+  fimDoDiaEmSaoPaulo,
+  somarCiclo,
   type DependenciasDoAsaas,
 } from "./asaas";
 
@@ -223,3 +228,47 @@ void readFileSync;
 void join;
 void ORG;
 void lista;
+
+describe("datas civis do Asaas", () => {
+  it("⭐ '2026-10-05' vale até 23:59:59 em São Paulo = 2026-10-06T02:59:59Z, e o texto diz 05/10", () => {
+    const fim = fimDoDiaEmSaoPaulo("2026-10-05");
+    expect(fim.toISOString()).toBe("2026-10-06T02:59:59.000Z");
+    expect(formatadorDeData("pt-BR", "America/Sao_Paulo", { day: "2-digit", month: "2-digit" }).format(fim)).toBe("05/10");
+  });
+
+  it("⭐ virada de horário: usa a tabela de fusos, nunca '-3' fixo (horário de verão de 2018 começou em 04/11)", () => {
+    expect(fimDoDiaEmSaoPaulo("2018-11-03").toISOString()).toBe("2018-11-04T02:59:59.000Z");
+    expect(fimDoDiaEmSaoPaulo("2018-11-04").toISOString()).toBe("2018-11-05T01:59:59.000Z");
+  });
+
+  it("⭐ 02:30 UTC de 06/10 ainda é 05/10 em São Paulo; 03:00 já é 06/10 (Review Focus 5)", () => {
+    expect(dataCivilEmSaoPaulo(new Date("2026-10-06T02:30:00Z"))).toBe("2026-10-05");
+    expect(dataCivilEmSaoPaulo(new Date("2026-10-06T03:00:00Z"))).toBe("2026-10-06");
+  });
+
+  it.each([
+    ["2026-01-31", "MONTHLY", "2026-02-28"],
+    ["2028-01-31", "MONTHLY", "2028-02-29"],
+    ["2026-12-15", "MONTHLY", "2027-01-15"],
+    ["2026-11-30", "QUARTERLY", "2027-02-28"],
+    ["2026-08-31", "BIMONTHLY", "2026-10-31"],
+    ["2026-08-31", "SEMIANNUALLY", "2027-02-28"],
+    ["2028-02-29", "YEARLY", "2029-02-28"],
+    ["2026-10-05", "WEEKLY", "2026-10-12"],
+    ["2026-12-25", "BIWEEKLY", "2027-01-08"],
+  ])("⭐ fim de mês: %s + %s = %s (o período nunca invade o mês seguinte)", (data, ciclo, esperado) => {
+    expect(somarCiclo(data, ciclo)).toBe(esperado);
+  });
+
+  it("31/01 pago no mensal vale até 28/02 23:59:59 em São Paulo", () => {
+    expect(fimDoDiaEmSaoPaulo(somarCiclo("2026-01-31", "MONTHLY")).toISOString()).toBe("2026-03-01T02:59:59.000Z");
+  });
+
+  it.each([["2026-02-30"], ["05/10/2026"], [""]])("data impossível %j → resposta_invalida", (data) => {
+    expect(() => fimDoDiaEmSaoPaulo(data)).toThrow(ErroDoProvedor);
+  });
+
+  it("ciclo desconhecido → resposta_invalida (nunca um período inventado)", () => {
+    expect(() => somarCiclo("2026-10-05", "DAILY")).toThrow(ErroDoProvedor);
+  });
+});

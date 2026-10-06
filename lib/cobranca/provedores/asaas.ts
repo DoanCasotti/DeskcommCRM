@@ -22,6 +22,7 @@
  */
 import { z } from "zod";
 
+import { FUSO_PADRAO } from "@/lib/cobranca/fuso";
 import { logger } from "@/lib/logger";
 
 import { ErroDoProvedor, type Modo } from "./contrato";
@@ -91,6 +92,70 @@ function ler<T>(schema: z.ZodType<T>, dados: unknown): T {
 }
 
 const comId = z.object({ id: z.string().min(1), deleted: z.boolean().nullish() });
+
+const DATA_CIVIL = /^(\d{4})-(\d{2})-(\d{2})$/;
+const PARTES_EM_SP = new Intl.DateTimeFormat("en-US", {
+  timeZone: FUSO_PADRAO,
+  hourCycle: "h23",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+});
+const DIAS_DO_CICLO: Record<string, number> = { WEEKLY: 7, BIWEEKLY: 14 };
+const MESES_DO_CICLO: Record<string, number> = { MONTHLY: 1, BIMONTHLY: 2, QUARTERLY: 3, SEMIANNUALLY: 6, YEARLY: 12 };
+
+function partesEmSaoPaulo(instante: number) {
+  const partes = PARTES_EM_SP.formatToParts(new Date(instante));
+  const v = (tipo: Intl.DateTimeFormatPartTypes) => Number(partes.find((p) => p.type === tipo)?.value);
+  return { ano: v("year"), mes: v("month"), dia: v("day"), hora: v("hour"), minuto: v("minute"), segundo: v("second") };
+}
+
+function lerDataCivil(data: string): [number, number, number] {
+  const m = DATA_CIVIL.exec(data);
+  const [a, mes, d] = m ? [Number(m[1]), Number(m[2]), Number(m[3])] : [Number.NaN, Number.NaN, Number.NaN];
+  const conferida = new Date(Date.UTC(a, mes - 1, d));
+  if (!m || conferida.getUTCFullYear() !== a || conferida.getUTCMonth() !== mes - 1 || conferida.getUTCDate() !== d) {
+    throw new ErroDoProvedor(200, "resposta_invalida", false);
+  }
+  return [a, mes, d];
+}
+
+/** O dia civil em São Paulo de um instante (`AAAA-MM-DD`). */
+export function dataCivilEmSaoPaulo(instante: Date): string {
+  const p = partesEmSaoPaulo(instante.getTime());
+  return `${p.ano}-${String(p.mes).padStart(2, "0")}-${String(p.dia).padStart(2, "0")}`;
+}
+
+/**
+ * `dueDate` do Asaas é data civil e o cliente paga até o fim do dia: vale até
+ * 23:59:59 em São Paulo. O deslocamento vem da tabela de fusos (duas voltas: a
+ * 2ª corrige o chute que caiu do outro lado de uma virada de horário), nunca
+ * de um "-3" fixo — o horário de verão já existiu e pode voltar.
+ */
+export function fimDoDiaEmSaoPaulo(data: string): Date {
+  const [a, m, d] = lerDataCivil(data);
+  const relogio = Date.UTC(a, m - 1, d, 23, 59, 59);
+  let instante = relogio + 3 * 3_600_000;
+  for (let volta = 0; volta < 2; volta += 1) {
+    const p = partesEmSaoPaulo(instante);
+    instante = relogio - (Date.UTC(p.ano, p.mes - 1, p.dia, p.hora, p.minuto, p.segundo) - instante);
+  }
+  return new Date(instante);
+}
+
+/** Data civil + um `cycle` do Asaas. Dia 31 num mês menor cai no último dia dele. */
+export function somarCiclo(data: string, ciclo: string): string {
+  const [a, m, d] = lerDataCivil(data);
+  const dias = DIAS_DO_CICLO[ciclo];
+  if (dias !== undefined) return new Date(Date.UTC(a, m - 1, d + dias)).toISOString().slice(0, 10);
+  const meses = MESES_DO_CICLO[ciclo];
+  if (meses === undefined) throw new ErroDoProvedor(200, "resposta_invalida", false);
+  const ultimoDia = new Date(Date.UTC(a, m - 1 + meses + 1, 0)).getUTCDate();
+  return new Date(Date.UTC(a, m - 1 + meses, Math.min(d, ultimoDia))).toISOString().slice(0, 10);
+}
 
 export function criarAdaptadorAsaas(dep: DependenciasDoAsaas) {
   if (dep.baseUrl !== undefined && !baseDeLoopback(dep.baseUrl)) {
