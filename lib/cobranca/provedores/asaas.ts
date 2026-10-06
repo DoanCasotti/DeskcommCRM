@@ -378,10 +378,17 @@ export function criarAdaptadorAsaas(dep: DependenciasDoAsaas): AdaptadorDeCobran
     }
   }
 
-  /** Apaga os webhooks DESTA instalação (mesma URL ou mesmo nome), menos `exceto`. Devolve quantos. */
+  /** A URL sem a query de conexão: é o que identifica o aviso desta instalação. */
+  const baseDaUrl = (url: string) => url.split("?")[0] ?? url;
+
+  /**
+   * Apaga os webhooks DESTA instalação (mesma URL, com ou sem a query de conexão,
+   * ou mesmo nome), menos `exceto`. Devolve quantos.
+   */
   async function removerWebhooks(url: string, exceto?: string): Promise<number> {
+    const base = baseDaUrl(url);
     const nossos = ler(listaDoAsaas(webhookDoAsaas), await chamar("GET", "/webhooks?limit=100")).data.filter(
-      (w) => w.id !== exceto && (w.url === url || w.name === nomeDoWebhook),
+      (w) => w.id !== exceto && (baseDaUrl(w.url ?? "") === base || w.name === nomeDoWebhook),
     );
     for (const w of nossos) await apagarWebhook(w.id);
     return nossos.length;
@@ -395,12 +402,19 @@ export function criarAdaptadorAsaas(dep: DependenciasDoAsaas): AdaptadorDeCobran
    * limite de webhooks, e-mail recusado) vira o ramo `manual`: a tela mostra
    * URL, token e eventos para o dono cadastrar no painel, com o MESMO token.
    * Rede, 5xx e 401 sobem: são "tente de novo" e "chave errada".
+   *
+   * O Asaas recusa (400 invalid_object) um 2º aviso com a MESMA URL, o que
+   * quebraria toda reconexão. Medido no sandbox: a mesma URL com `?conexao=<8 hex>`
+   * é aceita como distinta e os dois coexistem. A rota de aviso ignora a query.
+   * Assim a troca segue em duas fases, sem janela em que o token do Asaas e o do
+   * banco divirjam.
    */
   async function prepararWebhook(
     url: string,
     emailDoDono: string,
   ): Promise<WebhookPreparado | { manual: { url: string; segredo: string; eventos: string[] } }> {
     const segredo = randomBytes(32).toString("base64url");
+    url = `${baseDaUrl(url)}?conexao=${randomBytes(4).toString("hex")}`;
     let criado: string;
     try {
       criado = ler(

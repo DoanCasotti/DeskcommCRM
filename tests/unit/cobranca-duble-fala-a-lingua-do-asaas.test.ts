@@ -87,7 +87,7 @@ describe("dialeto Asaas do dublê × adaptador Asaas", () => {
     const preparo = await a.prepararWebhook(urlDoReceptor, "dono@contrato.test");
     if (!("segredo" in preparo)) throw new Error("com a API aceitando, o webhook do Asaas nasce pela API");
     await preparo.confirmar();
-    expect(duble.asaas.urlDoWebhook()).toBe(urlDoReceptor);
+    expect(duble.asaas.urlDoWebhook()).toMatch(new RegExp(`^${urlDoReceptor.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\?conexao=[0-9a-f]{8}$`));
     expect(duble.asaas.tokenDoWebhook()).toBe(preparo.segredo);
     expect([...duble.asaas.eventosDoWebhook()].sort()).toEqual([...EVENTOS_DA_SPEC].sort());
 
@@ -166,12 +166,26 @@ describe("dialeto Asaas do dublê × adaptador Asaas", () => {
     expect(a.verificarWebhook(primeiro?.corpo ?? "", new Headers({ "asaas-access-token": `${primeiro?.token}x` }), preparo.segredo, new Date())).toBeNull();
   });
 
+  it("⭐ reconexão: o dublê recusa URL repetida como o sandbox; a URL com ?conexao= passa, confirmar deixa um, desfazer deixa o anterior", async () => {
+    const a = await asaas();
+    const um = await a.prepararWebhook(urlDoReceptor, "dono@contrato.test");
+    const dois = await a.prepararWebhook(urlDoReceptor, "dono@contrato.test");
+    if (!("segredo" in um) || !("segredo" in dois)) throw new Error("a reconexão não pode cair no ramo manual");
+    await dois.confirmar();
+    expect(duble.asaas.tokenDoWebhook()).toBe(dois.segredo);
+    const tres = await a.prepararWebhook(urlDoReceptor, "dono@contrato.test");
+    if (!("segredo" in tres)) throw new Error("a reconexão não pode cair no ramo manual");
+    await tres.desfazer();
+    expect(duble.asaas.tokenDoWebhook()).toBe(dois.segredo);
+    expect(await a.removerWebhooks(urlDoReceptor)).toBe(1);
+  });
+
   it("conta que não deixa criar o webhook pela API: o adaptador devolve o passo a passo manual com os 11 eventos da spec", async () => {
     duble.asaas.recusarCriacaoDeWebhook(true);
     try {
       const preparo = await (await asaas()).prepararWebhook(urlDoReceptor, "dono@contrato.test");
       if (!("manual" in preparo)) throw new Error("a API recusou e o adaptador não caiu no ramo manual");
-      expect(preparo.manual.url).toBe(urlDoReceptor);
+      expect(preparo.manual.url.startsWith(`${urlDoReceptor}?conexao=`)).toBe(true);
       expect(preparo.manual.segredo.length).toBeGreaterThanOrEqual(32);
       expect([...preparo.manual.eventos].sort()).toEqual([...EVENTOS_DA_SPEC].sort());
     } finally {

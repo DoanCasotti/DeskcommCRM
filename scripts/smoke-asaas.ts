@@ -65,9 +65,9 @@ type CobrancaCrua = { id: string; dueDate: string; status: string; value: number
 const cobrancasDaAssinatura = async (id: string) => ((await sandbox("GET", `/payments?subscription=${id}&limit=100`)).data ?? []) as CobrancaCrua[];
 const fimDoDia = (d: string) => new Date(`${d}T23:59:59-03:00`).toISOString();
 const diasDepois = (d: string, n: number) => new Date(Date.parse(`${d}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
-/** Os webhooks com a URL do smoke: é por ela que o adaptador reconhece os desta instalação. */
+/** Os webhooks com a URL do smoke (a base, com ou sem `?conexao=`): é por ela que o adaptador reconhece os desta instalação. */
 const webhooksDoSmoke = async (url: string) =>
-  (((await sandbox("GET", "/webhooks?limit=100")).data ?? []) as Array<{ id: string; url: string; events?: string[] }>).filter((x) => x.url === url);
+  (((await sandbox("GET", "/webhooks?limit=100")).data ?? []) as Array<{ id: string; url: string; events?: string[] }>).filter((x) => (x.url.split("?")[0] ?? x.url) === url);
 
 const orgId = randomUUID();
 const adaptador = criarAdaptadorAsaas({ lerChave: async () => chave, marca: `smoke-${orgId.slice(0, 8)}` });
@@ -213,17 +213,24 @@ try {
     webhook = primeiros[0]?.id ?? null;
     if (primeiros.length !== 1) falha(`webhooks com a URL do smoke: ${primeiros.length}`);
     ok(`webhook por API: 1 endpoint com ${primeiros[0]?.events?.length ?? 0} eventos; authToken de 43 caracteres aceito (não impresso)`);
-    // Reconexão na MESMA conta (trocar ou rotacionar a chave): o adaptador cria o novo com a MESMA URL
-    // antes de apagar o antigo. Se o Asaas recusar URL repetida, toda reconexão cairia no ramo manual.
+    // Reconexão na MESMA conta (trocar ou rotacionar a chave): o adaptador cria o novo com a mesma URL
+    // mais `?conexao=`, porque o Asaas recusa URL idêntica (400 invalid_object, medido).
     const deNovo = await adaptador.prepararWebhook(urlDoWebhook, "smoke@example.com");
     if ("manual" in deNovo) {
-      falha("a 2ª conexão com a MESMA URL caiu no ramo manual: o Asaas recusa URL repetida, e toda reconexão quebraria o aviso. Leve ao dono: o adaptador precisa EDITAR o aviso existente (PUT /webhooks/{id}) em vez de criar outro");
+      falha("a 2ª conexão caiu no ramo manual: a URL com ?conexao= foi recusada, e toda reconexão quebraria o aviso. Leve ao dono");
     }
     await deNovo.confirmar();
     const depois = await webhooksDoSmoke(urlDoWebhook);
     webhook = depois[0]?.id ?? null;
     if (depois.length !== 1 || depois[0]?.id === primeiros[0]?.id) falha(`reconexão: ${depois.length} webhooks com a URL do smoke, e o que sobrou ${depois[0]?.id === primeiros[0]?.id ? "é o ANTIGO" : "é o novo"}`);
-    ok("reconexão com a mesma URL: criou de novo pela API, e o confirmar deixou só o novo");
+    ok("reconexão: criou de novo pela API (URL com ?conexao=), e o confirmar deixou só o novo");
+    // desfazer: apaga só o novo e o aviso anterior fica de pé.
+    const terceiro = await adaptador.prepararWebhook(urlDoWebhook, "smoke@example.com");
+    if ("manual" in terceiro) falha("a 3ª conexão caiu no ramo manual");
+    else await terceiro.desfazer();
+    const aposDesfazer = await webhooksDoSmoke(urlDoWebhook);
+    if (aposDesfazer.length !== 1 || aposDesfazer[0]?.id !== depois[0]?.id) falha(`desfazer: ${aposDesfazer.length} avisos, e o anterior ${aposDesfazer[0]?.id === depois[0]?.id ? "ficou" : "SUMIU"}`);
+    ok("desfazer apagou só o novo; o aviso anterior continua");
   }
   // Releitura no fim da corrida: a geração ocorreu depois da criação? (só distingue "assíncrono em segundos"; "job diário" pede reler no dia seguinte)
   if (assinaturaFutura) {
@@ -234,6 +241,8 @@ try {
   console.error(`✗ SMOKE ASAAS FAIL: ${e instanceof Error ? e.message : String(e)}`);
   process.exitCode = 1;
 } finally {
+  // pela URL do smoke (base, com e sem query), não só pelo id capturado
+  for (const x of await webhooksDoSmoke(urlDoWebhook).catch(() => [])) await cru(ASAAS_API_BASE.teste, "DELETE", `/webhooks/${x.id}`).catch(() => null);
   if (webhook) await cru(ASAAS_API_BASE.teste, "DELETE", `/webhooks/${webhook}`).catch(() => null);
   if (assinatura) await cru(ASAAS_API_BASE.teste, "DELETE", `/subscriptions/${assinatura}`).catch(() => null);
   if (cliente) await cru(ASAAS_API_BASE.teste, "DELETE", `/customers/${cliente}`).catch(() => null);

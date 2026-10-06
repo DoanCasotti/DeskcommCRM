@@ -13,5 +13,7 @@
 ✓ trocarPlano (PUT): assinatura e 0 pendentes com R$ 99,90; a paga segue com R$ 49,90
 ✓ cancelar: sem includeDeleted a assinatura some; com ele, deleted=true; cancelada e o período pago fica; pendentes que sobraram = 0 (a §6.2 passo 8 supõe 0)
 ✓ webhook por API: 1 endpoint com 11 eventos; authToken de 43 caracteres aceito (não impresso)
-{"level":"warn","msg":"cobranca.asaas.webhook_manual","ts":"2026-10-06T14:27:44.766Z","status":400,"codigo":"invalid_object"}
-✗ SMOKE ASAAS FAIL: a 2ª conexão com a MESMA URL caiu no ramo manual: o Asaas recusa URL repetida, e toda reconexão quebraria o aviso. Leve ao dono: o adaptador precisa EDITAR o aviso existente (PUT /webhooks/{id}) em vez de criar outro
+✓ reconexão: criou de novo pela API (URL com ?conexao=), e o confirmar deixou só o novo
+✓ desfazer apagou só o novo; o aviso anterior continua
+✓ releitura final da assinatura a 35 dias: 1 cobranças
+✓ SMOKE ASAAS OK

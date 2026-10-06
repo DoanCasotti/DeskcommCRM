@@ -315,6 +315,7 @@ export function criarDialetoAsaas(baseAtual: () => string): DialetoAsaas {
       if (c.enabled !== true || c.interrupted !== false || c.sendType !== "SEQUENTIALLY") {
         return erro(res, 400, "invalid_webhook", "a spec manda enabled:true, interrupted:false e sendType SEQUENTIALLY");
       }
+      if (webhooks.some((x) => x.url === destino)) return erro(res, 400, "invalid_object", "Já existe um webhook com esta URL.");
       const w: WebhookAsaas = { id: novoId("wh"), name: texto(c.name), url: destino, email, authToken: token, events: eventos };
       webhooks.push(w);
       return json(res, 200, objWebhook(w));

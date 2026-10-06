@@ -402,6 +402,7 @@ describe("prepararWebhook e removerWebhooks", () => {
   const NOME = `Cobrança do revendedor ${MARCA}`;
   const CRIADO = { corpo: { object: "webhook", id: "wh_novo", name: NOME, url: URL_DO_AVISO } };
   const TOKEN_43 = /^[A-Za-z0-9_-]{43}$/;
+  const COM_QUERY = /^https:\/\/crm\.example\.com\/api\/v1\/webhooks\/cobranca\/asaas\?conexao=[0-9a-f]{8}$/;
 
   it("⭐ cria com os 11 eventos e o token que devolve, e NÃO apaga nada antes de confirmar", async () => {
     const { adaptador, chamadas } = montar({ "POST /webhooks": CRIADO });
@@ -412,7 +413,7 @@ describe("prepararWebhook e removerWebhooks", () => {
     expect(chamadas.map((c) => c.rota)).toEqual(["POST /webhooks"]);
     expect(chamadas[0]?.corpo).toEqual({
       name: NOME,
-      url: URL_DO_AVISO,
+      url: expect.stringMatching(COM_QUERY),
       email: "dono@example.com",
       enabled: true,
       interrupted: false,
@@ -451,6 +452,42 @@ describe("prepararWebhook e removerWebhooks", () => {
     ]);
   });
 
+  it("⭐ reconexão: o Asaas recusa a URL repetida, então o aviso novo leva ?conexao=; confirmar deixa UM, desfazer deixa o anterior", async () => {
+    const velho = { id: "wh_velho", name: NOME, url: URL_DO_AVISO };
+    const novo = { id: "wh_novo", name: NOME, url: `${URL_DO_AVISO}?conexao=aaaaaaaa` };
+    const rotas = {
+      "POST /webhooks": CRIADO,
+      "GET /webhooks": lista(velho, novo),
+      "DELETE /webhooks/wh_velho": { corpo: { deleted: true } },
+      "DELETE /webhooks/wh_novo": { corpo: { deleted: true } },
+    };
+    const a = montar(rotas);
+    const preparo = await a.adaptador.prepararWebhook(URL_DO_AVISO, "d@example.com");
+    if (!("segredo" in preparo)) throw new Error("reconexão não pode cair no ramo manual");
+    expect(a.chamadas[0]?.corpo).toMatchObject({ url: expect.stringMatching(COM_QUERY) });
+    await preparo.confirmar();
+    expect(a.chamadas.filter((c) => c.rota.startsWith("DELETE")).map((c) => c.rota)).toEqual(["DELETE /webhooks/wh_velho"]);
+    const b = montar(rotas);
+    const outro = await b.adaptador.prepararWebhook(URL_DO_AVISO, "d@example.com");
+    if (!("segredo" in outro)) throw new Error("esperava o ramo automático");
+    await outro.desfazer();
+    expect(b.chamadas.filter((c) => c.rota.startsWith("DELETE")).map((c) => c.rota)).toEqual(["DELETE /webhooks/wh_novo"]);
+  });
+
+  it("removerWebhooks reconhece a URL com e sem a query de conexão", async () => {
+    const { adaptador, chamadas } = montar({
+      "GET /webhooks": lista(
+        { id: "wh_1", name: "x", url: URL_DO_AVISO },
+        { id: "wh_2", name: "x", url: `${URL_DO_AVISO}?conexao=bbbbbbbb` },
+        { id: "wh_3", name: "x", url: "https://x.example.com" },
+      ),
+      "DELETE /webhooks/wh_1": { corpo: { deleted: true } },
+      "DELETE /webhooks/wh_2": { corpo: { deleted: true } },
+    });
+    expect(await adaptador.removerWebhooks(`${URL_DO_AVISO}?conexao=cccccccc`)).toBe(2);
+    expect(chamadas.filter((c) => c.rota.startsWith("DELETE"))).toHaveLength(2);
+  });
+
   it("desfazer apaga só o novo", async () => {
     const { adaptador, chamadas } = montar({ "POST /webhooks": CRIADO, "DELETE /webhooks/wh_novo": { corpo: { deleted: true } } });
     const preparo = await adaptador.prepararWebhook(URL_DO_AVISO, "d@example.com");
@@ -465,7 +502,7 @@ describe("prepararWebhook e removerWebhooks", () => {
   ])("⭐ recusa definitiva (%i) → ramo manual com URL, token e eventos; nada apagado, nada repetido", async (status, corpo) => {
     const { adaptador, chamadas } = montar({ "POST /webhooks": { status, corpo } });
     expect(await adaptador.prepararWebhook(URL_DO_AVISO, "d@example.com")).toEqual({
-      manual: { url: URL_DO_AVISO, segredo: expect.stringMatching(TOKEN_43), eventos: [...EVENTOS_DO_WEBHOOK_ASAAS] },
+      manual: { url: expect.stringMatching(COM_QUERY), segredo: expect.stringMatching(TOKEN_43), eventos: [...EVENTOS_DO_WEBHOOK_ASAAS] },
     });
     expect(chamadas).toHaveLength(1);
   });
@@ -828,7 +865,7 @@ describe("trocarPlano", () => {
     expect(chamadas[1]?.corpo).toEqual({ value: 99.9, description: "Pro", updatePendingPayments: true });
   });
 
-  it("⭐ duas pendentes futuras (geradas 40 dias antes) e a do período paga: a troca passa e as duas levam o valor novo (Review Focus 4)", async () => {
+  it("⭐ duas pendentes futuras (depois de um pagamento, no dublê) e a do período paga: a troca passa e as duas levam o valor novo (Review Focus 4)", async () => {
     const { troca, chamadas } = trocar([
       cobranca({ id: "pay_out", status: "RECEIVED", dueDate: "2026-10-01" }),
       cobranca({ id: "pay_nov", status: "PENDING", dueDate: "2026-11-01" }),
