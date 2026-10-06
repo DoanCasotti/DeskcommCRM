@@ -179,6 +179,20 @@ describe("classificarErroDoGoogle — `invalid_grant` com descrição", () => {
       expect(estadoDaConexaoApos(c.desfecho)).toBeNull();
     }
   });
+
+  it("recusa SEM motivo reconhecido: o status decide — HTTP 400 é `permanente`, sem status é `transitorio` (#2393)", () => {
+    // É a mudança que acompanha o status: a régua de `transitorio` já era
+    // "status é null ou >= 500"; o que faltava era o status CHEGAR aqui.
+    const comStatus = classificarErroDoGoogle({ error: "algo_desconhecido", status: 400 }, "token");
+    expect(comStatus.desfecho).toBe("permanente");
+    expect(estadoDaConexaoApos(comStatus.desfecho)).toBe("error");
+    expect(comStatus.mensagem).toContain("HTTP 400");
+
+    const semStatus = classificarErroDoGoogle({ error: "sem resposta do Google: fetch failed" }, "token");
+    expect(semStatus.desfecho).toBe("transitorio");
+    expect(estadoDaConexaoApos(semStatus.desfecho)).toBeNull();
+    expect(semStatus.mensagem).toContain("sem resposta");
+  });
 });
 
 describe("agenda-google-refresh — a rodada que precisa ESCALAR para reconectar", () => {
@@ -228,5 +242,52 @@ describe("agenda-google-refresh — a rodada que precisa ESCALAR para reconectar
 
     expect(resumo).toMatchObject({ reautenticar: 1, falhas: 0 });
     expect(atualizacoes[0]?.campos).toMatchObject({ status: "token_expired" });
+  });
+
+  it("recusa 400 SEM motivo reconhecido vira `error`, e a frase diz HTTP 400 (#2393)", async () => {
+    // Antes do status, esta mesma recusa caía em `transitorio`: a conexão
+    // seguia saudável repetindo para sempre, e a tela dizia "sem resposta"
+    // para um Google que respondeu.
+    linhas = [conexao()];
+    vi.mocked(fetch).mockResolvedValue(respostaHttp({ error: "algo_desconhecido" }, 400));
+
+    const { renovarAgendasDoGoogle } = await carregarRota();
+    const resumo = await renovarAgendasDoGoogle(admin(), { agora: AGORA });
+
+    expect(resumo).toMatchObject({ renovadas: 0, reautenticar: 0, falhas: 1 });
+    expect(atualizacoes[0]?.campos).toMatchObject({ status: "error" });
+    const frase = String(atualizacoes[0]?.campos.last_sync_error);
+    expect(frase).toContain("HTTP 400");
+    expect(frase).not.toContain("sem resposta");
+  });
+});
+
+describe("agenda-google-refresh — o status certo para cada resposta do Google (#2393)", () => {
+  /** Resposta 200 cujo corpo cai no meio da leitura (timeout ou reset). */
+  const corpoCortado = {
+    ok: true,
+    status: 200,
+    json: async () => {
+      throw new TypeError("terminated");
+    },
+  } as unknown as Response;
+
+  it.each([
+    ["400 invalid_grant pede reconectar", respostaHttp({ error: "invalid_grant" }, 400), "token_expired"],
+    ["401 sem motivo pede reconectar", respostaHttp({}, 401), "token_expired"],
+    ["429 recua", respostaHttp({}, 429), "rate_limited"],
+    ["503 é passageiro: não mexe na conexão", respostaHttp({}, 503), null],
+    ["200 com o corpo cortado é rede: não mexe na conexão", corpoCortado, null],
+    ["200 sem access_token não é recusa: não mexe na conexão", respostaHttp({}, 200), null],
+  ] as const)("%s", async (_nome, resposta, estado) => {
+    linhas = [conexao()];
+    vi.mocked(fetch).mockResolvedValue(resposta);
+
+    const { renovarAgendasDoGoogle } = await carregarRota();
+    const resumo = await renovarAgendasDoGoogle(admin(), { agora: AGORA });
+
+    expect(resumo).toMatchObject({ examinadas: 1, renovadas: 0 });
+    if (estado === null) expect(atualizacoes).toEqual([]);
+    else expect(atualizacoes[0]?.campos).toMatchObject({ status: estado });
   });
 });

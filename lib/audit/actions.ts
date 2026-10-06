@@ -240,6 +240,7 @@ export const AUDIT_ACTIONS = [
   "channel.pairing_code_requested",
   "channel.social_configured",
   "channel.social_disconnected",
+  "channel.social_desvinculado",
   "channel.ai_access_updated",
   "channel.acervo_updated",
   "channel.reconnected",

@@ -329,18 +329,37 @@ const PERFIL_PT: PerfilDoPais = {
   },
   padroesDePii: [
     {
+      // ANTES do NIF: `+351 912 345 678` tem três blocos que o padrão de NIF
+      // também casaria (o miolo `912 345 678`), e o telefone é o dono do número.
+      tipo: "telefonePT",
+      marcador: "[TELEFONE]",
+      fonte: "\\+351[\\s.-]?\\d{3}[\\s.-]?\\d{3}[\\s.-]?\\d{3}",
+      naoCobre:
+        "telemóvel de 9 dígitos sem o `+351` — é indistinguível de um NIF e os dois são PII; o que separa é o prefixo",
+    },
+    {
+      tipo: "iban",
+      marcador: "[IBAN]",
+      fonte: "\\bPT\\d{2}(?:\\s?\\d{4}){5}\\s?\\d\\b",
+      naoCobre: "IBAN de outro país e IBAN colado a letra sem o prefixo `PT`",
+    },
+    {
       tipo: "nif",
       marcador: "[NIF]",
-      fonte: "\\b\\d{9}\\b",
+      // O lookahead deixa o CPF separado (`123.456.789-09`) para o padrão
+      // brasileiro: sem ele, os nove primeiros dígitos viravam `[NIF]` e os
+      // dois do dígito de controlo sobravam no texto (medido na cerca
+      // `mascara-da-ingestao-tem-o-brasil-por-baixo`).
+      fonte: "\\b(?:PT\\s?)?\\d{3}[ .]?\\d{3}[ .]?\\d{3}(?![.\\s-]\\d{2}\\b)\\b",
       naoCobre:
-        "NIF com menos de 9 dígitos e número de telemóvel português de 9 dígitos — sem o prefixo `+351` o padrão não distingue um do outro",
+        "NIF colado a letra sem o prefixo `PT` (ex.: `nif123456789`) e NIF com menos de 9 dígitos",
     },
     {
       tipo: "codigoPostal",
       marcador: "[CODIGO_POSTAL]",
-      fonte: "\\b\\d{4}-\\d{3}\\b",
+      fonte: "\\b\\d{4}[-\\s]\\d{3}\\b",
       naoCobre:
-        "código postal sem hífen e código estrangeiro (CEP brasileiro usa ponto e 8 dígitos)",
+        "código postal sem separador (7 dígitos) e código estrangeiro (CEP brasileiro usa ponto e 8 dígitos)",
     },
   ],
 };
