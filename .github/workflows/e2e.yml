@@ -1263,12 +1263,22 @@ jobs:
       # (ZERNIO_API_BASE_URL + conta e chave), e isso é ambiente do `next start`,
       # não da spec — ligá-lo no `.env.e2e` de todas as partes mudaria o que as
       # outras specs medem. Roda local; o comando está no cabeçalho da spec.
+      #
+      # `cobranca-stripe-teste` entrou aqui em 2026-09-30 (PR 3a da cobrança do
+      # revendedor): exige uma CHAVE DE TESTE da Stripe (STRIPE_TEST_SECRET_KEY,
+      # sk_test_/rk_test_; a de produção é recusada ao carregar o arquivo) e uma
+      # URL PÚBLICA https para a Stripe entregar os avisos. Nenhuma das duas
+      # cabe num repositório público nem no runner. O CI prova o mesmo caminho
+      # em `cobranca-revendedor`, contra o dublê que assina os avisos de
+      # verdade. Só esta prova que a Stripe real ainda responde o contrato da
+      # versão fixada. Sem a chave, ela pula; o cabeçalho tem a receita.
       FORA_DO_CI: >-
         inbox-tempo-real.spec.ts
         cadastro-sem-confirmacao-de-email.spec.ts
         aviso-de-caso-chega-no-whatsapp.spec.ts
         jev-chave-real.spec.ts
         modelos-do-parceiro-editar-apagar.spec.ts
+        cobranca-stripe-teste.spec.ts
     steps:
       # ── O RELÓGIO DESTA PARTE: ONDE O TETO DE 30 MIN COMEÇA A CONTAR ──────
       #
