@@ -5,6 +5,7 @@ import Link from "next/link";
 import { FaixaDoTesteGratis } from "@/components/cobranca/FaixaDoTesteGratis";
 import { useT } from "@/hooks/i18n/useT";
 import type { FaixaDaCobranca as Faixa } from "@/lib/cobranca/faixa";
+import { formatadorDeData } from "@/lib/cobranca/fuso";
 import { linkDePagamentoSeguro } from "@/lib/cobranca/link";
 import { useIdioma } from "@/lib/i18n/IdiomaProvider";
 
@@ -14,10 +15,10 @@ const PAINEL = "/app/settings/billing";
  * A faixa da cobrança em `/app` (spec §9). É porta, não trava: leva a pagar em
  * um clique (o link da fatura) ou ao painel do plano. Só o admin a vê.
  */
-export function FaixaDaCobranca({ faixa }: { faixa: Exclude<Faixa, null> }) {
+export function FaixaDaCobranca({ faixa, fuso = null }: { faixa: Exclude<Faixa, null>; fuso?: string | null }) {
   const t = useT();
   const idioma = useIdioma();
-  const dia = (v: string | null) => (v ? new Intl.DateTimeFormat(idioma, { day: "2-digit", month: "2-digit" }).format(new Date(v)) : "");
+  const dia = (v: string | null) => (v ? formatadorDeData(idioma, fuso, { day: "2-digit", month: "2-digit" }).format(new Date(v)) : "");
   if (faixa.tipo === "teste") return <FaixaDoTesteGratis dias={faixa.dias} />;
 
   const urgente = faixa.tipo === "atraso" || faixa.tipo === "teste_acabou" || faixa.tipo === "avise_o_admin";

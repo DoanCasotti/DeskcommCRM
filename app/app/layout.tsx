@@ -70,6 +70,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // EPIC-11: gate /app/* on org not being suspended (S-11.08).
   let conexoesCaidas: ConexaoCaida[] = [];
   let faixa: Faixa = null;
+  let orgFuso: string | null = null;
   let enrolled = false;
   let needsMfaGate = false;
 
@@ -102,7 +103,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     const [orgRes, conexoes, isEnrolled, mfaRequired, modulos] = await Promise.all([
       admin
         .from("organizations")
-        .select("onboarded_at, status, settings")
+        .select("onboarded_at, status, settings, timezone")
         .eq("id", activeOrg.orgId)
         .maybeSingle(),
       listarConexoesCaidas(admin, activeOrg.orgId),
@@ -160,6 +161,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           codigo: error.code,
         });
       } else {
+        orgFuso = orgRow?.timezone ?? null;
         faixa = faixaDaCobranca(data, new Date(), roleAtLeast(activeOrg.role, "admin"));
       }
     }
@@ -321,7 +323,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         <EstiloDoTemaDaExtensao css={cssDoTemaDaExtensao} />
         <ImpersonateBanner impersonating={impersonating} />
         <ConexaoCaidaBanner caidas={conexoesCaidas} />
-        {faixa !== null && <FaixaDaCobranca faixa={faixa} />}
+        {faixa !== null && <FaixaDaCobranca faixa={faixa} fuso={orgFuso} />}
         {needsMfaGate ? (
           // Gate always mounted for MFA-required roles; it latches the blocking
           // decision client-side so the enroll Server Action's revalidation
