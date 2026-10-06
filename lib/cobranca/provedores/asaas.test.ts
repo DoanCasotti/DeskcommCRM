@@ -649,3 +649,159 @@ describe("iniciarAssinatura", () => {
     expect(tudo).not.toContain("idem-1");
   });
 });
+
+const fim = (data: string) => fimDoDiaEmSaoPaulo(data);
+
+describe("lerSituacao", () => {
+  const ler = (assinaturas: Linha[], cobrancas: Linha[], agora = AGORA) => {
+    const m = montar(
+      { "GET /subscriptions": rotaDeAssinaturas(assinaturas), "GET /payments": rotaDePagamentos(cobrancas) },
+      { agora: () => agora },
+    );
+    return { ...m, situacao: m.adaptador.lerSituacao({ clienteRef: CLIENTE }) };
+  };
+
+  it("sem assinatura nenhuma", async () => {
+    expect(await ler([], []).situacao).toMatchObject({
+      assinaturaRef: null, existe: false, assinaturasVivas: 0, cancelada: false, jaPagou: false,
+      proximoVencimento: null, linkDePagamento: null, statusBruto: "sem_assinatura",
+    });
+  });
+
+  it("⭐ em dia: período pago e a cobrança do próximo, já gerada, aberta", async () => {
+    const { situacao } = ler([assinatura()], [
+      cobranca({ id: "pay_out", status: "RECEIVED", dueDate: "2026-10-01" }),
+      cobranca({ id: "pay_nov", status: "PENDING", dueDate: "2026-11-01" }),
+    ]);
+    expect(await situacao).toEqual({
+      assinaturaRef: "sub_1", existe: true, assinaturasVivas: 1, cancelada: false, cancelaNoFim: false,
+      emAtraso: false, vencidaDesde: null, proximoVencimento: fim("2026-11-01"), jaPagou: true,
+      emTesteNoProvedorAte: null, pagamentoSemAssinaturaViva: false,
+      linkDePagamento: "https://sandbox.asaas.com/i/pay_nov", statusBruto: "ACTIVE",
+    });
+  });
+
+  it("⭐ nextDueDate NÃO é o fim do período: é a próxima cobrança ainda não gerada", async () => {
+    const { situacao } = ler([assinatura({ nextDueDate: "2026-12-01" })], [
+      cobranca({ id: "pay_out", status: "RECEIVED", dueDate: "2026-10-01" }),
+      cobranca({ id: "pay_nov", status: "PENDING", dueDate: "2026-11-01" }),
+    ]);
+    const { proximoVencimento } = await situacao;
+    expect(proximoVencimento).toEqual(fim("2026-11-01"));
+    expect(proximoVencimento).not.toEqual(fim("2026-12-01"));
+  });
+
+  it("⭐ cobranças geradas 40 dias antes (11-01 e 12-01 pendentes, 10-01 paga) não estendem o período pago nem viram atraso (Review Focus 2)", async () => {
+    expect(await ler([assinatura({ nextDueDate: "2027-01-01" })], [
+      cobranca({ id: "pay_out", status: "RECEIVED", dueDate: "2026-10-01" }),
+      cobranca({ id: "pay_nov", status: "PENDING", dueDate: "2026-11-01" }),
+      cobranca({ id: "pay_dez", status: "PENDING", dueDate: "2026-12-01" }),
+    ]).situacao).toMatchObject({
+      existe: true, jaPagou: true, emAtraso: false, vencidaDesde: null, proximoVencimento: fim("2026-11-01"),
+      linkDePagamento: "https://sandbox.asaas.com/i/pay_nov", statusBruto: "ACTIVE",
+    });
+  });
+
+  it("⭐ ACTIVE só com PENDING ≠ existe (suspenso clica Assinar e não paga → continua suspenso)", async () => {
+    expect(await ler([assinatura()], [cobranca({ status: "PENDING", dueDate: "2026-10-05" })]).situacao).toMatchObject({
+      existe: false, assinaturasVivas: 1, cancelada: false, jaPagou: false, emAtraso: false,
+      linkDePagamento: "https://sandbox.asaas.com/i/pay_1", statusBruto: "ACTIVE:sem_pagamento",
+    });
+  });
+
+  it("⭐ CONFIRMED (cartão aprovado, saldo não liberado) já conta como pago", async () => {
+    const { situacao, chamadas } = ler([assinatura()], [cobranca({ status: "CONFIRMED", dueDate: "2026-10-01" })]);
+    expect(await situacao).toMatchObject({ existe: true, jaPagou: true, proximoVencimento: fim("2026-11-01") });
+    expect(chamadas.map((c) => c.url.searchParams.get("status"))).toEqual(expect.arrayContaining(["RECEIVED", "CONFIRMED", "RECEIVED_IN_CASH"]));
+  });
+
+  it("⭐ removida sem includeDeleted sumiria: cancelar (DELETE) no dia 2 de mês pago → cancelada com acesso até o fim (Review Focus 3)", async () => {
+    const { situacao, chamadas } = ler(
+      [assinatura({ deleted: true })],
+      [cobranca({ id: "pay_out", status: "RECEIVED", dueDate: "2026-10-01" })],
+      new Date("2026-10-02T15:00:00Z"),
+    );
+    expect(await situacao).toMatchObject({
+      assinaturaRef: "sub_1", existe: false, assinaturasVivas: 0, cancelada: true, jaPagou: true,
+      proximoVencimento: fim("2026-11-01"), linkDePagamento: null, statusBruto: "REMOVIDA:encerrada",
+    });
+    expect(chamadas.find((c) => c.rota === "GET /subscriptions")?.url.searchParams.get("includeDeleted")).toBe("true");
+  });
+
+  it.each([["INACTIVE"], ["EXPIRED"]])("%s é terminal → cancelada", async (status) => {
+    expect(await ler([assinatura({ status })], []).situacao).toMatchObject({ cancelada: true, statusBruto: `${status}:encerrada` });
+  });
+
+  it("⭐ OVERDUE: em atraso desde o fim do dia do vencimento, link da vencida mais antiga", async () => {
+    expect(await ler([assinatura()], [
+      cobranca({ id: "pay_set", status: "RECEIVED", dueDate: "2026-09-01" }),
+      cobranca({ id: "pay_out", status: "OVERDUE", dueDate: "2026-10-01" }),
+      cobranca({ id: "pay_nov", status: "PENDING", dueDate: "2026-11-01" }),
+    ]).situacao).toMatchObject({
+      existe: true, emAtraso: true, vencidaDesde: fim("2026-10-01"), proximoVencimento: fim("2026-10-01"),
+      linkDePagamento: "https://sandbox.asaas.com/i/pay_out", statusBruto: "ACTIVE:em_atraso",
+    });
+  });
+
+  it("⭐ boleto PENDING que vence hoje não é atraso", async () => {
+    expect(await ler([assinatura()], [
+      cobranca({ id: "pay_set", status: "RECEIVED", dueDate: "2026-09-05" }),
+      cobranca({ id: "pay_out", status: "PENDING", dueDate: "2026-10-05" }),
+    ]).situacao).toMatchObject({ emAtraso: false, vencidaDesde: null });
+  });
+
+  it.each([["REFUNDED"], ["CHARGEBACK_REQUESTED"], ["CHARGEBACK_DISPUTE"]])(
+    "⭐ %s na cobrança do período corrente = em atraso",
+    async (status) => {
+      expect(await ler([assinatura()], [
+        cobranca({ id: "pay_set", status: "RECEIVED", dueDate: "2026-09-01" }),
+        cobranca({ id: "pay_out", status, dueDate: "2026-10-01" }),
+        cobranca({ id: "pay_nov", status: "PENDING", dueDate: "2026-11-01" }),
+      ]).situacao).toMatchObject({ existe: true, emAtraso: true, vencidaDesde: fim("2026-10-01") });
+    },
+  );
+
+  it("estorno de um período antigo não reabre", async () => {
+    expect(await ler([assinatura()], [
+      cobranca({ id: "pay_ago", status: "REFUNDED", dueDate: "2026-08-01" }),
+      cobranca({ id: "pay_set", status: "RECEIVED", dueDate: "2026-09-01" }),
+      cobranca({ id: "pay_out", status: "RECEIVED", dueDate: "2026-10-01" }),
+    ]).situacao).toMatchObject({ emAtraso: false, vencidaDesde: null });
+  });
+
+  it("⭐ cancelou e reassinou, 1º pagamento da nova pendente: principal é a nova, existe=false, jaPagou=true", async () => {
+    expect(await ler(
+      [assinatura({ id: "sub_velha", deleted: true, dateCreated: "2026-08-01" }), assinatura({ id: "sub_nova", dateCreated: "2026-10-03" })],
+      [
+        cobranca({ id: "pay_velha", subscription: "sub_velha", status: "RECEIVED", dueDate: "2026-09-01" }),
+        cobranca({ id: "pay_nova", subscription: "sub_nova", status: "PENDING", dueDate: "2026-10-03" }),
+      ],
+    ).situacao).toMatchObject({
+      assinaturaRef: "sub_nova", existe: false, jaPagou: true, assinaturasVivas: 1, cancelada: false,
+      proximoVencimento: fim("2026-10-01"), linkDePagamento: "https://sandbox.asaas.com/i/pay_nova",
+    });
+  });
+
+  it("duas vivas = cobrança dupla; a principal é a mais recente", async () => {
+    expect(await ler([assinatura({ id: "sub_a" }), assinatura({ id: "sub_b", dateCreated: "2026-10-04" })], []).situacao).toMatchObject({
+      assinaturasVivas: 2, assinaturaRef: "sub_b",
+    });
+  });
+
+  it("anual: o período pago termina um ano depois do vencimento", async () => {
+    expect(await ler([assinatura({ cycle: "YEARLY" })], [cobranca({ status: "RECEIVED", dueDate: "2026-03-10" })]).situacao).toMatchObject({
+      proximoVencimento: fim("2027-03-10"),
+    });
+  });
+
+  it("link que não é https não sai (e o aviso no log diz só o esquema)", async () => {
+    const aviso = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    expect((await ler([assinatura()], [cobranca({ invoiceUrl: "javascript:alert(1)" })]).situacao).linkDePagamento).toBeNull();
+    expect(aviso.mock.calls.flat().join(" ")).toContain("cobranca.link_invalido");
+  });
+
+  it("forma inesperada → resposta_invalida (sincronizar grava leitura_invalida, estado intacto)", async () => {
+    const m = montar({ "GET /subscriptions": { corpo: { data: "x" } }, "GET /payments": lista() });
+    await expect(m.adaptador.lerSituacao({ clienteRef: CLIENTE })).rejects.toMatchObject({ codigo: "resposta_invalida" });
+  });
+});

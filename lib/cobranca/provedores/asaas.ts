@@ -28,7 +28,7 @@ import { documentoDoPagador } from "@/lib/cobranca/documento";
 import { FUSO_PADRAO } from "@/lib/cobranca/fuso";
 import { logger } from "@/lib/logger";
 
-import { ErroDoProvedor, type AdaptadorDeCobranca, type Modo, type SinalDoWebhook, type WebhookPreparado } from "./contrato";
+import { ErroDoProvedor, type AdaptadorDeCobranca, type Modo, type SinalDoWebhook, type Situacao, type WebhookPreparado } from "./contrato";
 
 /** A base de cada ambiente. Qual vale sai do prefixo da chave. */
 export const ASAAS_API_BASE = {
@@ -107,6 +107,21 @@ type CobrancaDoAsaas = z.infer<typeof cobrancaDoAsaas>;
 /** Data civil `AAAA-MM-DD` ordena como texto. */
 const porVencimento = (a: CobrancaDoAsaas, b: CobrancaDoAsaas) => a.dueDate.localeCompare(b.dueDate);
 const CICLO_DO_INTERVALO = { mes: "MONTHLY", ano: "YEARLY" } as const;
+const assinaturaDoAsaas = z.object({
+  id: z.string().min(1),
+  status: z.string(),
+  deleted: z.boolean().nullish(),
+  cycle: z.string(),
+  dateCreated: z.string(),
+});
+type AssinaturaDoAsaas = z.infer<typeof assinaturaDoAsaas>;
+/** Removida (`deleted`), INACTIVE ou EXPIRED. */
+const ehTerminal = (s: AssinaturaDoAsaas) => s.deleted === true || s.status === "INACTIVE" || s.status === "EXPIRED";
+/** O mesmo conjunto de "pago" em `existe`, `jaPagou` e `proximoVencimento`. CONFIRMED = cartão aprovado. */
+const STATUS_PAGOS = ["CONFIRMED", "RECEIVED", "RECEIVED_IN_CASH"] as const;
+const PAGO = new Set<string>(STATUS_PAGOS);
+/** Estorno ou contestação do período corrente reabre a dívida. */
+const ESTORNADO = new Set(["REFUNDED", "CHARGEBACK_REQUESTED", "CHARGEBACK_DISPUTE"]);
 
 /** A org vem da sessão; mesmo assim, um id que não é uuid vira ErroDoProvedor, nunca ZodError. */
 function uuidDaOrg(id: string): string {
@@ -473,6 +488,70 @@ export function criarAdaptadorAsaas(dep: DependenciasDoAsaas) {
     return { url, expiraEm: null, assinaturaRef };
   }
 
+  /**
+   * §6.2 passo a passo: (1) assinaturas COM as removidas; (2) `existe` só com
+   * cobrança paga da principal — ACTIVE só com PENDING é o "incomplete" do
+   * Asaas; (3) atraso = OVERDUE da principal ou estorno/contestação do período
+   * corrente; (4) CONFIRMED é pago; (5) fim do período = maior vencimento PAGO
+   * + um ciclo, nunca `nextDueDate` (a cobrança gerada 40 dias antes não é
+   * período pago); (6) `jaPagou` pelos mesmos status; (7) link da vencida mais
+   * antiga, senão da pendente, só da principal viva; (8)
+   * `pagamentoSemAssinaturaViva` é sempre false no Asaas: a API não diz quando
+   * a assinatura foi removida, e o DELETE leva junto as cobranças abertas.
+   */
+  async function lerSituacao(p: { clienteRef: string }): Promise<Situacao> {
+    const cliente = encodeURIComponent(p.clienteRef);
+    const [assinaturas, pagas] = await Promise.all([
+      // includeDeleted: sem ele a removida some, e o cancelamento viraria "teste vencido".
+      chamar("GET", `/subscriptions?customer=${cliente}&includeDeleted=true&limit=100`).then(
+        (d) => ler(listaDoAsaas(assinaturaDoAsaas), d).data,
+      ),
+      Promise.all(
+        STATUS_PAGOS.map((s) =>
+          chamar("GET", `/payments?customer=${cliente}&status=${s}&limit=100`).then((d) => ler(listaDoAsaas(cobrancaDoAsaas), d).data),
+        ),
+      ).then((listas) => listas.flat()),
+    ]);
+    const recentes = [...assinaturas].sort((a, b) => b.dateCreated.localeCompare(a.dateCreated));
+    const vivas = recentes.filter((s) => !ehTerminal(s));
+    const principal = vivas[0] ?? null;
+    const referencia = principal ?? recentes[0] ?? null;
+    const daPrincipal = principal ? await cobrancasDaAssinatura(principal.id) : [];
+    const hoje = dataCivilEmSaoPaulo(agora());
+    const existe = daPrincipal.some((c) => PAGO.has(c.status));
+    const corrente = daPrincipal.filter((c) => c.dueDate <= hoje).at(-1);
+    const devidas = daPrincipal.filter((c) => c.status === "OVERDUE");
+    if (corrente !== undefined && ESTORNADO.has(corrente.status)) devidas.push(corrente);
+    const emAtraso = devidas.length > 0;
+    const cicloDe = new Map(assinaturas.map((s) => [s.id, s.cycle]));
+    const fins = pagas.flatMap((c) => {
+      const ciclo = c.subscription ? cicloDe.get(c.subscription) : undefined;
+      return ciclo === undefined ? [] : [fimDoDiaEmSaoPaulo(somarCiclo(c.dueDate, ciclo)).getTime()];
+    });
+    const aberta = daPrincipal.find((c) => c.status === "OVERDUE") ?? daPrincipal.find((c) => c.status === "PENDING");
+    const maisAntiga = devidas.map((c) => c.dueDate).sort()[0];
+    return {
+      assinaturaRef: referencia?.id ?? null,
+      existe,
+      assinaturasVivas: vivas.length,
+      cancelada: recentes.length > 0 && principal === null,
+      // O Asaas não agenda cancelamento: o DELETE encerra na hora, e o acesso até o fim do pago vem de proximoVencimento.
+      cancelaNoFim: false,
+      emAtraso,
+      vencidaDesde: maisAntiga === undefined ? null : fimDoDiaEmSaoPaulo(maisAntiga),
+      proximoVencimento: fins.length > 0 ? new Date(Math.max(...fins)) : null,
+      jaPagou: pagas.length > 0,
+      emTesteNoProvedorAte: null,
+      pagamentoSemAssinaturaViva: false,
+      linkDePagamento: linkSeguro(aberta?.invoiceUrl),
+      statusBruto: principal
+        ? [principal.status, existe ? null : "sem_pagamento", emAtraso ? "em_atraso" : null].filter(Boolean).join(":")
+        : referencia
+          ? `${referencia.deleted === true ? "REMOVIDA" : referencia.status}:encerrada`
+          : "sem_assinatura",
+    };
+  }
+
   return {
     id: "asaas" as const,
     clienteExiste,
@@ -482,5 +561,6 @@ export function criarAdaptadorAsaas(dep: DependenciasDoAsaas) {
     removerWebhooks,
     garantirCliente,
     iniciarAssinatura,
+    lerSituacao,
   };
 }
