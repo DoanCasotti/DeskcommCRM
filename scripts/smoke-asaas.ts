@@ -35,6 +35,12 @@ class FalhaDoSmoke extends Error {}
 function falha(msg: string): never {
   throw new FalhaDoSmoke(msg);
 }
+/** Divergência do Asaas real com o que a spec/dublê supõe: registra e SEGUE (as demais conferências precisam rodar), e o smoke reprova no fim. */
+const divergencias: string[] = [];
+function divergencia(msg: string): void {
+  divergencias.push(msg);
+  console.error(`✗ DIVERGÊNCIA: ${msg}`);
+}
 function ok(msg: string): void {
   console.info(`✓ ${msg}`);
 }
@@ -103,7 +109,7 @@ try {
   const notificacoes = await cru(ASAAS_API_BASE.teste, "GET", `/customers/${cliente}/notifications`);
   const avisosDoAsaas = (notificacoes.json.data ?? []) as Array<Record<string, unknown>>;
   const ligados = avisosDoAsaas.filter((n) => Object.entries(n).some(([k, v]) => /EnabledForCustomer$/.test(k) && v === true)).length;
-  ok(`notificações do Asaas ao pagador com notificationDisabled: HTTP ${notificacoes.status}; ${ligados} de ${avisosDoAsaas.length} com algum canal ligado (registre no PR)`);
+  ok(`notificações do Asaas ao pagador (cliente criado com notificationDisabled): HTTP ${notificacoes.status}; ${ligados} de ${avisosDoAsaas.length} configuradas com algum canal ligado; ENTREGA não medida (a configuração por notificação não prova se a flag do cliente barra o envio)`);
 
   // 2b. CNPJ alfanumérico (exemplo oficial da Receita, sem dono): MEDIDA, não falha.
   const alfa = await cru(ASAAS_API_BASE.teste, "POST", "/customers", { name: "Smoke alfanumérico", cpfCnpj: "12ABC34501DE35", externalReference: `${orgId}-alfa` });
@@ -124,14 +130,16 @@ try {
   // §16 3.10: o nextDueDate é a próxima cobrança AINDA NÃO gerada. Se ele for o vencimento de QUALQUER
   // cobrança já gerada (não só da 1ª: o sandbox pode gerar duas), proximoVencimento e a guarda caem.
   if (geradas.some((c) => c.dueDate >= String(sub.nextDueDate))) {
-    falha(`nextDueDate (${String(sub.nextDueDate)}) não está além de toda cobrança gerada: a §6.2 (proximoVencimento e a guarda do trocarPlano) parte do contrário — leve ao dono antes do merge (§16 3.10)`);
+    divergencia(`nextDueDate (${String(sub.nextDueDate)}) não está além de toda cobrança gerada: a §6.2 (proximoVencimento e a guarda do trocarPlano) parte do contrário — leve ao dono antes do merge (§16 3.10)`);
   }
   // O dublê do e2e gera as que vencem em até 40 dias (ANTECEDENCIA_DIAS), e o contrato da Task 20 espera 2.
   const limite = diasDepois(hojeEmSaoPaulo(), 40);
   let doDuble = 0;
   for (let d = primeira.dueDate; d <= limite; d = somarCiclo(d, "MONTHLY")) doDuble += 1;
+  // ATENÇÃO: isto mede "na criação". Se o Asaas gera a próxima cobrança depois (job diário), a régua é outra:
+  // releia a MESMA assinatura no dia seguinte antes de mexer no dublê (ver a releitura no fim da corrida).
   if (geradas.length !== doDuble) {
-    falha(`o sandbox gerou ${geradas.length} cobranças logo de saída e o dublê gera ${doDuble}: corrija o DUBLÊ (ANTECEDENCIA_DIAS em tests/e2e/fixtures/provedor-de-cobranca-asaas.ts) e o toHaveLength(2) do contrato da Task 20, não o smoke`);
+    divergencia(`o sandbox gerou ${geradas.length} cobranças NA CRIAÇÃO e o dublê gera ${doDuble}: decida a régua (criação x geração assíncrona) antes de mexer no DUBLÊ (ANTECEDENCIA_DIAS) e no toHaveLength(2) da Task 20, não no smoke`);
   }
 
   // 3b. A geração observada na hora (§16 3.10): 1º vencimento daqui a 35 dias, dentro da antecedência.
@@ -147,10 +155,10 @@ try {
   const geradasFuturas = await cobrancasDaAssinatura(assinaturaFutura);
   ok(`1º vencimento em ${vence35}: geradas na criação = ${geradasFuturas.length}; nextDueDate = ${String(subFutura.nextDueDate)}`);
   if (geradasFuturas.length === 0) {
-    falha("com o 1º vencimento a 35 dias, nenhuma cobrança nasceu na criação: no teste grátis, o Assinar daria cobranca_ainda_nao_gerada (§6.2). Leve ao dono antes do merge");
+    divergencia("com o 1º vencimento a 35 dias, nenhuma cobrança nasceu na criação: no teste grátis, o Assinar daria cobranca_ainda_nao_gerada (§6.2). Leve ao dono antes do merge");
   }
   if (geradasFuturas.some((c) => c.dueDate >= String(subFutura.nextDueDate))) {
-    falha(`a 35 dias, o nextDueDate (${String(subFutura.nextDueDate)}) não está além da cobrança gerada (§16 3.10)`);
+    divergencia(`a 35 dias, o nextDueDate (${String(subFutura.nextDueDate)}) não está além da cobrança gerada (§16 3.10)`);
   }
 
   // 4. Clicar em Assinar e não pagar não é assinar (§6.2 passo 2).
@@ -219,6 +227,11 @@ try {
     if (depois.length !== 1 || depois[0]?.id === primeiros[0]?.id) falha(`reconexão: ${depois.length} webhooks com a URL do smoke, e o que sobrou ${depois[0]?.id === primeiros[0]?.id ? "é o ANTIGO" : "é o novo"}`);
     ok("reconexão com a mesma URL: criou de novo pela API, e o confirmar deixou só o novo");
   }
+  // Releitura no fim da corrida: a geração ocorreu depois da criação? (só distingue "assíncrono em segundos"; "job diário" pede reler no dia seguinte)
+  if (assinaturaFutura) {
+    ok(`releitura final da assinatura a 35 dias: ${(await cobrancasDaAssinatura(assinaturaFutura)).length} cobranças`);
+  }
+  if (divergencias.length > 0) falha(`${divergencias.length} divergência(s) com o dublê/spec; leve ao dono (lista acima)`);
 } catch (e) {
   console.error(`✗ SMOKE ASAAS FAIL: ${e instanceof Error ? e.message : String(e)}`);
   process.exitCode = 1;
