@@ -104,14 +104,15 @@ test("[P0] Asaas: conectar, assinar com CPF/CNPJ, pagar com Pix e cancelar mante
       new RegExp(`^${`${process.env.NEXT_PUBLIC_APP_URL}/api/v1/webhooks/cobranca/asaas`.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\?conexao=[0-9a-f]{8}$`),
     );
     const html = await page.content();
-    expect(html).not.toContain(CHAVE);
-    expect(html, "no modo automático o token do webhook nunca aparece na tela").not.toContain(token);
+    // includes + toBe(false): `not.toContain` imprimiria o segredo inteiro no log justamente ao falhar.
+    expect(html.includes(CHAVE), "a chave apareceu na tela").toBe(false);
+    expect(html.includes(token), "no modo automático o token do webhook nunca aparece na tela").toBe(false);
     const guardadas = await db.from("platform_config").select("chave, eh_segredo, last4, valor").in("chave", ["ASAAS_API_KEY", "ASAAS_WEBHOOK_TOKEN", "COBRANCA_PROVEDOR"]);
     if (guardadas.error) throw guardadas.error;
     expect(guardadas.data.find((g) => g.chave === "ASAAS_API_KEY")).toMatchObject({ eh_segredo: true, last4: CHAVE.slice(-4), valor: null });
     expect(guardadas.data.find((g) => g.chave === "ASAAS_WEBHOOK_TOKEN")).toMatchObject({ eh_segredo: true, valor: null });
     expect(guardadas.data.find((g) => g.chave === "COBRANCA_PROVEDOR")?.valor).toBe("asaas");
-    expect(JSON.stringify(guardadas.data)).not.toContain(CHAVE);
+    expect(JSON.stringify(guardadas.data).includes(CHAVE), "a chave ficou em claro no banco").toBe(false);
     await page.screenshot({ path: `${EVIDENCIA}/conexao-asaas-modo-de-teste.png`, fullPage: true });
 
     // ── 2. O documento de quem paga: preenchido, conferido, sem máscara ─────
@@ -184,7 +185,7 @@ test("[P0] Asaas: conectar, assinar com CPF/CNPJ, pagar com Pix e cancelar mante
       expect(l.headers).toBeNull();
       expect(l.signature_header).toBeNull();
       expect(Object.keys(JSON.parse(l.raw_body as string)).sort()).toEqual(["id", "type"]);
-      expect(JSON.stringify(l), "o token do webhook entrou no arquivo de avisos").not.toContain(token);
+      expect(JSON.stringify(l).includes(token), "o token do webhook entrou no arquivo de avisos").toBe(false);
     }
     expect(linhas.data.some((l) => l.status === "processed"), "nenhum aviso do Asaas acordou a leitura").toBe(true);
     // O SUBSCRIPTION_CREATED chega DURANTE o POST /subscriptions: com o cliente gravado depois, ele viraria

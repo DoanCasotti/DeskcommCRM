@@ -180,6 +180,17 @@ describe("dialeto Asaas do dublê × adaptador Asaas", () => {
     expect(await a.removerWebhooks(urlDoReceptor)).toBe(1);
   });
 
+  it("o dublê recusa um POST /webhooks com URL já cadastrada, como o sandbox (400 invalid_object)", async () => {
+    const corpo = JSON.stringify({ name: "repetido", url: `${urlDoReceptor}?repetido=1`, email: "dono@contrato.test", enabled: true, interrupted: false, sendType: "SEQUENTIALLY", authToken: "t".repeat(32), events: ["PAYMENT_RECEIVED"] });
+    const cabecalhos = { access_token: estado.chave, "content-type": "application/json", "user-agent": "contrato" };
+    const primeiro = await fetch(`${duble.base}/v3/webhooks`, { method: "POST", headers: cabecalhos, body: corpo });
+    expect(primeiro.status).toBe(200);
+    const segundo = await fetch(`${duble.base}/v3/webhooks`, { method: "POST", headers: cabecalhos, body: corpo });
+    expect(segundo.status).toBe(400);
+    expect(JSON.stringify(await segundo.json())).toContain("invalid_object");
+    await (await asaas()).removerWebhooks(`${urlDoReceptor}?repetido=1`);
+  });
+
   it("conta que não deixa criar o webhook pela API: o adaptador devolve o passo a passo manual com os 11 eventos da spec", async () => {
     duble.asaas.recusarCriacaoDeWebhook(true);
     try {

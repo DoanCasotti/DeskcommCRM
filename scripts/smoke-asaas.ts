@@ -67,7 +67,7 @@ const fimDoDia = (d: string) => new Date(`${d}T23:59:59-03:00`).toISOString();
 const diasDepois = (d: string, n: number) => new Date(Date.parse(`${d}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
 /** Os webhooks com a URL do smoke (a base, com ou sem `?conexao=`): é por ela que o adaptador reconhece os desta instalação. */
 const webhooksDoSmoke = async (url: string) =>
-  (((await sandbox("GET", "/webhooks?limit=100")).data ?? []) as Array<{ id: string; url: string; events?: string[] }>).filter((x) => (x.url.split("?")[0] ?? x.url) === url);
+  (((await sandbox("GET", "/webhooks?limit=100")).data ?? []) as Array<{ id: string; url: string | null; events?: string[] }>).filter((x) => ((x.url ?? "").split("?")[0] ?? "") === url);
 
 const orgId = randomUUID();
 const adaptador = criarAdaptadorAsaas({ lerChave: async () => chave, marca: `smoke-${orgId.slice(0, 8)}` });
