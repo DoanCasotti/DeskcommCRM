@@ -96,6 +96,17 @@ function ler<T>(schema: z.ZodType<T>, dados: unknown): T {
 
 const comId = z.object({ id: z.string().min(1), deleted: z.boolean().nullish() });
 const UUID = z.string().uuid();
+const cobrancaDoAsaas = z.object({
+  id: z.string().min(1),
+  status: z.string(),
+  dueDate: z.string(),
+  subscription: z.string().nullish(),
+  invoiceUrl: z.string().nullish(),
+});
+type CobrancaDoAsaas = z.infer<typeof cobrancaDoAsaas>;
+/** Data civil `AAAA-MM-DD` ordena como texto. */
+const porVencimento = (a: CobrancaDoAsaas, b: CobrancaDoAsaas) => a.dueDate.localeCompare(b.dueDate);
+const CICLO_DO_INTERVALO = { mes: "MONTHLY", ano: "YEARLY" } as const;
 
 /** A org vem da sessão; mesmo assim, um id que não é uuid vira ErroDoProvedor, nunca ZodError. */
 function uuidDaOrg(id: string): string {
@@ -229,6 +240,25 @@ export function criarAdaptadorAsaas(dep: DependenciasDoAsaas) {
   const buscar = dep.fetch ?? fetch;
   const esperar = dep.esperar ?? ((ms: number) => new Promise<void>((pronto) => setTimeout(pronto, ms)));
   const userAgent = `cobranca-do-revendedor/${dep.marca}`;
+  const agora = dep.agora ?? (() => new Date());
+
+  /**
+   * Link do provedor que vira href, redirect ou botão de e-mail: só https (http
+   * só com o dublê em loopback). Uma resposta adulterada com `javascript:` nunca chega à tela.
+   */
+  function linkSeguro(u: string | null | undefined): string | null {
+    if (!u || !URL.canParse(u)) return null;
+    const esquema = new URL(u).protocol;
+    if (esquema === "https:" || (esquema === "http:" && dep.baseUrl !== undefined)) return u;
+    logger.warn("cobranca.link_invalido", { esquema });
+    return null;
+  }
+
+  // ponytail: 100 cobranças por assinatura, sem paginar (8 anos de mensal); paginar quando `hasMore` aparecer medido.
+  async function cobrancasDaAssinatura(assinaturaRef: string): Promise<CobrancaDoAsaas[]> {
+    const caminho = `/payments?subscription=${encodeURIComponent(assinaturaRef)}&limit=100`;
+    return [...ler(listaDoAsaas(cobrancaDoAsaas), await chamar("GET", caminho)).data].sort(porVencimento);
+  }
 
   async function credencial(): Promise<{ chave: string; base: string }> {
     const chave = await dep.lerChave();
@@ -407,6 +437,42 @@ export function criarAdaptadorAsaas(dep: DependenciasDoAsaas) {
     ).id;
   }
 
+  /**
+   * Releitura antes de criar (sem chave de idempotência): uma assinatura ACTIVE
+   * do cliente é a de um POST anterior que processou e perdeu a resposta.
+   * `urlDeVolta` e `chaveIdempotencia` não se aplicam: a fatura do Asaas não
+   * expira nem devolve o cliente — a volta é o "Já paguei", que relê.
+   */
+  async function iniciarAssinatura(
+    p: Parameters<AdaptadorDeCobranca["iniciarAssinatura"]>[0],
+  ): ReturnType<AdaptadorDeCobranca["iniciarAssinatura"]> {
+    const orgId = uuidDaOrg(p.orgId);
+    const caminho = `/subscriptions?customer=${encodeURIComponent(p.clienteRef)}&status=ACTIVE&limit=10`;
+    const ativas = ler(listaDoAsaas(comId), await chamar("GET", caminho)).data.filter((s) => s.deleted !== true);
+    const hoje = dataCivilEmSaoPaulo(agora());
+    const fimDoTeste = p.trialAte === null ? null : dataCivilEmSaoPaulo(p.trialAte);
+    const assinaturaRef =
+      ativas[0]?.id ??
+      ler(
+        comId,
+        await chamar("POST", "/subscriptions", {
+          customer: p.clienteRef,
+          // UNDEFINED: o cliente escolhe Pix, boleto ou cartão na fatura — é o motivo de o Asaas existir aqui.
+          billingType: "UNDEFINED",
+          value: p.plano.precoCents / 100,
+          cycle: CICLO_DO_INTERVALO[p.plano.intervalo],
+          nextDueDate: fimDoTeste !== null && fimDoTeste > hoje ? fimDoTeste : hoje,
+          description: p.plano.nome,
+          externalReference: orgId,
+        }),
+      ).id;
+    const primeira = (await cobrancasDaAssinatura(assinaturaRef)).find((c) => c.status === "PENDING" || c.status === "OVERDUE");
+    if (primeira === undefined) throw new ErroDoProvedor(null, "cobranca_ainda_nao_gerada", true);
+    const url = linkSeguro(primeira.invoiceUrl);
+    if (url === null) throw new ErroDoProvedor(200, "resposta_invalida", false);
+    return { url, expiraEm: null, assinaturaRef };
+  }
+
   return {
     id: "asaas" as const,
     clienteExiste,
@@ -415,5 +481,6 @@ export function criarAdaptadorAsaas(dep: DependenciasDoAsaas) {
     prepararWebhook,
     removerWebhooks,
     garantirCliente,
+    iniciarAssinatura,
   };
 }

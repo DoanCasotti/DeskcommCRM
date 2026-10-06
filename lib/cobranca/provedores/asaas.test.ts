@@ -556,3 +556,96 @@ describe("garantirCliente", () => {
     expect(aviso.mock.calls.flat().join(" ")).not.toContain("11222333000181");
   });
 });
+
+type Linha = Record<string, unknown>;
+const assinatura = (o: Linha = {}): Linha => ({
+  object: "subscription", id: "sub_1", customer: CLIENTE, status: "ACTIVE", deleted: false, cycle: "MONTHLY",
+  billingType: "UNDEFINED", value: 49.9, dateCreated: "2026-09-01", nextDueDate: "2026-12-01", ...o,
+});
+const cobranca = (o: Linha = {}): Linha => ({
+  object: "payment", id: "pay_1", customer: CLIENTE, subscription: "sub_1", status: "PENDING", value: 49.9,
+  dueDate: "2026-10-01", invoiceUrl: `https://sandbox.asaas.com/i/${String(o.id ?? "pay_1")}`, deleted: false, ...o,
+});
+/** `GET /subscriptions` como o Asaas: removida só aparece com includeDeleted=true; filtra status. */
+const rotaDeAssinaturas = (todas: Linha[]) => (url: URL): Resposta =>
+  lista(...todas.filter((s) =>
+    (url.searchParams.get("includeDeleted") === "true" || s.deleted !== true) &&
+    (url.searchParams.get("status") === null || s.status === url.searchParams.get("status"))));
+/** `GET /payments` como o Asaas: por assinatura, ou por cliente + status. */
+const rotaDePagamentos = (todas: Linha[]) => (url: URL): Resposta =>
+  lista(...todas.filter((c) =>
+    (url.searchParams.get("subscription") === null || c.subscription === url.searchParams.get("subscription")) &&
+    (url.searchParams.get("customer") === null || c.customer === url.searchParams.get("customer")) &&
+    (url.searchParams.get("status") === null || c.status === url.searchParams.get("status"))));
+const PLANO = { id: "1d0e4b9a-7c2f-4e1a-9b3c-5d6e7f8a9b0c", nome: "Essencial", precoCents: 4990, intervalo: "mes" as const };
+
+describe("iniciarAssinatura", () => {
+  const PEDIDO = {
+    clienteRef: CLIENTE, orgId: ORG, plano: PLANO, trialAte: null as Date | null,
+    urlDeVolta: "https://crm.example.com/cobranca/volta?para=painel", chaveIdempotencia: "idem-1",
+  };
+  const criando = (extra: Record<string, Responder> = {}) =>
+    montar({
+      "GET /subscriptions": rotaDeAssinaturas([]),
+      "POST /subscriptions": { corpo: assinatura({ id: "sub_novo" }) },
+      "GET /payments": rotaDePagamentos([cobranca({ id: "pay_1", subscription: "sub_novo", dueDate: "2026-10-05" })]),
+      ...extra,
+    });
+
+  it("⭐ cria com UNDEFINED (Pix, boleto ou cartão na fatura) e devolve a invoiceUrl da 1ª cobrança", async () => {
+    const { adaptador, chamadas } = criando();
+    expect(await adaptador.iniciarAssinatura(PEDIDO)).toEqual({ url: "https://sandbox.asaas.com/i/pay_1", expiraEm: null, assinaturaRef: "sub_novo" });
+    expect(chamadas.find((c) => c.rota === "POST /subscriptions")?.corpo).toEqual({
+      customer: CLIENTE, billingType: "UNDEFINED", value: 49.9, cycle: "MONTHLY", nextDueDate: "2026-10-05",
+      description: "Essencial", externalReference: ORG,
+    });
+  });
+
+  it("⭐ com teste grátis vigente, a 1ª cobrança vence no último dia do teste em São Paulo (Review Focus 5)", async () => {
+    const { adaptador, chamadas } = criando();
+    await adaptador.iniciarAssinatura({ ...PEDIDO, trialAte: new Date("2026-10-20T02:30:00Z") });
+    expect((chamadas.find((c) => c.rota === "POST /subscriptions")?.corpo as Linha).nextDueDate).toBe("2026-10-19");
+  });
+
+  it("teste já vencido: vence hoje; plano anual: YEARLY", async () => {
+    const { adaptador, chamadas } = criando();
+    await adaptador.iniciarAssinatura({ ...PEDIDO, trialAte: new Date("2026-10-01T12:00:00Z"), plano: { ...PLANO, intervalo: "ano" } });
+    expect(chamadas.find((c) => c.rota === "POST /subscriptions")?.corpo).toMatchObject({ nextDueDate: "2026-10-05", cycle: "YEARLY" });
+  });
+
+  it("⭐ assinatura ACTIVE já existe (POST anterior processado, resposta perdida): reaproveita, sem POST", async () => {
+    const { adaptador, chamadas } = montar({
+      "GET /subscriptions": rotaDeAssinaturas([assinatura({ id: "sub_viva" })]),
+      "GET /payments": rotaDePagamentos([cobranca({ id: "pay_v", subscription: "sub_viva" })]),
+    });
+    expect(await adaptador.iniciarAssinatura(PEDIDO)).toMatchObject({ assinaturaRef: "sub_viva", url: "https://sandbox.asaas.com/i/pay_v" });
+    expect(chamadas.some((c) => c.rota === "POST /subscriptions")).toBe(false);
+    expect(chamadas[0]?.url.searchParams.get("status")).toBe("ACTIVE");
+  });
+
+  it("cobrança ainda não gerada: transitório (o 2º clique reaproveita a assinatura)", async () => {
+    const { adaptador } = criando({ "GET /payments": rotaDePagamentos([]) });
+    await expect(adaptador.iniciarAssinatura(PEDIDO)).rejects.toMatchObject({ codigo: "cobranca_ainda_nao_gerada", transitorio: true });
+  });
+
+  it("⭐ POST /subscriptions com 502 não se repete", async () => {
+    const { adaptador, chamadas } = criando({ "POST /subscriptions": { status: 502 } });
+    await expect(adaptador.iniciarAssinatura(PEDIDO)).rejects.toMatchObject({ transitorio: true });
+    expect(chamadas.filter((c) => c.rota === "POST /subscriptions")).toHaveLength(1);
+  });
+
+  it("link que não é https → resposta_invalida (nunca chega à tela)", async () => {
+    const { adaptador } = criando({
+      "GET /payments": rotaDePagamentos([cobranca({ subscription: "sub_novo", invoiceUrl: "javascript:alert(1)" })]),
+    });
+    await expect(adaptador.iniciarAssinatura(PEDIDO)).rejects.toMatchObject({ codigo: "resposta_invalida" });
+  });
+
+  it("a volta e a chave de idempotência não vão ao Asaas (a fatura não devolve o cliente)", async () => {
+    const { adaptador, chamadas } = criando();
+    await adaptador.iniciarAssinatura(PEDIDO);
+    const tudo = JSON.stringify(chamadas.map((c) => [c.url.toString(), c.corpo]));
+    expect(tudo).not.toContain("cobranca/volta");
+    expect(tudo).not.toContain("idem-1");
+  });
+});
