@@ -1,5 +1,6 @@
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type * as RequirePlatformAdmin from "@/lib/auth/requirePlatformAdmin";
 
 import { argumentos, bancoFalso, operacao, valorDoFiltro, type BancoFalso, type Cadeia, type Resposta } from "@/tests/helpers/banco-falso-da-cobranca";
 
@@ -24,7 +25,7 @@ const h = vi.hoisted(() => ({
   banco: undefined as unknown as BancoFalso,
 }));
 vi.mock("@/lib/auth/requirePlatformAdmin", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/auth/requirePlatformAdmin")>()),
+  ...(await importOriginal<typeof RequirePlatformAdmin>()),
   requirePlatformAdminEscrita: h.escrita,
 }));
 vi.mock("@/lib/instalacao/modulos", () => ({ moduloLigado: async () => h.ligada }));
