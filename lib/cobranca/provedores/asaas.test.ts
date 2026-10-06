@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { formatadorDeData } from "@/lib/cobranca/fuso";
 
-import { ErroDoProvedor } from "./contrato";
+import { ErroDoProvedor, type AdaptadorDeCobranca } from "./contrato";
 import {
   ASAAS_API_BASE,
   criarAdaptadorAsaas,
@@ -873,5 +873,38 @@ describe("trocarPlano", () => {
     const { troca, chamadas } = trocar([cobranca({ status: "RECEIVED" })], [{ status: 503 }, { corpo: assinatura() }]);
     await troca;
     expect(chamadas.filter((c) => c.rota.startsWith("PUT"))).toHaveLength(2);
+  });
+});
+
+describe("cancelarNoFim e urlDeGerenciar", () => {
+  it("cancelar = DELETE da assinatura; 404 (já removida) é sucesso; 503 repete (DELETE é idempotente)", async () => {
+    const ok = montar({ "DELETE /subscriptions/sub_1": { corpo: { deleted: true, id: "sub_1" } } });
+    await ok.adaptador.cancelarNoFim("sub_1");
+    expect(ok.chamadas.map((c) => c.rota)).toEqual(["DELETE /subscriptions/sub_1"]);
+    await montar({ "DELETE /subscriptions/sub_1": { status: 404 } }).adaptador.cancelarNoFim("sub_1");
+    const fora = montar({ "DELETE /subscriptions/sub_1": [{ status: 503 }, { corpo: { deleted: true } }] });
+    await fora.adaptador.cancelarNoFim("sub_1");
+    expect(fora.chamadas).toHaveLength(2);
+  });
+
+  it("⭐ gerenciar = pagar a cobrança aberta (o Asaas não tem portal); sem cobrança aberta, null", async () => {
+    const aberto = montar({
+      "GET /subscriptions": rotaDeAssinaturas([assinatura()]),
+      "GET /payments": rotaDePagamentos([cobranca({ id: "pay_out", status: "OVERDUE" })]),
+    });
+    expect(await aberto.adaptador.urlDeGerenciar({ clienteRef: CLIENTE, urlDeVolta: "https://crm.example.com" })).toBe(
+      "https://sandbox.asaas.com/i/pay_out",
+    );
+    const fechado = montar({ "GET /subscriptions": rotaDeAssinaturas([]), "GET /payments": rotaDePagamentos([]) });
+    expect(await fechado.adaptador.urlDeGerenciar({ clienteRef: CLIENTE, urlDeVolta: "https://crm.example.com" })).toBeNull();
+  });
+
+  it("⭐ cumpre o contrato inteiro", () => {
+    const a: AdaptadorDeCobranca = montar({}).adaptador;
+    expect(a.id).toBe("asaas");
+    expect(Object.keys(a).sort()).toEqual(
+      ["id", "testarChave", "prepararWebhook", "removerWebhooks", "clienteExiste", "verificarWebhook", "garantirCliente",
+        "iniciarAssinatura", "lerSituacao", "trocarPlano", "cancelarNoFim", "urlDeGerenciar"].sort(),
+    );
   });
 });

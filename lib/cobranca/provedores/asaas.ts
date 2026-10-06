@@ -248,7 +248,7 @@ export function verificarWebhookAsaas(corpoCru: string, headers: Headers, segred
   return { eventoId: id, tipo: event, clienteRef: payment?.customer ?? subscription?.customer ?? null };
 }
 
-export function criarAdaptadorAsaas(dep: DependenciasDoAsaas) {
+export function criarAdaptadorAsaas(dep: DependenciasDoAsaas): AdaptadorDeCobranca {
   if (dep.baseUrl !== undefined && !baseDeLoopback(dep.baseUrl)) {
     throw new Error("base da API do Asaas recusada: só a oficial ou loopback");
   }
@@ -574,6 +574,20 @@ export function criarAdaptadorAsaas(dep: DependenciasDoAsaas) {
     });
   }
 
+  /** DELETE encerra na hora e leva as cobranças abertas; o acesso até o fim do pago vem de `proximo_vencimento` (§7f). */
+  async function cancelarNoFim(assinaturaRef: string): Promise<void> {
+    try {
+      await chamar("DELETE", `/subscriptions/${encodeURIComponent(assinaturaRef)}`);
+    } catch (e) {
+      if (!(e instanceof ErroDoProvedor && e.status === 404)) throw e;
+    }
+  }
+
+  /** O Asaas não tem portal: "gerenciar" é pagar a cobrança aberta. Sem ela, `null` (a rota responde 409 `sem_portal`). */
+  async function urlDeGerenciar(p: { clienteRef: string }): Promise<string | null> {
+    return (await lerSituacao({ clienteRef: p.clienteRef })).linkDePagamento;
+  }
+
   return {
     id: "asaas" as const,
     clienteExiste,
@@ -585,5 +599,7 @@ export function criarAdaptadorAsaas(dep: DependenciasDoAsaas) {
     iniciarAssinatura,
     lerSituacao,
     trocarPlano,
+    cancelarNoFim,
+    urlDeGerenciar,
   };
 }
