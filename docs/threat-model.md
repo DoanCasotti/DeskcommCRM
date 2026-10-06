@@ -37,7 +37,7 @@ São conclusões de leitura de código.
 | `/api/v1/webhooks/waha/*` | HMAC-SHA512 + `timingSafeEqual` (`lib/waha/ingest.ts`) | ❌ |
 | `/api/v1/webhooks/in/:token` | path token + assinatura opcional | ✅ 60/min por token |
 | `/api/v1/webhooks/nuvemshop/*` | HMAC | ❌ |
-| `/api/v1/webhooks/cobranca/:provedor` | Stripe: `Stripe-Signature` (HMAC com horário). Asaas: token estático em `asaas-access-token` (sha256 + `timingSafeEqual`); o corpo é só ponteiro e a decisão vem da releitura. Token vazado: o dono gera outro em Admin › Cobrança › Conexão, "Testar e conectar" de novo | ✅ recusas 120/min por IP; Asaas, avisos válidos de cliente desconhecido 120/min por IP (acima, 200 sem gravar) |
+| `/api/v1/webhooks/cobranca/:provedor` | Stripe: `Stripe-Signature` (HMAC com horário). Asaas: token estático em `asaas-access-token` (sha256 + `timingSafeEqual`); o corpo é só ponteiro e a decisão vem da releitura. Token vazado: o dono gera outro em Admin › Cobrança › Conexão, "Testar e conectar" de novo | ✅ recusas 120/min por IP; Asaas, avisos válidos de cliente desconhecido 120/min por provedor, chave global (acima, 200 sem gravar) |
 | `/api/v1/cron/*` (9 rotas) | `Bearer INTERNAL_CRON_SECRET\|INTERNAL_SECRET`, **fail-closed** | ❌ |
 | `/api/internal/*` | `x-internal-secret` ou `Bearer INTERNAL_SECRET`, comparação em tempo constante | ❌ |
 | `/api/mcp` | `Bearer tok_...` validado contra `api_tokens` (hash SHA256) | ❌ |

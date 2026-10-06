@@ -106,8 +106,11 @@ export async function POST(req: NextRequest, { params }: Rota) {
     // existem, e cada um viraria uma linha nova. Acima do balde, 200 SEM gravar:
     // 429 faria o Asaas interromper a fila, e com ela os avisos verdadeiros; o
     // que for de verdade, a reconciliação cura. Cliente conhecido nunca entra aqui.
-    const balde = ipDoCliente(req.headers) ?? "sem-proxy";
-    const taxa = await checkRateLimit(`cobranca-webhook-desconhecido:${balde}`, DESCONHECIDOS_POR_MINUTO, 60);
+    // Chave GLOBAL por provedor, não por IP: o IP é o primeiro salto do
+    // x-forwarded-for, que quem tem o token controla — um IP por aviso daria um
+    // balde novo a cada um. O custo: o atacante pode empurrar para fora outros
+    // avisos de cliente DESCONHECIDO, e esses a reconciliação cura.
+    const taxa = await checkRateLimit(`cobranca-webhook-desconhecido:${provedor}`, DESCONHECIDOS_POR_MINUTO, 60);
     if (!taxa.allowed) return ok({ ignorado: "limite_de_desconhecidos" }, { requestId });
   }
 

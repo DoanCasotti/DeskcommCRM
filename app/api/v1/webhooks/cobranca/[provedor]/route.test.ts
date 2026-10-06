@@ -182,7 +182,9 @@ describe("webhook da cobrança pelo Asaas (PR 3b)", () => {
     h.permitido = false;
     const res = await doAsaas({ "asaas-access-token": TOKEN_ASAAS, "x-forwarded-for": "10.0.0.9" });
     expect(res.status).toBe(200);
-    expect(h.baldes).toEqual(["cobranca-webhook-desconhecido:10.0.0.9"]);
+    // Trocar o x-forwarded-for não troca o balde: a chave é global por provedor.
+    await doAsaas({ "asaas-access-token": TOKEN_ASAAS, "x-forwarded-for": "10.0.0.10" });
+    expect(h.baldes).toEqual(["cobranca-webhook-desconhecido:asaas", "cobranca-webhook-desconhecido:asaas"]);
     expect(doLog("insert")).toEqual([]);
   });
 
