@@ -235,17 +235,26 @@ export function verificarWebhookAsaas(corpoCru: string, headers: Headers, segred
   if (!recebido || !segredo) return null;
   const esperado = createHash("sha256").update(segredo, "utf8").digest();
   if (!timingSafeEqual(createHash("sha256").update(recebido, "utf8").digest(), esperado)) return null;
-  let json: unknown;
+  let json: unknown = null;
   try {
     json = JSON.parse(corpoCru);
   } catch {
-    // Token certo e corpo que não é JSON: o Asaas não manda isso. Recusar é a leitura segura.
-    return null;
+    // segue para o ponteiro de forma desconhecida
   }
   const evento = eventoDoAsaas.safeParse(json);
-  if (!evento.success) return null;
-  const { id, event, payment, subscription } = evento.data;
-  return { eventoId: id, tipo: event, clienteRef: payment?.customer ?? subscription?.customer ?? null };
+  if (evento.success) {
+    const { id, event, payment, subscription } = evento.data;
+    return { eventoId: id, tipo: event, clienteRef: payment?.customer ?? subscription?.customer ?? null };
+  }
+  // Token CERTO e forma inesperada: é o Asaas, não um atacante. Recusar (401) faria
+  // o Asaas pausar a FILA de avisos depois das falhas seguidas, e um aviso esquisito
+  // travaria todos os seguintes. Como o corpo é só ponteiro, vira um ponteiro SEM
+  // empresa (a Visão geral o conta como "aviso sem empresa"), com id estável pelo
+  // conteúdo — a nova tentativa do Asaas cai no mesmo 23505 — e tamanho limitado.
+  const bruto = json !== null && typeof json === "object" ? (json as Record<string, unknown>) : {};
+  const tipo = typeof bruto.event === "string" && /^[A-Z_]{1,64}$/.test(bruto.event) ? bruto.event : "DESCONHECIDO";
+  const resumo = createHash("sha256").update(corpoCru, "utf8").digest("hex").slice(0, 40);
+  return { eventoId: `forma:${resumo}`, tipo, clienteRef: null };
 }
 
 export function criarAdaptadorAsaas(dep: DependenciasDoAsaas): AdaptadorDeCobranca {

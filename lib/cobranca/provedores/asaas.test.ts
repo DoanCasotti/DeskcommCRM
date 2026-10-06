@@ -374,9 +374,14 @@ describe("verificarWebhook", () => {
     ["⭐ com id de 5 KB", JSON.stringify({ id: "x".repeat(5_000), event: "PAYMENT_RECEIVED" })],
     ["⭐ com event fora do vocabulário do Asaas", JSON.stringify({ id: "evt_1", event: "payment_received" })],
   ])(
-    "token certo e corpo %s → null",
+    "token certo e corpo %s → ponteiro sem empresa, id curto e estável (nunca 401: o Asaas pausaria a fila)",
     (_nome, corpo) => {
-      expect(verificarWebhookAsaas(corpo, cab(TOKEN), TOKEN)).toBeNull();
+      const sinal = verificarWebhookAsaas(corpo, cab(TOKEN), TOKEN);
+      expect(sinal?.clienteRef).toBeNull();
+      expect(sinal?.eventoId).toMatch(/^forma:[0-9a-f]{40}$/);
+      expect(sinal?.tipo.length).toBeLessThanOrEqual(64);
+      // A nova tentativa do Asaas com o MESMO corpo dá o mesmo id: deduplica no 23505.
+      expect(verificarWebhookAsaas(corpo, cab(TOKEN), TOKEN)?.eventoId).toBe(sinal?.eventoId);
     },
   );
 
