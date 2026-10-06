@@ -76,6 +76,8 @@ let clienteAlfanumerico: string | null = null;
 let clienteFuturo: string | null = null;
 let assinaturaFutura: string | null = null;
 
+// tsx compila este arquivo em CJS, sem await no topo: o corpo vai numa função.
+async function principal(): Promise<void> {
 try {
   // 1. As duas bases (§6.2): a chave do sandbox autentica no sandbox e é recusada na produção.
   const noSandbox = await cru(ASAAS_API_BASE.teste, "GET", "/customers?limit=1");
@@ -229,3 +231,5 @@ try {
   if (clienteFuturo) await cru(ASAAS_API_BASE.teste, "DELETE", `/customers/${clienteFuturo}`).catch(() => null);
 }
 if (process.exitCode !== 1) console.info("✓ SMOKE ASAAS OK");
+}
+void principal();
