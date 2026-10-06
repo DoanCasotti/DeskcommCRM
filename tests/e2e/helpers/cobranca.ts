@@ -48,11 +48,12 @@ export async function estadoDaOrg(id: string): Promise<{ status: string; suspend
 
 export interface LinhaDaAssinatura {
   estado: string; plano_id: string; plano_agendado_id: string | null; provedor: string | null; modo: string | null;
-  provedor_cliente_id: string | null; checkout_url: string | null; ultimo_aviso: string | null; cancela_no_fim: boolean;
+  provedor_cliente_id: string | null; provedor_assinatura_id: string | null; checkout_url: string | null; ultimo_aviso: string | null;
+  cancela_no_fim: boolean;
 }
 export async function assinaturaDe(org: string): Promise<LinhaDaAssinatura> {
   const { data, error } = await db.from("cobranca_assinaturas")
-    .select("estado, plano_id, plano_agendado_id, provedor, modo, provedor_cliente_id, checkout_url, ultimo_aviso, cancela_no_fim")
+    .select("estado, plano_id, plano_agendado_id, provedor, modo, provedor_cliente_id, provedor_assinatura_id, checkout_url, ultimo_aviso, cancela_no_fim")
     .eq("organization_id", org).single();
   if (error) throw error;
   return data as LinhaDaAssinatura;
