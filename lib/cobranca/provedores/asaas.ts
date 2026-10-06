@@ -552,6 +552,28 @@ export function criarAdaptadorAsaas(dep: DependenciasDoAsaas) {
     };
   }
 
+  /**
+   * Chamado no AGENDAMENTO (§7e). Guarda: cobrança OVERDUE, ou PENDING que vence
+   * até hoje em São Paulo, é o período em uso ainda não pago — mudar o valor
+   * agora mexeria no boleto que o cliente já tem. Nunca comparar com
+   * `nextDueDate`: é a próxima cobrança AINDA NÃO gerada, toda cobrança
+   * existente vence antes dela, e a troca seria recusada sempre. Passada a
+   * guarda, as pendentes são de períodos futuros (geradas até 40 dias antes) e
+   * todas levam o valor novo.
+   */
+  async function trocarPlano(p: Parameters<AdaptadorDeCobranca["trocarPlano"]>[0]): Promise<void> {
+    const hoje = dataCivilEmSaoPaulo(agora());
+    const cobrancas = await cobrancasDaAssinatura(p.assinaturaRef);
+    if (cobrancas.some((c) => c.status === "OVERDUE" || (c.status === "PENDING" && c.dueDate <= hoje))) {
+      throw new ErroDoProvedor(null, "pagamento_do_periodo_pendente", false);
+    }
+    await chamar("PUT", `/subscriptions/${encodeURIComponent(p.assinaturaRef)}`, {
+      value: p.plano.precoCents / 100,
+      description: p.plano.nome,
+      updatePendingPayments: true,
+    });
+  }
+
   return {
     id: "asaas" as const,
     clienteExiste,
@@ -562,5 +584,6 @@ export function criarAdaptadorAsaas(dep: DependenciasDoAsaas) {
     garantirCliente,
     iniciarAssinatura,
     lerSituacao,
+    trocarPlano,
   };
 }

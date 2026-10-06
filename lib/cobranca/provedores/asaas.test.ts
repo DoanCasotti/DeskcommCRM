@@ -805,3 +805,73 @@ describe("lerSituacao", () => {
     await expect(m.adaptador.lerSituacao({ clienteRef: CLIENTE })).rejects.toMatchObject({ codigo: "resposta_invalida" });
   });
 });
+
+describe("trocarPlano", () => {
+  const PRO = { id: "2e1f5c0b-8d3a-4f2b-a0c4-6e7f8a9b0c1d", nome: "Pro", precoCents: 9990, intervalo: "mes" as const };
+  const trocar = (cobrancas: Linha[], put: Responder = { corpo: assinatura({ value: 99.9 }) }, agora = AGORA) => {
+    const m = montar({ "GET /payments": rotaDePagamentos(cobrancas), "PUT /subscriptions/sub_1": put }, { agora: () => agora });
+    return { ...m, troca: m.adaptador.trocarPlano({ assinaturaRef: "sub_1", plano: PRO }) };
+  };
+
+  it("⭐ período pago: PUT com o valor novo e updatePendingPayments (a pendente é de período futuro)", async () => {
+    const { troca, chamadas } = trocar([
+      cobranca({ id: "pay_out", status: "RECEIVED", dueDate: "2026-10-01" }),
+      cobranca({ id: "pay_nov", status: "PENDING", dueDate: "2026-11-01" }),
+    ]);
+    await troca;
+    expect(chamadas.map((c) => c.rota)).toEqual(["GET /payments", "PUT /subscriptions/sub_1"]);
+    expect(chamadas[1]?.corpo).toEqual({ value: 99.9, description: "Pro", updatePendingPayments: true });
+  });
+
+  it("⭐ duas pendentes futuras (geradas 40 dias antes) e a do período paga: a troca passa e as duas levam o valor novo (Review Focus 4)", async () => {
+    const { troca, chamadas } = trocar([
+      cobranca({ id: "pay_out", status: "RECEIVED", dueDate: "2026-10-01" }),
+      cobranca({ id: "pay_nov", status: "PENDING", dueDate: "2026-11-01" }),
+      cobranca({ id: "pay_dez", status: "PENDING", dueDate: "2026-12-01" }),
+    ]);
+    await troca;
+    // updatePendingPayments:true é o que leva o valor novo às DUAS pendentes; o dublê (Task 20) prova o efeito.
+    expect(chamadas.find((c) => c.rota === "PUT /subscriptions/sub_1")?.corpo).toMatchObject({ value: 99.9, updatePendingPayments: true });
+  });
+
+  it.each([
+    ["OVERDUE", "2026-09-01"],
+    ["PENDING", "2026-10-05"],
+    ["PENDING", "2026-10-01"],
+  ])("⭐ guarda: %s com vencimento %s (período em uso não pago) → recusa sem PUT", async (status, dueDate) => {
+    const { troca, chamadas } = trocar([cobranca({ status, dueDate })]);
+    await expect(troca).rejects.toMatchObject({ codigo: "pagamento_do_periodo_pendente", transitorio: false, status: null });
+    expect(chamadas.some((c) => c.rota.startsWith("PUT"))).toBe(false);
+  });
+
+  it("⭐ virada de dia: 02:30 UTC de 06/10 ainda é 05/10, e a PENDING de 06/10 não é período em uso; às 03:00 UTC já é (Review Focus 5)", async () => {
+    const cobrancas = [
+      cobranca({ id: "pay_set", status: "RECEIVED", dueDate: "2026-09-06" }),
+      cobranca({ id: "pay_out", status: "PENDING", dueDate: "2026-10-06" }),
+    ];
+    const antes = trocar(cobrancas, undefined, new Date("2026-10-06T02:30:00Z"));
+    await antes.troca;
+    expect(antes.chamadas.some((c) => c.rota === "PUT /subscriptions/sub_1")).toBe(true);
+    const depois = trocar(cobrancas, undefined, new Date("2026-10-06T03:00:00Z"));
+    await expect(depois.troca).rejects.toMatchObject({ codigo: "pagamento_do_periodo_pendente" });
+    expect(depois.chamadas.some((c) => c.rota.startsWith("PUT"))).toBe(false);
+  });
+
+  it("⭐ no teste grátis, a 1ª cobrança (vence no fim do teste, depois de hoje) leva o valor novo", async () => {
+    const { troca, chamadas } = trocar([cobranca({ status: "PENDING", dueDate: "2026-10-06" })]);
+    await troca;
+    expect(chamadas.some((c) => c.rota === "PUT /subscriptions/sub_1")).toBe(true);
+  });
+
+  it("⭐ a guarda NÃO usa nextDueDate: nem lê a assinatura", async () => {
+    const { troca, chamadas } = trocar([cobranca({ status: "RECEIVED", dueDate: "2026-10-01" })]);
+    await troca;
+    expect(chamadas.some((c) => c.rota.startsWith("GET /subscriptions"))).toBe(false);
+  });
+
+  it("PUT é idempotente: 503 e depois 200 → repete", async () => {
+    const { troca, chamadas } = trocar([cobranca({ status: "RECEIVED" })], [{ status: 503 }, { corpo: assinatura() }]);
+    await troca;
+    expect(chamadas.filter((c) => c.rota.startsWith("PUT"))).toHaveLength(2);
+  });
+});
