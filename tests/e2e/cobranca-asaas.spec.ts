@@ -100,7 +100,9 @@ test("[P0] Asaas: conectar, assinar com CPF/CNPJ, pagar com Pix e cancelar mante
     await expect(page.getByText(`…${CHAVE.slice(-4)}`).first()).toBeVisible();
     const token = duble.asaas.tokenDoWebhook() ?? "";
     expect(token.length, "o webhook não nasceu pela API do dublê").toBeGreaterThanOrEqual(32);
-    expect(duble.asaas.urlDoWebhook()).toBe(`${process.env.NEXT_PUBLIC_APP_URL}/api/v1/webhooks/cobranca/asaas`);
+    expect(duble.asaas.urlDoWebhook()).toMatch(
+      new RegExp(`^${`${process.env.NEXT_PUBLIC_APP_URL}/api/v1/webhooks/cobranca/asaas`.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\?conexao=[0-9a-f]{8}$`),
+    );
     const html = await page.content();
     expect(html).not.toContain(CHAVE);
     expect(html, "no modo automático o token do webhook nunca aparece na tela").not.toContain(token);
