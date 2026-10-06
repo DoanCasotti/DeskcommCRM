@@ -304,7 +304,8 @@ export async function POST(req: NextRequest) {
 
   const publicadas = publicacao.convertidas;
   if (publicadas > 0) void audit({ ...quem, action: "cobranca.modo_publicado", metadata: { provedor, convertidas: publicadas } });
-  return ok({ modo: teste.modo, webhook, publicadas }, { requestId });
+  // No ramo manual o corpo leva o token do aviso em claro, mostrado UMA vez: nada de cache.
+  return ok({ modo: teste.modo, webhook, publicadas }, { requestId, headers: { "cache-control": "no-store, max-age=0" } });
 }
 
 function falhaDoProvedor(e: unknown, requestId: string) {

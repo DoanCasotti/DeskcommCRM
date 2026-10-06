@@ -323,6 +323,8 @@ describe("conexão da cobrança pelo Asaas (PR 3b)", () => {
     h.ad.prepararWebhook.mockResolvedValue({ manual: { url: URL_ASAAS, segredo: TOKEN_ASAAS, eventos: ["PAYMENT_CONFIRMED", "PAYMENT_OVERDUE"] } });
     const res = await conectar({ provedor: "asaas", chave: CHAVE_ASAAS });
     expect(res.status).toBe(200);
+    // O token vai em claro neste corpo: nenhum cache pode guardá-lo.
+    expect(res.headers.get("cache-control")).toContain("no-store");
     expect((await res.json()).data).toEqual({
       modo: "teste",
       webhook: { manual: { url: URL_ASAAS, segredo: TOKEN_ASAAS, eventos: ["PAYMENT_CONFIRMED", "PAYMENT_OVERDUE"] } },
