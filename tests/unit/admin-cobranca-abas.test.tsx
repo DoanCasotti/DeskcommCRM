@@ -171,3 +171,27 @@ describe("Conexão com o Asaas (PR 3b)", () => {
     expect(screen.queryByRole("region", { name: nome })).toBeNull();
   });
 });
+
+describe("Visão geral com o Asaas (PR 3b)", () => {
+  const ASAAS = { ...VAZIA, provedor: "asaas" as const };
+
+  it("⭐ avisos recusados do Asaas dizem que o token do aviso não é o do sistema e como trocá-lo, sem a palavra 'assinatura'", () => {
+    const d = { ...ASAAS, problemas: { ...VAZIA.problemas, avisosRecusados: 3 } };
+    render(<VisaoGeral dados={d} checklist={montarChecklist(d)} idioma="pt-BR" agora={new Date()} />);
+    expect(screen.getByText(/^3 avisos do Asaas recusados nas últimas 24 h/).textContent).toContain("troque nele o token pelo novo");
+    expect(screen.queryByText(/a assinatura não confere/)).toBeNull();
+  });
+
+  it("avisos sem empresa, no Asaas, lembram que a conta pode ter outras vendas (o aviso assina todos os pagamentos dela)", () => {
+    const d = { ...ASAAS, problemas: { ...VAZIA.problemas, avisosComErro: 1 } };
+    render(<VisaoGeral dados={d} checklist={montarChecklist(d)} idioma="pt-BR" agora={new Date()} />);
+    expect(screen.getByText(/^1 aviso do provedor sem empresa correspondente/).textContent).toContain("outras vendas");
+  });
+
+  it("controle: na Stripe, as frases de sempre", () => {
+    const d = { ...VAZIA, provedor: "stripe" as const, problemas: { ...VAZIA.problemas, avisosRecusados: 1, avisosComErro: 1 } };
+    render(<VisaoGeral dados={d} checklist={montarChecklist(d)} idioma="pt-BR" agora={new Date()} />);
+    expect(screen.getByText(/a assinatura não confere/)).toBeTruthy();
+    expect(screen.queryByText(/outras vendas/)).toBeNull();
+  });
+});
