@@ -25,7 +25,7 @@ import { z } from "zod";
 import { FUSO_PADRAO } from "@/lib/cobranca/fuso";
 import { logger } from "@/lib/logger";
 
-import { ErroDoProvedor, type Modo } from "./contrato";
+import { ErroDoProvedor, type AdaptadorDeCobranca, type Modo } from "./contrato";
 
 /** A base de cada ambiente. Qual vale sai do prefixo da chave. */
 export const ASAAS_API_BASE = {
@@ -92,6 +92,7 @@ function ler<T>(schema: z.ZodType<T>, dados: unknown): T {
 }
 
 const comId = z.object({ id: z.string().min(1), deleted: z.boolean().nullish() });
+const listaDoAsaas = <T extends z.ZodType>(item: T) => z.object({ data: z.array(item) });
 
 const DATA_CIVIL = /^(\d{4})-(\d{2})-(\d{2})$/;
 const PARTES_EM_SP = new Intl.DateTimeFormat("en-US", {
@@ -225,8 +226,31 @@ export function criarAdaptadorAsaas(dep: DependenciasDoAsaas) {
     }
   }
 
+  /**
+   * O modo é o do prefixo; a chamada confirma que a chave autentica NA base
+   * daquele ambiente. `modoExigido` e o dublê em loopback recusam o modo
+   * trocado ANTES de enviar: chave real nunca sai só para confirmar que é real.
+   */
+  async function testarChave(opcoes?: { modoExigido?: Modo }): ReturnType<AdaptadorDeCobranca["testarChave"]> {
+    const chave = await dep.lerChave();
+    const modo = chave === null ? null : modoDaChaveAsaas(chave);
+    if (modo === null) return { ok: false, motivo: "chave_invalida" };
+    const outroModo = opcoes?.modoExigido !== undefined && opcoes.modoExigido !== modo;
+    if (outroModo || (modo === "producao" && dep.baseUrl !== undefined)) return { ok: false, motivo: "modo_divergente", modo };
+    try {
+      ler(listaDoAsaas(z.unknown()), await chamar("GET", "/customers?limit=1"));
+      return { ok: true, modo };
+    } catch (e) {
+      if (!(e instanceof ErroDoProvedor)) throw e;
+      if (e.status === 401) return { ok: false, motivo: "chave_invalida" };
+      if (e.status === 403) return { ok: false, motivo: "sem_permissao" };
+      return { ok: false, motivo: "provedor_fora" };
+    }
+  }
+
   return {
     id: "asaas" as const,
     clienteExiste,
+    testarChave,
   };
 }

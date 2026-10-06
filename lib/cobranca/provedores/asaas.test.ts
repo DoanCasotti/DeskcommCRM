@@ -272,3 +272,47 @@ describe("datas civis do Asaas", () => {
     expect(() => somarCiclo("2026-10-05", "DAILY")).toThrow(ErroDoProvedor);
   });
 });
+
+describe("testarChave", () => {
+  const VAZIA = { "GET /customers": lista() };
+
+  it("⭐ sandbox: ok em teste, e a chave foi SÓ à base do sandbox", async () => {
+    const { adaptador, chamadas } = montar(VAZIA);
+    expect(await adaptador.testarChave()).toEqual({ ok: true, modo: "teste" });
+    expect(chamadas.map((c) => `${c.url.origin}${c.url.pathname}${c.url.search}`)).toEqual([`${ASAAS_API_BASE.teste}/customers?limit=1`]);
+  });
+
+  it("⭐ produção: ok em produção, e a chave foi SÓ à base de produção", async () => {
+    const { adaptador, chamadas } = montar(VAZIA, { lerChave: async () => CHAVE_PRODUCAO });
+    expect(await adaptador.testarChave()).toEqual({ ok: true, modo: "producao" });
+    expect(chamadas.map((c) => c.url.origin)).toEqual([new URL(ASAAS_API_BASE.producao).origin]);
+  });
+
+  it("chave sem ambiente no prefixo, de outro provedor ou ausente: chave_invalida SEM chamar o Asaas", async () => {
+    for (const chave of [CHAVE_SEM_AMBIENTE, ["sk", "test", "51HfakeKeyForUnitTests00"].join("_"), null]) {
+      const { adaptador, chamadas } = montar(VAZIA, { lerChave: async () => chave });
+      expect(await adaptador.testarChave()).toEqual({ ok: false, motivo: "chave_invalida" });
+      expect(chamadas).toHaveLength(0);
+    }
+  });
+
+  it("401 → chave_invalida; 403 → sem_permissao; 5xx persistente → provedor_fora", async () => {
+    expect(await montar({ "GET /customers": { status: 401 } }).adaptador.testarChave()).toEqual({ ok: false, motivo: "chave_invalida" });
+    expect(await montar({ "GET /customers": { status: 403 } }).adaptador.testarChave()).toEqual({ ok: false, motivo: "sem_permissao" });
+    expect(await montar({ "GET /customers": { status: 502 } }).adaptador.testarChave()).toEqual({ ok: false, motivo: "provedor_fora" });
+  });
+
+  it("⭐ instalação em teste recusa a chave de PRODUÇÃO antes de enviá-la; e o inverso", async () => {
+    const real = montar(VAZIA, { lerChave: async () => CHAVE_PRODUCAO });
+    expect(await real.adaptador.testarChave({ modoExigido: "teste" })).toEqual({ ok: false, motivo: "modo_divergente", modo: "producao" });
+    const sandbox = montar(VAZIA);
+    expect(await sandbox.adaptador.testarChave({ modoExigido: "producao" })).toEqual({ ok: false, motivo: "modo_divergente", modo: "teste" });
+    expect([...real.chamadas, ...sandbox.chamadas]).toHaveLength(0);
+  });
+
+  it("⭐ com o dublê em loopback, chave de produção é modo_divergente e não sai da máquina", async () => {
+    const { adaptador, chamadas } = montar(VAZIA, { lerChave: async () => CHAVE_PRODUCAO, baseUrl: "http://127.0.0.1:3995/v3" });
+    expect(await adaptador.testarChave()).toEqual({ ok: false, motivo: "modo_divergente", modo: "producao" });
+    expect(chamadas).toHaveLength(0);
+  });
+});
