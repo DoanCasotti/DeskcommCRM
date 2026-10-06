@@ -724,7 +724,7 @@ export const TABLES = [
   "company_people",
   "import_batches",
   "import_rows",
-  // ⚠️ `cobranca_assinaturas` (migration 0552) NÃO entra nesta lista, pelo mesmo
+  // ⚠️ `cobranca_assinaturas` (migration 0567) NÃO entra nesta lista, pelo mesmo
   // motivo de `webhook_lead_captures`: a leitura é só do `admin` e o usuário
   // semeado aqui é `agent`, então o controle positivo falharia por ACERTO. A
   // prova vive em `tests/invariants/cobranca-isolamento.test.ts`.

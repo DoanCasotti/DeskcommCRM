@@ -4,7 +4,7 @@ import { assinar, comoAnon, comoServidor, comoUsuario, criarOrg, criarPlano, err
 
 /**
  * O AVISO DA RÉGUA E O ITEM DA CENTRAL NASCEM JUNTOS — spec da cobrança do
- * revendedor §3.2 (garantias), §7d, D-5; migration 0562, seção E.
+ * revendedor §3.2 (garantias), §7d, D-5; migration 0570, seção E.
  *
  * "Ninguém é suspenso sem aviso final gravado há 48 h JUNTO com o item na
  * Central": o `ultimo_aviso` e o item precisam da mesma transação, ou a régua

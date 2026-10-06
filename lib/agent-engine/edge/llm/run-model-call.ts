@@ -22,6 +22,10 @@ import { z } from 'zod';
 
 import { PROVEDOR_POR_ASSINATURA } from '@/lib/ai/pontos/provedores';
 import { PONTO_POR_ID } from '@/lib/ai/pontos/registro';
+// O par (provedor, modelo) é a mesma régua em TODOS os caminhos de execução:
+// este seam, a resolução dos pontos, a mídia, o embedding e o runtime do agente
+// importam daqui — não cada um a sua (issue #2377).
+import { ParProvedorModeloInvalidoError, validarParProvedorModelo } from '@/lib/ai/par-provedor-modelo';
 import { decidirQuedaDoProvedor } from '@/lib/ai/pontos/reserva-da-assinatura';
 import { scrubMessage } from '@/lib/sentry/scrub';
 
@@ -709,6 +713,27 @@ export async function runModelCall(db: pg.Pool, cfg: LlmEdgeConfig, input: RunMo
       'modelo LLM não definido — configure o ponto no painel de provedores, ' +
         'organizations.settings.llm.default_model, ou passe input.model',
     );
+  }
+  // ═══ O PAR (PROVEDOR, MODELO) ANTES DE QUALQUER BYTE ═══
+  //
+  // `config.provider` é quem de fato recebe a requisição (`registry` é lido por
+  // ele, não por `decisao.provider`), e é contra ele que o modelo é conferido.
+  // Sem esta linha, um `settings.llm` legado mandava `claude-sonnet-5` para o
+  // endpoint da OpenAI e o primeiro aviso era o 400 do provedor — dentro do
+  // try, na fila, com retry (issue #2377). Aqui a recusa é anterior a tudo: o
+  // log sai com provedor, modelo, propósito e origem da configuração, e o erro
+  // carrega o motivo pronto para a tela de Execuções.
+  const par = validarParProvedorModelo(config.provider, model);
+  if (!par.valido) {
+    deps.log?.error('llm: par provedor+modelo recusado antes de sair byte', {
+      organization_id: input.tenantId,
+      purpose,
+      provider: config.provider,
+      model,
+      origem_da_escolha: decisao.origem,
+      motivo: par.motivo,
+    });
+    throw new ParProvedorModeloInvalidoError(config.provider, model, par.motivo, purpose);
   }
   if (config.enabledModels.length > 0 && !config.enabledModels.includes(model)) {
     throw new LlmModelNotEnabledError(model);

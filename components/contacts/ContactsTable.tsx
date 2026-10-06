@@ -250,6 +250,13 @@ export function ContactsTable({ contacts, orderBy, orderDir, onSort }: Props) {
                 {c.is_anonymized && <Badge variant="destructive">{t("Anonimizado")}</Badge>}
                 {c.is_blocked && <Badge variant="warning">{t("Bloqueado")}</Badge>}
                 {/*
+                  Selo "Pessoal" lido da COLUNA, nunca da etiqueta (critério 5):
+                  mesma regra do aviso acima — etiqueta se edita, coluna não.
+                  "Ativo" some junto: pessoal está fora da operação, então
+                  chamar de ativo mentiria na mesma linha em que o selo conta.
+                */}
+                {c.is_personal && <Badge variant="secondary">{t("Pessoal")}</Badge>}
+                {/*
                   Lê a COLUNA, nunca a tag, e só com a regra ligada: a tag
                   `cliente` é removível à mão e pelo PATCH (que substitui `tags`
                   por inteiro), e um selo que some porque alguém editou
@@ -259,7 +266,7 @@ export function ContactsTable({ contacts, orderBy, orderDir, onSort }: Props) {
                 {clientesLigado && c.first_service_at && (
                   <Badge variant="secondary">{t("Cliente")}</Badge>
                 )}
-                {!c.is_anonymized && !c.is_blocked && (
+                {!c.is_anonymized && !c.is_blocked && !c.is_personal && (
                   <Badge variant="success">{t("Ativo")}</Badge>
                 )}
               </div>

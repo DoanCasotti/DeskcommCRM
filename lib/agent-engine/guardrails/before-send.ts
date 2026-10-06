@@ -1478,10 +1478,12 @@ async function readStopFlags(
   contactId: string,
   humanMeetingCommand = false,
 ): Promise<boolean> {
+  // Pessoal não recebe nem via encontro (spec 21, etapa 11): o `or is_personal`
+  // vale nos DOIS ramos — o veto segue o bloqueio até aqui.
   const { rows } = await db.query<{ stopped: boolean }>(
     humanMeetingCommand
-      ? 'select is_blocked as stopped from contacts where organization_id = $1 and id = $2'
-      : 'select (is_blocked or force_human) as stopped from contacts where organization_id = $1 and id = $2',
+      ? 'select (is_blocked or is_personal) as stopped from contacts where organization_id = $1 and id = $2'
+      : 'select (is_blocked or force_human or is_personal) as stopped from contacts where organization_id = $1 and id = $2',
     [organizationId, contactId],
   );
   return rows[0]?.stopped === true;

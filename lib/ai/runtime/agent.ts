@@ -48,6 +48,9 @@ import { audit } from "@/lib/audit";
 import type { McpAuthResult } from "@/lib/mcp/auth";
 import type { McpContext } from "@/lib/mcp/types";
 import { computeCostCents } from "./cost";
+// O par (provedor, modelo) é a MESMA régua de todos os caminhos de execução
+// (seam, pontos, mídia, embedding e aqui) — issue #2377.
+import { ParProvedorModeloInvalidoError, validarParProvedorModelo } from "@/lib/ai/par-provedor-modelo";
 import { finalizeRun } from "./finalize";
 import { sendFinalResponse } from "./finalize";
 import { finalizeHandoff } from "./handoff";
@@ -178,6 +181,15 @@ export function buildModel(
   modelId: string,
   baseUrl?: string | null,
 ): LanguageModel {
+  // O PAR ANTES DE INSTANCIAR (issue #2377): o ensaio ("Teste" na aba do
+  // agente), o runtime do run e o onboarding passam todos por aqui, e este
+  // switch era o único que não conferia nada. Um `agent_versions` gravado com
+  // `{provider: 'openai', model: 'claude-sonnet-5'}` chegava ao
+  // `createOpenAI(...)(claude-sonnet-5)` e só o 400 do provedor dizia o que
+  // acontecia — depois de a tela ter prometido que o ensaio rodava. A recusa
+  // é anterior à instância, com provedor, modelo e motivo na mensagem.
+  const par = validarParProvedorModelo(provider, modelId);
+  if (!par.valido) throw new ParProvedorModeloInvalidoError(provider, modelId, par.motivo);
   switch (provider) {
     case "anthropic":
       return createAnthropic({ apiKey })(modelId);

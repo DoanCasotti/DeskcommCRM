@@ -35,7 +35,7 @@ import { padraoRegexDeBusca } from "@/lib/contacts/busca-regex";
 type SB = SupabaseClient;
 
 const SELECT_COLS =
-  "id, organization_id, name, display_name, email, email_normalized, phone_number, cpf_hash, birthdate, is_blocked, blocked_reason, is_anonymized, anonymized_at, is_merged_into, merged_at, consent, tags, source, source_metadata, custom_fields, created_at, updated_at, last_activity_at, first_service_at";
+  "id, organization_id, name, display_name, email, email_normalized, phone_number, cpf_hash, birthdate, is_blocked, blocked_reason, is_personal, is_anonymized, anonymized_at, is_merged_into, merged_at, consent, tags, source, source_metadata, custom_fields, created_at, updated_at, last_activity_at, first_service_at";
 
 interface CursorPayload {
   sort: string | null;
@@ -257,6 +257,12 @@ export async function listContactsHandler(
   }
   if (q.source) query = query.eq("source", q.source);
   if (soContato) query = query.eq("id", soContato);
+  // Pessoal fora da lista por padrão; `?pessoais=true` lista SÓ pessoais
+  // (spec 21, etapa 13 — a tela do filtro e o desmarcar). Sem esta linha a
+  // lista de Contatos furava pelo outro lado o esconderijo que o inbox
+  // construiu — e o MCP search herdaria o furo junto.
+  if (q.pessoais) query = query.eq("is_personal", true);
+  else query = query.eq("is_personal", false);
 
   if (q.cursor) {
     const c = decodeCursor(q.cursor);

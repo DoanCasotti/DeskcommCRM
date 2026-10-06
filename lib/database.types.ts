@@ -4621,6 +4621,7 @@ export type Database = {
           is_anonymized: boolean
           is_blocked: boolean
           is_merged_into: string | null
+          is_personal: boolean
           kind: string
           last_activity_at: string | null
           locale: string | null
@@ -4664,6 +4665,7 @@ export type Database = {
           is_anonymized?: boolean
           is_blocked?: boolean
           is_merged_into?: string | null
+          is_personal?: boolean
           kind?: string
           last_activity_at?: string | null
           locale?: string | null
@@ -4707,6 +4709,7 @@ export type Database = {
           is_anonymized?: boolean
           is_blocked?: boolean
           is_merged_into?: string | null
+          is_personal?: boolean
           kind?: string
           last_activity_at?: string | null
           locale?: string | null

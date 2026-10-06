@@ -8,7 +8,7 @@ import {
 } from "./cobranca-helpers";
 
 /**
- * O LIMITE DO PLANO (migration 0559; spec §2.6, §5). Nulo = sem limite: chave
+ * O LIMITE DO PLANO (migration 0567; spec §2.6, §5). Nulo = sem limite: chave
  * desligada, org sem assinatura (isenta) ou plano sem teto. O plano agendado não
  * vale antes da virada paga (D-3). Os recursos aceitos são RECURSOS_DO_PLANO,
  * lidos aqui do CORPO da função no catálogo.

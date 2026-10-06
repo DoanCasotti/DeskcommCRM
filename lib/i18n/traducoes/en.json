@@ -8867,5 +8867,9 @@
   "O que identifica o cliente": "What identifies the customer",
   "Na conversa com um cliente, o assistente só lê as linhas em que esta coluna é igual ao telefone ou ao e-mail de quem está falando. Sem isso, ele consulta este banco nas conversas sem limitar ao cliente.": "In a conversation with a customer, the assistant only reads the rows where this column matches the phone or email of the person talking. Without it, the assistant queries this database in conversations without limiting it to the customer.",
   "O telefone precisa estar gravado só com números, com ou sem o código do país ou o sinal + (5511999998888, 11999998888 ou +5511999998888).": "The phone must be stored as digits only, with or without the country code or the + sign (5511999998888, 11999998888 or +5511999998888).",
-  "Nas conversas, o assistente consulta este banco sem limitar ao cliente que está falando. Escolha, em Editar, a coluna que identifica o cliente.": "In conversations, the assistant queries this database without limiting it to the customer who is talking. Choose, in Edit, the column that identifies the customer."
+  "Nas conversas, o assistente consulta este banco sem limitar ao cliente que está falando. Escolha, em Editar, a coluna que identifica o cliente.": "In conversations, the assistant queries this database without limiting it to the customer who is talking. Choose, in Edit, the column that identifies the customer.",
+  "Contato marcado como pessoal.": "Contact marked as personal.",
+  "Contato marcado como pessoal": "Contact marked as personal",
+  "Não foi possível marcar o contato como pessoal.": "Could not mark the contact as personal.",
+  "Não foi possível desmarcar o contato como pessoal.": "Could not unmark the contact as personal."
 }

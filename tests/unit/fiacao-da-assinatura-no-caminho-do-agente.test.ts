@@ -167,7 +167,8 @@ function poolDoSeam(provider: string) {
       return {
         rows: [
           {
-            llm: { provider, default_model: "gpt-5-teste", params: {}, enabled_models: [] },
+            // O par tem de ser coerente (#2377): a Anthropic recebe um id dela.
+            llm: { provider, default_model: provider === "anthropic" ? "claude-teste" : "gpt-5-teste", params: {}, enabled_models: [] },
             teto: null,
             modo: null,
             efetivo_em: null,

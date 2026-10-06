@@ -180,7 +180,17 @@ export type ActivityType =
    * retorno veio" seria indistinguível de "o retorno está a caminho" — e é
    * justamente no silêncio que a demanda morre. O PORQUÊ vai no `reason`.
    */
-  | "proposal_followup_skipped";
+  | "proposal_followup_skipped"
+  /**
+   * O CONTATO VIROU PESSOAL / DEIXOU DE SER PESSOAL (spec 21).
+   *
+   * Tipos próprios, e não `note`, porque quem decide o que some da vista é um
+   * FILTRO que só enxerga `new.type`: sem tipo próprio, marcar não teria como
+   * pendurar a prova na timeline do negócio — e sem negócio aberto não há linha
+   * possível (`lead_id` é NOT NULL), só auditoria (D6).
+   */
+  | "contact_marked_personal"
+  | "contact_unmarked_personal";
 
 export const ACTIVITY_LABELS: Record<ActivityType, string> = {
   lead_created: "Entrou no funil",
@@ -288,6 +298,10 @@ export const ACTIVITY_LABELS: Record<ActivityType, string> = {
   proposal_expired: "Proposta venceu sem decisão",
   proposal_value_changed: "Valor do negócio atualizado pela proposta",
   proposal_followup_skipped: "Follow-up automático não agendado",
+  // Rótulos com o veredito, nunca o mecanismo: quem lê a timeline quer saber
+  // que o contato saiu da operação (ou voltou), não o nome da coluna.
+  contact_marked_personal: "Marcado como pessoal",
+  contact_unmarked_personal: "Desmarcado como pessoal",
 };
 
 /** Quando o tipo é legado/desconhecido, a linha ainda é honesta — sem jargão. */

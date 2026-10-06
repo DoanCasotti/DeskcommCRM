@@ -8,7 +8,7 @@ import { criarOrg, criarUsuarios, erroDe, numero, uuid, valor, vincular } from "
 /**
  * O ARQUIVO DO WEBHOOK DE COBRANÇA — invariante 8 e a parte de
  * `webhook_events_log` do invariante 1 da spec da cobrança do revendedor
- * (§2.4, §12), migration 0562.
+ * (§2.4, §12), migration 0570.
  *
  * A linha de cobrança nasce com `organization_id` NULO e corpo `{id,type}`. A
  * policy de leitura da tabela (`webhook_events_log_tenant_read`) vale para
@@ -32,7 +32,7 @@ function evento(provider: string, externalId: string, org: string | null = null)
 }
 
 beforeAll(() => {
-  criarUsuarios([[VIEWER_A, "viewer-a-0562@invariant.test"]]);
+  criarUsuarios([[VIEWER_A, "viewer-a-0570@invariant.test"]]);
   criarOrg(ORG_A, "cob-webhook-a");
   vincular(VIEWER_A, ORG_A, "viewer");
 });

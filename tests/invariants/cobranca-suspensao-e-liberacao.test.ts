@@ -7,7 +7,7 @@ import {
 } from "./cobranca-helpers";
 
 /**
- * A SUSPENSÃO POR COBRANÇA E A SAÍDA DELA (migration 0559; spec §3.1, §7h).
+ * A SUSPENSÃO POR COBRANÇA E A SAÍDA DELA (migration 0567; spec §3.1, §7h).
  *   - org ativa SEM assinatura é isenta: pedido de cobrança → `org_isenta`;
  *   - reativar zera o último aviso da régua (passo 7);
  *   - reativar conta, no aviso da Central e no evento, o que a suspensão parou

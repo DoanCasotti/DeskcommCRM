@@ -109,7 +109,7 @@ describe("o teto de IA do plano no Postgres real", () => {
 
   it("⭐ a retrata do orçamento da org fecha o item dela e o legado, NUNCA o do plano", () => {
     // O item do orçamento e o legado sem ref_kind são a MESMA família no
-    // índice da 0540 (um aberto por org; o do plano tem o seu, 0559 seção G):
+    // índice da 0540 (um aberto por org; o do plano tem o seu, 0567 seção G):
     // os dois não ficam abertos juntos, então cada um é medido numa rodada.
     abrirItem(ORG_B, "plano");
     abrirItem(ORG_B, null);

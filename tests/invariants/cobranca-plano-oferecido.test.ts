@@ -3,7 +3,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { criarPlano, uuid, valor } from "./cobranca-helpers";
 
 /**
- * O PLANO QUE A EMPRESA PODE ESCOLHER SOZINHA — migration 0562, seção F.
+ * O PLANO QUE A EMPRESA PODE ESCOLHER SOZINHA — migration 0570, seção F.
  * O padrão é `true`: um plano que já existia continua aparecendo para as
  * empresas depois do `update.sh` (nada muda para quem não mexer).
  */

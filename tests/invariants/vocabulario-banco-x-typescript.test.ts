@@ -438,7 +438,7 @@ const PARES: Array<{
     tabela: "cobranca_planos",
     coluna: "intervalo",
     // lib/cobranca/vocabulario.ts. Os sete pares da cobrança nascem no MESMO
-    // commit da migration 0552.
+    // commit da migration 0567.
     arquivo: "lib/cobranca/vocabulario.ts",
     simbolo: "INTERVALOS",
   },
@@ -489,6 +489,18 @@ const PARES: Array<{
     // passa no CHECK e é lido como resposta.
     arquivo: "lib/agent-engine/guardrails/before-send.ts",
     simbolo: "TipoDeEnvio",
+  },
+  {
+    tabela: "campaign_recipients",
+    coluna: "status",
+    // lib/campanhas/tipos.ts → STATUS_DO_DESTINATARIO (tupla `as const`).
+    // Nasce com a migration 0563 (spec 21, fatia 1), que acrescenta `personal`:
+    // a saída própria de quem vira pessoal — nunca `opted_out`, para a taxa de
+    // "pediu para parar" não contar quem nunca pediu (D7). Um status só no
+    // CHECK viraria `23514` no UPDATE da rota de marcar; só no TypeScript
+    // viraria linha que o banco recusa num caminho que ninguém exercita em dev.
+    arquivo: "lib/campanhas/tipos.ts",
+    simbolo: "STATUS_DO_DESTINATARIO",
   },
 ];
 

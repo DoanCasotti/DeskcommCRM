@@ -134,7 +134,7 @@ export const POLITICAS_DE_AVISO = {
   // As DUAS: numa empresa com IA, a conversa sem dono e sem silêncio é
   // classificada como `automatico` (comando-da-conversa.ts) e só cai na Fila
   // quando a empresa não tem atendimento automático.
-  // 0559: o aviso também nasce SEM conversa (agendamento de disparo único
+  // 0567: o aviso também nasce SEM conversa (agendamento de disparo único
   // desligado, passo de follow-up descartado). A fila deles é a de
   // IA › Follow-ups (QueueTab lê cron_jobs); a orientação nomeia os dois lugares.
   org_reativada: {

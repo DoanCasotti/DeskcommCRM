@@ -8,7 +8,7 @@ import {
 
 /**
  * O TETO DE PESSOAS DO PLANO — invariante 5 da spec da cobrança do revendedor
- * (§5, §12), migration 0559. Conta membro ativo e não provisório (convite
+ * (§5, §12), migration 0567. Conta membro ativo e não provisório (convite
  * pendente não conta, D-10); só o vínculo que PASSA a ocupar vaga é conferido;
  * duas entradas simultâneas não passam juntas; estourou → PT402 com a mensagem
  * `limite_do_plano:assentos:<teto>` que lib/cobranca/limites.ts lê. E a sessão

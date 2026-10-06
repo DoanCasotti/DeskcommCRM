@@ -4,7 +4,7 @@ import { promisify } from "node:util";
 import { lastLine, sql } from "./gov-helpers";
 
 /**
- * APOIO DOS INVARIANTES DA COBRANÇA DO REVENDEDOR (migration 0559; spec cobrança
+ * APOIO DOS INVARIANTES DA COBRANÇA DO REVENDEDOR (migration 0567; spec cobrança
  * do revendedor §2, §5, §12). Nasce UMA vez e completo: tests/invariants/** é
  * congelado (loop/hooks/freeze-invariants.sh), então cada invariante da PR 2 vive
  * no seu arquivo e todos importam daqui. Transporte: o de gov-helpers.ts.

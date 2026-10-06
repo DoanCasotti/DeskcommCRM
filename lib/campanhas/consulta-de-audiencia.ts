@@ -31,6 +31,7 @@ interface LinhaDeContato {
   display_name: string | null;
   phone_number: string | null;
   is_blocked: boolean;
+  is_personal: boolean;
   is_anonymized: boolean;
   consent: unknown;
   /** Só quando o texto pede `{{contato.x}}` — ver `colunasDeContato`. */
@@ -38,7 +39,7 @@ interface LinhaDeContato {
 }
 
 /** As colunas de sempre, mais os campos personalizados quando o TEXTO os usa. */
-const COLUNAS_DO_CONTATO = "id, name, display_name, phone_number, is_blocked, is_anonymized, consent";
+const COLUNAS_DO_CONTATO = "id, name, display_name, phone_number, is_blocked, is_personal, is_anonymized, consent";
 
 export async function buscarCandidatos(
   admin: SupabaseClient,
@@ -151,6 +152,7 @@ export async function buscarCandidatos(
     nome: nomeDoContato(l),
     telefone: l.phone_number,
     bloqueado: l.is_blocked,
+    pessoal: l.is_personal === true,
     anonimizado: l.is_anonymized,
     recusouMarketing: recusouMarketing(l.consent),
     ...(camposDoTexto.contato ? { contato: mapaDeJson(l.custom_fields) } : {}),

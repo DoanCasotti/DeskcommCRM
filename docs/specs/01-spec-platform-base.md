@@ -98,7 +98,7 @@ create table public.organizations (
                   check (status in ('active','suspended','redacted','archived')),
   timezone        text not null default 'America/Sao_Paulo',
   locale          text not null default 'pt-BR',
-  -- rate_limit_rps (B-04) e ai_budget_cents saíram na migration 0559: nada as lia.
+  -- rate_limit_rps (B-04) e ai_budget_cents saíram na migration 0567: nada as lia.
   -- Teto da API: lib/mcp/rate-limit.ts. Orçamento de IA da org: tabela ai_budgets.
   -- Teto de IA do plano do revendedor: cobranca_planos.teto_ia_usd_cents.
   media_retention_days integer not null default 365, -- B-03

@@ -7,7 +7,7 @@ import {
 
 /**
  * ISOLAMENTO DA ASSINATURA ENTRE ORGANIZAÇÕES — invariante 1 da spec da cobrança
- * do revendedor (§12), migration 0559. A linha diz quem paga, quanto e se deve:
+ * do revendedor (§12), migration 0567. A linha diz quem paga, quanto e se deve:
  * leitura só do `admin` da própria org, escrita só do servidor.
  *
  * NÃO está em TABLES de rls-isolation.test.ts de propósito: lá o usuário semeado

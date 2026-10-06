@@ -101,7 +101,7 @@ export const KIND_LABEL = {
   jev_parar_de_receber: "Pedido para parar de receber mensagens, percebido pelo Jev",
   proposta_travada: "Uma proposta ficou presa em envio e voltou a rascunho",
   proposta_pronta_para_revisao: "Uma proposta está pronta para revisão",
-  // Rótulo do KIND, embaixo de todo item org_reativada. Desde a 0559 o `title`
+  // Rótulo do KIND, embaixo de todo item org_reativada. Desde a 0567 o `title`
   // que fn_reativar_organizacao grava varia ("há conversas para revisar" ou
   // "há agendamentos e follow-ups para revisar"), e o rótulo não promete nenhum
   // dos dois: o que parou está no corpo; o que fazer, na orientação.

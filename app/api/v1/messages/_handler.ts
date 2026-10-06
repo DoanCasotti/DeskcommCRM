@@ -270,6 +270,38 @@ export async function listMessagesHandler(
   conversationId: string,
   q: ListMessagesQuery,
 ): Promise<ListMessagesResult> {
+  // Pessoal não é alcançável nem pelo histórico (spec 21, etapa 7): a conversa
+  // sumiu da lista e o link direto dá 404, então o histórico recusa junto —
+  // defesa em profundidade, com o mesmo 404 mudo para não revelar a conversa.
+  // Duas consultas planas (sem embed, sem `maybeSingle`): o dublê do invariante
+  // de paginação traduz a cadeia em SQL literal e só modela esses métodos.
+  const { data: donas } = await supabase
+    .from("conversations")
+    .select("contact_id")
+    .eq("id", conversationId)
+    .eq("organization_id", ctx.organization_id)
+    .limit(1);
+  const contatoId = ((donas ?? []) as Array<{ contact_id?: string | null }>)[0]?.contact_id ?? null;
+  let ehPessoal = false;
+  if (contatoId) {
+    const { data: contato } = await supabase
+      .from("contacts")
+      .select("is_personal")
+      .eq("id", contatoId)
+      .eq("organization_id", ctx.organization_id)
+      .limit(1);
+    ehPessoal = ((contato ?? []) as Array<{ is_personal?: boolean }>)[0]?.is_personal === true;
+  }
+  if (ehPessoal) {
+    throw new ApiError(
+      404,
+      "not_found",
+      undefined,
+      ctx.requestId,
+      traduzir("Conversa não encontrada.", ctx.idioma ?? "pt-BR"),
+    );
+  }
+
   // A CONSULTA VAI DO MAIS NOVO PARA O MAIS VELHO — de propósito.
   //
   // Antes era `ascending: true`: a primeira página trazia as `limit` mensagens
@@ -398,7 +430,7 @@ export async function sendMessageHandler(
   // envio com 42703. Sem a coluna, nada está arquivado — e a consulta sem ela é a
   // consulta certa (ver lib/channels/archived).
   const convSelect = (comArchived: boolean) =>
-    `id, organization_id, contact_id, channel_session_id, is_group, group_chat_id, bot_silenced_until, provider_conversation_id, last_inbound_at, contacts:contact_id(phone_number, wa_identity, wa_lid, is_blocked), channel_sessions:channel_session_id(${CHANNEL_SESSION_REF_COLUMNS}, status, metadata${comArchived ? `, ${ARCHIVED_AT}` : ""})`;
+    `id, organization_id, contact_id, channel_session_id, is_group, group_chat_id, bot_silenced_until, provider_conversation_id, last_inbound_at, contacts:contact_id(phone_number, wa_identity, wa_lid, is_blocked, is_personal), channel_sessions:channel_session_id(${CHANNEL_SESSION_REF_COLUMNS}, status, metadata${comArchived ? `, ${ARCHIVED_AT}` : ""})`;
   //
   // O filtro por `organization_id` NÃO é redundância com a RLS — é a única
   // proteção que existe na metade dos chamadores. Este handler é a porta de
@@ -466,6 +498,8 @@ export async function sendMessageHandler(
       wa_identity: string | null;
       wa_lid: string | null;
       is_blocked: boolean;
+      /** Spec 21: pessoal não recebe por nenhum caminho — o veto é no mesmo ponto do bloqueio. */
+      is_personal: boolean;
     } | null;
     channel_sessions: (ChannelSessionRef & { status: string; metadata?: Record<string, unknown> | null; archived_at?: string | null }) | null;
   };
@@ -478,6 +512,20 @@ export async function sendMessageHandler(
       undefined,
       ctx.requestId,
       traduzir("Contato bloqueou o atendimento.", ctx.idioma ?? "pt-BR"),
+    );
+  }
+
+  // Contato pessoal (spec 21, etapa 11 — critério 7): TUDO recusado, manual ou
+  // automático, no mesmo ponto do bloqueio — sem exceção para gerente (a spec
+  // pede literalmente essa sabotagem: liberar gerente e ver o teste acusar).
+  // Erro padrão, sem vazar dado do contato.
+  if (c.contacts?.is_personal === true) {
+    throw new ApiError(
+      403,
+      "forbidden",
+      undefined,
+      ctx.requestId,
+      traduzir("Contato marcado como pessoal.", ctx.idioma ?? "pt-BR"),
     );
   }
 
@@ -599,7 +647,7 @@ export async function sendMessageHandler(
     if (typeof sharedId === "string" && sharedId.length > 0) {
       const { data: shared, error: sharedErr } = await supabase
         .from("contacts")
-        .select("id, display_name, name, phone_number, is_anonymized, is_blocked")
+        .select("id, display_name, name, phone_number, is_anonymized, is_blocked, is_personal")
         .eq("id", sharedId)
         .eq("organization_id", ctx.organization_id)
         .maybeSingle();
@@ -622,6 +670,7 @@ export async function sendMessageHandler(
         phone_number: string | null;
         is_anonymized: boolean;
         is_blocked: boolean;
+        is_personal: boolean;
       };
       if (row.is_anonymized) {
         throw new ApiError(
@@ -630,6 +679,17 @@ export async function sendMessageHandler(
           undefined,
           ctx.requestId,
           traduzir("Contato anonimizado não pode ser compartilhado.", ctx.idioma ?? "pt-BR"),
+        );
+      }
+      // Cartão de pessoal também não sai (spec 21, etapa 11): compartilhar o
+      // cartão entregaria o telefone por outra porta.
+      if (row.is_personal === true) {
+        throw new ApiError(
+          403,
+          "forbidden",
+          undefined,
+          ctx.requestId,
+          traduzir("Contato marcado como pessoal.", ctx.idioma ?? "pt-BR"),
         );
       }
       if (!row.phone_number) {
