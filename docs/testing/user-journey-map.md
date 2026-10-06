@@ -1454,6 +1454,15 @@ real, não pela tela).
 - **A troca de plano pelo Asaas.** Está no unit, com a guarda.
 - **A publicação com chave de produção do Asaas (D-7).**
 
+**Evidência** (PNG em `evidence/cobranca-asaas/`):
+- `evidence/cobranca-asaas/conexao-asaas-modo-de-teste.png`
+- `evidence/cobranca-asaas/checkout-asaas-documento.png`
+- `evidence/cobranca-asaas/fatura-do-asaas.png`
+- `evidence/cobranca-asaas/billing-asaas-aguardando.png`
+- `evidence/cobranca-asaas/billing-asaas-em-dia.png`
+- `evidence/cobranca-asaas/billing-asaas-cancelada.png`
+- `evidence/cobranca-asaas/smoke-asaas.txt`
+
 ## Jornadas exercitadas (instalação final, virgem)
 
 | Jornada | Resultado |

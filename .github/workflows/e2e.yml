@@ -626,8 +626,8 @@ jobs:
       # a porta nem as chaves da instalação, que ela devolve como achou. Roda
       # antes de `relogio-http-cron-externo` (ordem por caminho), então o tick
       # global não a alcança no meio.
-      # PREVISÃO, não medida: ~2 min de caso (a P0 da Stripe, mais longa,
-      # mediu 2,1 min no mesmo run; esta tem a espera de ~30 s do coalescer no 3b).
+      # MEDIDA no run 37483721555 (SHA bdc8f2ae9, 06/10/2026): 1,2 min de caso;
+      # SUITE_SEGUNDOS da parte 1 = 853.
       SPECS_PARTE_1: >-
         conversoes-reprocessamento.spec.ts
         pre-go-live-whatsapp.spec.ts
