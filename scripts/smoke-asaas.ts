@@ -132,14 +132,12 @@ try {
   if (geradas.some((c) => c.dueDate >= String(sub.nextDueDate))) {
     divergencia(`nextDueDate (${String(sub.nextDueDate)}) não está além de toda cobrança gerada: a §6.2 (proximoVencimento e a guarda do trocarPlano) parte do contrário — leve ao dono antes do merge (§16 3.10)`);
   }
-  // O dublê do e2e gera as que vencem em até 40 dias (ANTECEDENCIA_DIAS), e o contrato da Task 20 espera 2.
-  const limite = diasDepois(hojeEmSaoPaulo(), 40);
-  let doDuble = 0;
-  for (let d = primeira.dueDate; d <= limite; d = somarCiclo(d, "MONTHLY")) doDuble += 1;
+  // O dublê do e2e gera só a 1ª na criação (alinhado a este sandbox), e o contrato da Task 20 espera 1.
+  const doDuble = 1;
   // ATENÇÃO: isto mede "na criação". Se o Asaas gera a próxima cobrança depois (job diário), a régua é outra:
   // releia a MESMA assinatura no dia seguinte antes de mexer no dublê (ver a releitura no fim da corrida).
   if (geradas.length !== doDuble) {
-    divergencia(`o sandbox gerou ${geradas.length} cobranças NA CRIAÇÃO e o dublê gera ${doDuble}: decida a régua (criação x geração assíncrona) antes de mexer no DUBLÊ (ANTECEDENCIA_DIAS) e no toHaveLength(2) da Task 20, não no smoke`);
+    divergencia(`o sandbox gerou ${geradas.length} cobranças NA CRIAÇÃO e o dublê gera ${doDuble}: decida a régua (criação x geração assíncrona) antes de mexer no DUBLÊ (gerarDevidas) e no toHaveLength(1) da Task 20, não no smoke`);
   }
 
   // 3b. A geração observada na hora (§16 3.10): 1º vencimento daqui a 35 dias, dentro da antecedência.

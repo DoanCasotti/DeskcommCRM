@@ -14,9 +14,10 @@
  *
  * Imita o que a spec diz que o Asaas faz e que o adaptador precisa aguentar:
  *  - a assinatura nasce ACTIVE antes de qualquer pagamento (ACTIVE não é "existe");
- *  - a cobrança é gerada até 40 dias antes do vencimento, então um plano mensal
- *    tem DUAS pendentes logo de saída, e `nextDueDate` fica um ciclo ALÉM do
- *    período pago (proximoVencimento NÃO é nextDueDate);
+ *  - NA CRIAÇÃO nasce só a 1ª cobrança (medido no sandbox, com 1º vencimento hoje
+ *    e a 35 dias: 1 cobrança nas duas); as seguintes nascem até 40 dias antes de
+ *    vencer, depois de um pagamento (cadência de fundo NÃO medida), e `nextDueDate`
+ *    fica um ciclo ALÉM do período pago (proximoVencimento NÃO é nextDueDate);
  *  - a assinatura removida some da lista sem `includeDeleted=true`;
  *  - o aviso leva só o token estático em `asaas-access-token`, sem assinatura.
  * Páginas humanas: /i/:cobranca (a invoiceUrl), com Pix e cartão de teste.
@@ -228,9 +229,9 @@ export function criarDialetoAsaas(baseAtual: () => string): DialetoAsaas {
     }
   }
 
-  /** Gera as cobranças que vencem em até 40 dias, como o Asaas faz. */
-  async function gerarDevidas(a: AssinaturaAsaas): Promise<void> {
-    const limite = somarDias(hojeEmSaoPaulo(), ANTECEDENCIA_DIAS);
+  /** Gera as cobranças que vencem em até 40 dias; na criação, só a 1ª (o que o sandbox fez). */
+  async function gerarDevidas(a: AssinaturaAsaas, soAPrimeira = false): Promise<void> {
+    const limite = soAPrimeira ? a.nextDueDate : somarDias(hojeEmSaoPaulo(), ANTECEDENCIA_DIAS);
     while (!a.deleted && a.status === "ACTIVE" && a.nextDueDate <= limite) {
       const c: CobrancaAsaas = {
         id: novoId("pay"), customer: a.customer, subscription: a.id, value: a.value, status: "PENDING", dueDate: a.nextDueDate,
@@ -350,7 +351,7 @@ export function criarDialetoAsaas(baseAtual: () => string): DialetoAsaas {
         externalReference: texto(c.externalReference) || null, status: "ACTIVE", deleted: false, dateCreated: hojeEmSaoPaulo(), ordem: proxima(),
       };
       assinaturas.set(a.id, a);
-      await gerarDevidas(a);
+      await gerarDevidas(a, true);
       await enviar("SUBSCRIPTION_CREATED", objAssinatura(a));
       return json(res, 200, objAssinatura(a));
     }

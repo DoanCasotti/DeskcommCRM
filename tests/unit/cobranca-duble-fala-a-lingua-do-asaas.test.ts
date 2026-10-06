@@ -109,8 +109,8 @@ describe("dialeto Asaas do dublê × adaptador Asaas", () => {
     const [primeira] = duble.asaas.cobrancasDe(cliente);
     expect(primeira).toMatchObject({ status: "PENDING", dueDate: hojeEmSaoPaulo(), value: 49.9 });
     expect(inicio.url).toBe(`${duble.base}/i/${primeira?.id}`);
-    // Review Focus 2: a geração 40 dias antes deixa DUAS pendentes logo de saída.
-    expect(duble.asaas.cobrancasDe(cliente).filter((c) => c.status === "PENDING")).toHaveLength(2);
+    // Medido no sandbox (smoke): na criação nasce UMA cobrança só; a seguinte vem depois de pago.
+    expect(duble.asaas.cobrancasDe(cliente).filter((c) => c.status === "PENDING")).toHaveLength(1);
 
     // A assinatura nasce ACTIVE só com PENDING: clicar em Assinar e não pagar NÃO é assinar (§6.2 passo 2).
     const pendente = await a.lerSituacao({ clienteRef: cliente });
