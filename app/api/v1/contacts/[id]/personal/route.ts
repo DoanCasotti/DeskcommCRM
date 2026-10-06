@@ -42,20 +42,24 @@ type Context = { params: Promise<{ id: string }> };
  *
  * ## O que a rota NÃO faz
  *
- * Não apaga nada: marcar esconde, tudo continua no banco, e desmarcar relista
- * (spec decisão 2). Desmarcar NÃO reativa follow-up, campanha nem prospecção
- * (D8 — espelha o desbloqueio, que também não reativa o que o bloqueio
- * cancelou). Quem marcou e quando fica só em auditoria + timeline, sem coluna
- * extra no contato (spec §3.6).
+ * Não apaga conversa, mensagem, negócio nem histórico: marcar esconde, tudo
+ * continua no banco, e desmarcar relista (spec decisão 2). A ÚNICA remoção é a
+ * dos trechos já ingeridos no RAG (#2394): ali o vetor é uma cópia operacional
+ * do conteúdo, e a conversa original fica. Desmarcar NÃO reativa follow-up,
+ * campanha nem prospecção (D8 — espelha o desbloqueio, que também não reativa o
+ * que o bloqueio cancelou), e também não reingere o que saiu do acervo: a
+ * conversa volta ao RAG quando alguém a marcar de novo como útil. Quem marcou e
+ * quando fica só em auditoria + timeline, sem coluna extra no contato
+ * (spec §3.6).
  *
  * ## Ordem dos efeitos do marcar (fixa, toda nesta rota)
  *
  * 1) `update contacts is_personal=true`; 2) cancela follow-ups (parada total,
  * como o bloqueio); 3) cancela retornos avulsos; 4) saída de campanha com
  * status/motivo próprios (nunca `opted_out`); 5) prospecção vira pulada com
- * motivo próprio; 6) fecha conversas + tira do atendente; 7) auditoria +
- * timeline. Sem negócio aberto, a timeline é pulada em silêncio e a auditoria
- * continua valendo como prova (D6).
+ * motivo próprio; 6) fecha conversas + tira do atendente; 7) remove os trechos
+ * já ingeridos no RAG (#2394); 8) auditoria + timeline. Sem negócio aberto, a
+ * timeline é pulada em silêncio e a auditoria continua valendo como prova (D6).
  */
 
 interface EfeitosDoMarcar {
@@ -64,6 +68,8 @@ interface EfeitosDoMarcar {
   campanha_saidas: number;
   prospeccao_pulada: number;
   conversas_fechadas: number;
+  /** Trechos já ingeridos no RAG removidos pelo marcar (#2394). */
+  trechos_de_rag_removidos: number;
 }
 
 const SEM_EFEITO: EfeitosDoMarcar = {
@@ -72,6 +78,7 @@ const SEM_EFEITO: EfeitosDoMarcar = {
   campanha_saidas: 0,
   prospeccao_pulada: 0,
   conversas_fechadas: 0,
+  trechos_de_rag_removidos: 0,
 };
 
 /**
@@ -405,11 +412,13 @@ export async function POST(_req: NextRequest, ctx: Context): Promise<Response> {
     efeitos.conversas_fechadas += 1;
   }
 
-  // RAG (spec 21, etapa 9): zerar `usable_for_rag` só impede ingestões
-  // FUTURAS destas conversas (o lote novo também exclui pessoal na leitura).
-  // Os trechos já ingeridos continuam em `ai_chunks` e alcançáveis pelo
-  // retriever — `retrieve_top_k_chunks` não lê `usable_for_rag`. Removê-los ao
-  // marcar é a issue #2394 (a mesma lacuna da #1957 na LGPD).
+  // 7) RAG (spec 21, etapa 9 + issue #2394): zerar `usable_for_rag` só impede
+  // ingestões FUTURAS destas conversas (o lote novo também exclui pessoal na
+  // leitura). Os trechos JÁ ingeridos continuam em `ai_chunks` e alcançáveis
+  // pelo retriever — `retrieve_top_k_chunks` não lê `usable_for_rag`. A função
+  // remove os que saíram das conversas DESTE contato e devolve a contagem; a
+  // mesma forma da #1957 na LGPD. Desmarcar não reingere (D8): a conversa volta
+  // ao acervo quando alguém a marcar de novo como útil para o RAG.
   const { error: ragErro } = await admin
     .from("conversations")
     .update({ usable_for_rag: false })
@@ -420,6 +429,17 @@ export async function POST(_req: NextRequest, ctx: Context): Promise<Response> {
       requestId,
     });
   }
+
+  const { data: trechosRemovidos, error: trechosErro } = await admin.rpc(
+    "fn_contato_pessoal_remove_trechos_do_rag",
+    { p_org: orgId, p_contact: id },
+  );
+  if (trechosErro) {
+    return fail("internal_error", t("Não foi possível marcar o contato como pessoal."), 500, {
+      requestId,
+    });
+  }
+  efeitos.trechos_de_rag_removidos = (trechosRemovidos as number | null) ?? 0;
 
   if (eraPessoal) {
     return ok({ contact: marcado, effects: efeitos }, { requestId });

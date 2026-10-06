@@ -48,6 +48,8 @@ const tabelas: Record<string, Linha[]> = {};
 let eventosDeEnrollment: Array<Record<string, unknown>> = [];
 let atividades: Array<Record<string, unknown>> = [];
 const chamadasRpc: Array<{ funcao: string; args: Record<string, unknown> }> = [];
+/** O que a RPC de remoção de trechos do RAG devolve no fake (#2394). */
+let trechosDeRagRemovidos = 0;
 
 const contexto = () => ({ params: Promise.resolve({ id: CONTATO }) });
 const req = () => new NextRequest(`http://localhost/api/v1/contacts/${CONTATO}/personal`, { method: "POST" });
@@ -133,6 +135,7 @@ beforeEach(() => {
   eventosDeEnrollment = [];
   atividades = [];
   chamadasRpc.length = 0;
+  trechosDeRagRemovidos = 0;
   tabelas["contacts"] = [{ id: CONTATO, organization_id: ORG, status: "", display_name: "Mello", is_personal: false } as Linha];
   tabelas["crm_leads"] = [];
   tabelas["crm_pipelines"] = [];
@@ -152,6 +155,7 @@ beforeEach(() => {
     rpc: async (funcao: string, args: Record<string, unknown>) => {
       chamadasRpc.push({ funcao, args });
       if (funcao === "fn_conversation_assign") return { data: [{ id: args["p_conversation_id"] }], error: null };
+      if (funcao === "fn_contato_pessoal_remove_trechos_do_rag") return { data: trechosDeRagRemovidos, error: null };
       return { data: { id: args["p_conversation"] }, error: null };
     },
   } as unknown as ReturnType<typeof createAdminClient>);
@@ -268,7 +272,11 @@ describe("marcar: fecha conversas e tira do atendente", () => {
     ];
     const resposta = await POST(req(), contexto());
     expect(resposta.status).toBe(200);
-    expect(chamadasRpc.map((c) => c.funcao)).toEqual(["fn_conversation_assign", "fn_service_status"]);
+    expect(chamadasRpc.map((c) => c.funcao)).toEqual([
+      "fn_conversation_assign",
+      "fn_service_status",
+      "fn_contato_pessoal_remove_trechos_do_rag",
+    ]);
     expect(chamadasRpc[0]!.args).toMatchObject({
       p_conversation_id: "c1",
       p_to_user_id: null,
@@ -287,7 +295,7 @@ describe("marcar: fecha conversas e tira do atendente", () => {
       { id: "c2", organization_id: ORG, contact_id: CONTATO, status: "closed", assigned_to_user_id: null } as Linha,
     ];
     await POST(req(), contexto());
-    expect(chamadasRpc).toHaveLength(0);
+    expect(chamadasRpc.filter((c) => c.funcao !== "fn_contato_pessoal_remove_trechos_do_rag")).toHaveLength(0);
     expect(acoesDeAuditoria()).not.toContain("conversation.closed");
   });
 });
@@ -309,5 +317,35 @@ describe("marcar: a prova fecha a conta", () => {
     );
     expect(atividades).toHaveLength(1);
     expect(atividades[0]).toMatchObject({ type: "contact_marked_personal", lead_id: "lead1" });
+  });
+});
+
+describe("marcar: tira do RAG os trechos já ingeridos (#2394)", () => {
+  it("chama a remoção com a organização e o contato, conta nos effects e na auditoria", async () => {
+    trechosDeRagRemovidos = 3;
+    const resposta = await POST(req(), contexto());
+    expect(resposta.status).toBe(200);
+    const chamada = chamadasRpc.find((c) => c.funcao === "fn_contato_pessoal_remove_trechos_do_rag");
+    expect(chamada?.args).toEqual({ p_org: ORG, p_contact: CONTATO });
+    const corpo = (await resposta.json()) as {
+      data: { effects: { trechos_de_rag_removidos: number } };
+    };
+    expect(corpo.data.effects.trechos_de_rag_removidos).toBe(3);
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "contact.marked_personal",
+        metadata: expect.objectContaining({ trechos_de_rag_removidos: 3 }),
+      }),
+    );
+  });
+
+  it("sem trechos ingeridos, conta zero e a resposta continua 200", async () => {
+    trechosDeRagRemovidos = 0;
+    const resposta = await POST(req(), contexto());
+    expect(resposta.status).toBe(200);
+    const corpo = (await resposta.json()) as {
+      data: { effects: { trechos_de_rag_removidos: number } };
+    };
+    expect(corpo.data.effects.trechos_de_rag_removidos).toBe(0);
   });
 });

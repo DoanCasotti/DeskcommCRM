@@ -45321,6 +45321,34 @@ grant  execute on function public.emit_event(text, text, uuid, jsonb, jsonb, uui
 
 notify pgrst,'reload schema';
 
+
+-- ---- #2394: o contato pessoal tira do RAG os trechos já ingeridos (migration 0564) ----
+-- Marcar um contato como pessoal zerava `usable_for_rag` (só ingestões futuras) e deixava os
+-- `ai_chunks` já gravados alcançáveis por `retrieve_top_k_chunks`. A função remove os trechos
+-- cujo `metadata.conversation_id` pertence às conversas do contato e devolve a contagem.
+-- Cabeçalho da 0564 para o racional inteiro.
+create or replace function public.fn_contato_pessoal_remove_trechos_do_rag(p_org uuid,p_contact uuid)
+returns integer language plpgsql security definer set search_path=public as $$
+declare removidos integer;
+begin
+ if auth.uid() is not null and not public.fn_role_at_least(p_org,'manager') then
+  raise exception 'caller_not_authorized_for_org'
+    using hint = 'fn_contato_pessoal_remove_trechos_do_rag: caller must be manager of the organization';
+ end if;
+ delete from public.ai_chunks c
+   using public.conversations v
+  where c.organization_id=p_org
+    and v.organization_id=p_org
+    and v.contact_id=p_contact
+    and c.metadata->>'conversation_id'=v.id::text;
+ get diagnostics removidos = row_count;
+ return removidos;
+end $$;
+revoke all on function public.fn_contato_pessoal_remove_trechos_do_rag(uuid,uuid) from public,anon,authenticated;
+grant execute on function public.fn_contato_pessoal_remove_trechos_do_rag(uuid,uuid) to service_role;
+
+notify pgrst,'reload schema';
+
 -- ---- cobrança do revendedor: planos e limites (migration 0567) ----
 -- Capacidade do núcleo com chave da instalação (spec cobrança do revendedor
 -- §2, §5). Corpo e porquê: a migration 0567, copiada seção a seção, byte a

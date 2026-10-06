@@ -121,6 +121,8 @@ beforeEach(() => {
   } as Awaited<ReturnType<typeof requireRole>>);
   vi.mocked(createAdminClient).mockReturnValue({
     from: (tabela: string) => fakeQuery(tabela),
+    // A remoção dos trechos de RAG (#2394) devolve a contagem; sem trechos, 0.
+    rpc: async () => ({ data: 0, error: null }),
   } as unknown as ReturnType<typeof createAdminClient>);
   vi.mocked(audit).mockResolvedValue(undefined);
 });
