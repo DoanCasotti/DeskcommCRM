@@ -14707,6 +14707,10 @@ export const DICIONARIO: Traducoes = {
   "Outra renovação desta conta está em curso (ou o recurso está desligado). Aguarde alguns segundos e tente de novo.": { es: "Otra renovación de esta cuenta está en curso (o el recurso está desactivado). Espere unos segundos e intente de nuevo." },
   "A OpenAI recusou a renovação do login. Gere o link de novo e conecte a conta outra vez.": { es: "OpenAI rechazó la renovación del inicio de sesión. Genere el enlace de nuevo y conecte la cuenta otra vez." },
   "Esta credencial guarda o login por assinatura da empresa, não uma chave de API. Use Conectar ou Desconectar na tela de Credenciais.": { es: "Esta credencial guarda el inicio de sesión por suscripción de la empresa, no una clave de API. Use Conectar o Desconectar en la pantalla de Credenciales." },
+  // ─── cobrança: Asaas na configuração (PR 3b) ───
+  "A chave que deixa o sistema criar assinaturas e ler pagamentos na sua conta Asaas. Comece pela do sandbox, que começa com $aact_hmlg_.": { es: "La clave que permite al sistema crear suscripciones y leer pagos en tu cuenta de Asaas. Empieza con la del sandbox, que empieza con $aact_hmlg_." },
+  "Token dos avisos de pagamento do Asaas": { es: "Token de los avisos de pago de Asaas" },
+  "Confere que um aviso de pagamento veio mesmo do Asaas. É criado quando você conecta a chave; se o Asaas pedir o cadastro manual do aviso, a tela mostra o token uma única vez.": { es: "Comprueba que un aviso de pago vino realmente de Asaas. Se crea cuando conectas la clave; si Asaas pide registrar el aviso a mano, la pantalla muestra el token una sola vez." },
 };
 
 /**

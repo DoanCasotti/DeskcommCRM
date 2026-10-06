@@ -16,7 +16,7 @@ export const senha = `Local-${randomUUID()}!`;
 
 export const CHAVES_DA_COBRANCA = [
   "MODULO_COBRANCA", "COBRANCA_PROVEDOR", "COBRANCA_TOLERANCIA_DIAS",
-  "STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET",
+  "STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET", "ASAAS_API_KEY", "ASAAS_WEBHOOK_TOKEN",
 ] as const;
 
 export async function inserir(tabela: string, valor: Record<string, unknown>): Promise<string> {
