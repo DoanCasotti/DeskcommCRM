@@ -14711,6 +14711,18 @@ export const DICIONARIO: Traducoes = {
   "A chave que deixa o sistema criar assinaturas e ler pagamentos na sua conta Asaas. Comece pela do sandbox, que começa com $aact_hmlg_.": { es: "La clave que permite al sistema crear suscripciones y leer pagos en tu cuenta de Asaas. Empieza con la del sandbox, que empieza con $aact_hmlg_." },
   "Token dos avisos de pagamento do Asaas": { es: "Token de los avisos de pago de Asaas" },
   "Confere que um aviso de pagamento veio mesmo do Asaas. É criado quando você conecta a chave; se o Asaas pedir o cadastro manual do aviso, a tela mostra o token uma única vez.": { es: "Comprueba que un aviso de pago vino realmente de Asaas. Se crea cuando conectas la clave; si Asaas pide registrar el aviso a mano, la pantalla muestra el token una sola vez." },
+  // ─── cobrança: documento de quem paga (PR 3b) ───
+  "CPF ou CNPJ de quem paga": { es: "CPF o CNPJ de quien paga" },
+  "Vai direto para o Asaas, que emite a cobrança neste documento; não fica guardado neste sistema. Confira antes de assinar: para trocar depois, fale com quem administra o sistema.": { es: "Va directo a Asaas, que emite el cobro con este documento; no queda guardado en este sistema. Revísalo antes de suscribirte: para cambiarlo después, habla con quien administra el sistema." },
+  "Confira o CPF ou CNPJ: os dígitos não batem.": { es: "Revisa el CPF o CNPJ: los dígitos no coinciden." },
+  "Informe o CPF ou CNPJ de quem paga.": { es: "Informa el CPF o CNPJ de quien paga." },
+  "O provedor de pagamento não aceitou este CPF ou CNPJ. Confira o número ou informe outro documento.": { es: "El proveedor de pago no aceptó este CPF o CNPJ. Revisa el número o informa otro documento." },
+  "Regularize o pagamento antes de trocar de plano.": { es: "Regulariza el pago antes de cambiar de plan." },
+  "A mensalidade de agora ainda não foi paga. Pague em \"Pagar agora\" e troque de plano depois que o pagamento for confirmado (Pix: minutos; boleto: até 1 dia útil).": { es: "La mensualidad actual aún no está pagada. Paga en \"Pagar ahora\" y cambia de plan después de que se confirme el pago (Pix: minutos; boleto: hasta 1 día hábil)." },
+  "Sua fatura está pronta. Pague por Pix, boleto ou cartão.": { es: "Tu factura está lista. Paga con Pix, boleto o tarjeta." },
+  "Abrir a fatura": { es: "Abrir la factura" },
+  "A fatura abre no Asaas, numa nova aba. Depois de pagar, volte aqui e clique em Já paguei: Pix confirma em minutos; boleto, em até 1 dia útil.": { es: "La factura se abre en Asaas, en una pestaña nueva. Después de pagar, vuelve aquí y haz clic en Ya pagué: Pix se confirma en minutos; boleto, en hasta 1 día hábil." },
+  "Adiantar a próxima mensalidade": { es: "Adelantar la próxima mensualidad" },
 };
 
 /**
