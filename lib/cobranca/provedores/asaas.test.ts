@@ -14,6 +14,7 @@ import {
   dataCivilEmSaoPaulo,
   fimDoDiaEmSaoPaulo,
   somarCiclo,
+  verificarWebhookAsaas,
   type DependenciasDoAsaas,
 } from "./asaas";
 
@@ -224,8 +225,6 @@ describe("clienteExiste", () => {
 });
 
 // Usados pelas tarefas seguintes (a Task 4 lê a fonte; a Task 6 usa ORG).
-void readFileSync;
-void join;
 void ORG;
 void lista;
 
@@ -314,5 +313,81 @@ describe("testarChave", () => {
     const { adaptador, chamadas } = montar(VAZIA, { lerChave: async () => CHAVE_PRODUCAO, baseUrl: "http://127.0.0.1:3995/v3" });
     expect(await adaptador.testarChave()).toEqual({ ok: false, motivo: "modo_divergente", modo: "producao" });
     expect(chamadas).toHaveLength(0);
+  });
+});
+
+describe("verificarWebhook", () => {
+  // Montado em tempo de execução, como as chaves.
+  const TOKEN = ["tok", "fixtureDoWebhookDoAsaas0000000000000000"].join("_");
+  const EVENTO = {
+    id: "evt_05b708f961d739ea7eba7e4db318f621&368604920",
+    event: "PAYMENT_RECEIVED",
+    dateCreated: "2026-10-05 12:00:00",
+    payment: { object: "payment", id: "pay_1", customer: CLIENTE, value: 49.9, status: "RECEIVED", billingType: "PIX" },
+  };
+  const CORPO = JSON.stringify(EVENTO);
+  const cab = (valor: string) => new Headers({ "asaas-access-token": valor });
+
+  it("⭐ token certo: sinal só com ponteiros, nada do corpo", () => {
+    expect(verificarWebhookAsaas(CORPO, cab(TOKEN), TOKEN)).toEqual({ eventoId: EVENTO.id, tipo: "PAYMENT_RECEIVED", clienteRef: CLIENTE });
+  });
+
+  it("⭐ token vazado: corpo que jura 'pago' com o token certo vira só ponteiros (Review Focus 1)", () => {
+    // Quem tem o token manda um pagamento que não existe, com valor, status e data.
+    // Nada disso pode sair do adaptador: a decisão é sempre da releitura (§6.2, risco 5).
+    const mentira = JSON.stringify({
+      id: "evt_forjado&1",
+      event: "PAYMENT_RECEIVED",
+      payment: { object: "payment", id: "pay_inventado", customer: CLIENTE, status: "RECEIVED", value: 9999, paymentDate: "2026-10-05" },
+      subscription: { id: "sub_x", status: "ACTIVE", customer: CLIENTE },
+    });
+    const sinal = verificarWebhookAsaas(mentira, cab(TOKEN), TOKEN);
+    expect(Object.keys(sinal ?? {}).sort()).toEqual(["clienteRef", "eventoId", "tipo"]);
+    // O `tipo` ("PAYMENT_RECEIVED") é o nome do evento, não um status: o que não pode passar é o resto.
+    expect(JSON.stringify(sinal)).not.toMatch(/9999|pay_inventado|2026-10-05|sub_x/);
+  });
+
+  it("evento de assinatura: o cliente sai de subscription.customer", () => {
+    const corpo = JSON.stringify({ id: "evt_sub_1", event: "SUBSCRIPTION_DELETED", subscription: { id: "sub_1", customer: CLIENTE } });
+    expect(verificarWebhookAsaas(corpo, cab(TOKEN), TOKEN)).toEqual({ eventoId: "evt_sub_1", tipo: "SUBSCRIPTION_DELETED", clienteRef: CLIENTE });
+  });
+
+  it("evento sem payment nem subscription: clienteRef null (a rota grava cliente_desconhecido)", () => {
+    const corpo = JSON.stringify({ id: "evt_x", event: "ACCOUNT_STATUS_UPDATED" });
+    expect(verificarWebhookAsaas(corpo, cab(TOKEN), TOKEN)?.clienteRef).toBeNull();
+  });
+
+  it.each([
+    ["token errado do mesmo tamanho", cab(`${TOKEN.slice(0, -1)}X`), TOKEN],
+    ["⭐ token de outro tamanho (timingSafeEqual cru lançaria RangeError)", cab("curto"), TOKEN],
+    ["sem header", new Headers(), TOKEN],
+    ["segredo vazio nunca valida", cab(""), ""],
+  ])("%s → null, sem lançar", (_nome, headers, segredo) => {
+    expect(verificarWebhookAsaas(CORPO, headers, segredo)).toBeNull();
+  });
+
+  it.each([
+    ["não é JSON", "lixo"],
+    ["JSON sem id", JSON.stringify({ event: "PAYMENT_RECEIVED" })],
+    ["JSON sem event", JSON.stringify({ id: "evt_1" })],
+    // Token vazado: sem teto, cada aviso gravaria uma linha do tamanho que quem manda quiser.
+    ["⭐ com id de 5 KB", JSON.stringify({ id: "x".repeat(5_000), event: "PAYMENT_RECEIVED" })],
+    ["⭐ com event fora do vocabulário do Asaas", JSON.stringify({ id: "evt_1", event: "payment_received" })],
+  ])(
+    "token certo e corpo %s → null",
+    (_nome, corpo) => {
+      expect(verificarWebhookAsaas(corpo, cab(TOKEN), TOKEN)).toBeNull();
+    },
+  );
+
+  it("⭐ tempo constante: compara sha256 dos dois lados com timingSafeEqual, nunca ===", () => {
+    const fonte = readFileSync(join(__dirname, "asaas.ts"), "utf8");
+    const corpo = fonte.slice(fonte.indexOf("export function verificarWebhookAsaas"), fonte.indexOf("export function criarAdaptadorAsaas"));
+    expect(corpo).toMatch(/timingSafeEqual\(createHash\("sha256"\)/);
+    expect(corpo).not.toMatch(/recebido\s*[!=]==|[!=]==\s*recebido/);
+  });
+
+  it("é o verificarWebhook do adaptador", () => {
+    expect(montar({}).adaptador.verificarWebhook(CORPO, cab(TOKEN), TOKEN, AGORA)?.eventoId).toBe(EVENTO.id);
   });
 });

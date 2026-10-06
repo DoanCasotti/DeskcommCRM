@@ -20,12 +20,14 @@
  *   `ErroDoProvedor(200, "resposta_invalida")`, que `sincronizar` grava como
  *   `leitura_invalida` sem tocar o estado.
  */
+import { createHash, timingSafeEqual } from "node:crypto";
+
 import { z } from "zod";
 
 import { FUSO_PADRAO } from "@/lib/cobranca/fuso";
 import { logger } from "@/lib/logger";
 
-import { ErroDoProvedor, type AdaptadorDeCobranca, type Modo } from "./contrato";
+import { ErroDoProvedor, type AdaptadorDeCobranca, type Modo, type SinalDoWebhook } from "./contrato";
 
 /** A base de cada ambiente. Qual vale sai do prefixo da chave. */
 export const ASAAS_API_BASE = {
@@ -158,6 +160,42 @@ export function somarCiclo(data: string, ciclo: string): string {
   return new Date(Date.UTC(a, m - 1 + meses, Math.min(d, ultimoDia))).toISOString().slice(0, 10);
 }
 
+const eventoDoAsaas = z.object({
+  // Tetos de tamanho: com o token vazado, cada aviso válido vira uma linha no arquivo de avisos.
+  id: z.string().min(1).max(100),
+  event: z.string().regex(/^[A-Z_]{1,64}$/),
+  payment: z.object({ customer: z.string().nullish() }).nullish(),
+  subscription: z.object({ customer: z.string().nullish() }).nullish(),
+});
+
+/**
+ * O Asaas autentica o aviso com o `authToken` que NÓS geramos, ecoado em
+ * `asaas-access-token`: sem HMAC nem horário, então o corpo só serve de
+ * ponteiro (§6.2; risco 5 da §15) e toda decisão vem da releitura. Compara o
+ * sha256 dos dois lados com `timingSafeEqual`: tamanho sempre igual, sem
+ * atalho que vaze tamanho ou prefixo do token. Nunca lança. `_agora` existe só
+ * para a forma do contrato (o Asaas não manda horário): sem ele, o objeto do
+ * adaptador teria `verificarWebhook` de 3 parâmetros até a Task 10 o anotar, e o
+ * teste que chama com 4 não compilaria (TS2554).
+ */
+export function verificarWebhookAsaas(corpoCru: string, headers: Headers, segredo: string, _agora?: Date): SinalDoWebhook | null {
+  const recebido = headers.get("asaas-access-token");
+  if (!recebido || !segredo) return null;
+  const esperado = createHash("sha256").update(segredo, "utf8").digest();
+  if (!timingSafeEqual(createHash("sha256").update(recebido, "utf8").digest(), esperado)) return null;
+  let json: unknown;
+  try {
+    json = JSON.parse(corpoCru);
+  } catch {
+    // Token certo e corpo que não é JSON: o Asaas não manda isso. Recusar é a leitura segura.
+    return null;
+  }
+  const evento = eventoDoAsaas.safeParse(json);
+  if (!evento.success) return null;
+  const { id, event, payment, subscription } = evento.data;
+  return { eventoId: id, tipo: event, clienteRef: payment?.customer ?? subscription?.customer ?? null };
+}
+
 export function criarAdaptadorAsaas(dep: DependenciasDoAsaas) {
   if (dep.baseUrl !== undefined && !baseDeLoopback(dep.baseUrl)) {
     throw new Error("base da API do Asaas recusada: só a oficial ou loopback");
@@ -252,5 +290,6 @@ export function criarAdaptadorAsaas(dep: DependenciasDoAsaas) {
     id: "asaas" as const,
     clienteExiste,
     testarChave,
+    verificarWebhook: verificarWebhookAsaas,
   };
 }
