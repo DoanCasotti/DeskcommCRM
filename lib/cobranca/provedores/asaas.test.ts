@@ -226,7 +226,6 @@ describe("clienteExiste", () => {
 });
 
 // Usados pelas tarefas seguintes (a Task 4 lê a fonte; a Task 6 usa ORG).
-void ORG;
 void lista;
 
 describe("datas civis do Asaas", () => {
@@ -490,5 +489,70 @@ describe("prepararWebhook e removerWebhooks", () => {
       "DELETE /webhooks/wh_1": { corpo: { deleted: true } },
     });
     expect(await adaptador.removerWebhooks(URL_DO_AVISO)).toBe(1);
+  });
+});
+
+describe("garantirCliente", () => {
+  const ORG_DADOS = { id: ORG, nome: "Clínica Exemplo Ltda", email: "financeiro@example.com", documento: "11.222.333/0001-81" };
+
+  it("⭐ cliente que já existe pela externalReference é reaproveitado, sem POST", async () => {
+    const { adaptador, chamadas } = montar({ "GET /customers": lista({ object: "customer", id: CLIENTE, deleted: false }) });
+    expect(await adaptador.garantirCliente(ORG_DADOS)).toBe(CLIENTE);
+    expect(chamadas.map((c) => c.rota)).toEqual(["GET /customers"]);
+    expect(chamadas[0]?.url.searchParams.get("externalReference")).toBe(ORG);
+  });
+
+  it("⭐ novo: POST com o documento só em caracteres, a org na externalReference e as notificações do Asaas desligadas", async () => {
+    const { adaptador, chamadas } = montar({
+      "GET /customers": lista(),
+      "POST /customers": { corpo: { object: "customer", id: "cus_novo" } },
+    });
+    expect(await adaptador.garantirCliente(ORG_DADOS)).toBe("cus_novo");
+    expect(chamadas[1]?.corpo).toEqual({
+      name: "Clínica Exemplo Ltda",
+      email: "financeiro@example.com",
+      cpfCnpj: "11222333000181",
+      externalReference: ORG,
+      // A régua do sistema avisa, com a marca da empresa; o Asaas avisaria em dobro, com a marca dele (Divergência 32).
+      notificationDisabled: true,
+    });
+  });
+
+  it("cliente removido na busca não conta: cria outro", async () => {
+    const { adaptador } = montar({
+      "GET /customers": lista({ object: "customer", id: "cus_velho", deleted: true }),
+      "POST /customers": { corpo: { id: "cus_novo" } },
+    });
+    expect(await adaptador.garantirCliente(ORG_DADOS)).toBe("cus_novo");
+  });
+
+  it("⭐ sem documento → documento_obrigatorio; dígito errado → documento_invalido; nenhum dos dois toca a rede", async () => {
+    const sem = montar({});
+    await expect(sem.adaptador.garantirCliente({ ...ORG_DADOS, documento: null })).rejects.toMatchObject({ codigo: "documento_obrigatorio", transitorio: false });
+    const errado = montar({});
+    await expect(errado.adaptador.garantirCliente({ ...ORG_DADOS, documento: "11222333000182" })).rejects.toMatchObject({ codigo: "documento_invalido" });
+    expect([...sem.chamadas, ...errado.chamadas]).toHaveLength(0);
+  });
+
+  it("org que não é uuid → org_invalida, sem tocar a rede (nunca ZodError)", async () => {
+    const { adaptador, chamadas } = montar({});
+    await expect(adaptador.garantirCliente({ ...ORG_DADOS, id: "abc" })).rejects.toMatchObject({ codigo: "org_invalida" });
+    expect(chamadas).toHaveLength(0);
+  });
+
+  it("⭐ POST /customers que levou 503 NÃO se repete; o 2º clique acha o cliente pela externalReference", async () => {
+    const primeiro = montar({ "GET /customers": lista(), "POST /customers": { status: 503 } });
+    await expect(primeiro.adaptador.garantirCliente(ORG_DADOS)).rejects.toMatchObject({ transitorio: true });
+    expect(primeiro.chamadas.filter((c) => c.rota === "POST /customers")).toHaveLength(1);
+    const segundo = montar({ "GET /customers": lista({ id: CLIENTE }) });
+    expect(await segundo.adaptador.garantirCliente(ORG_DADOS)).toBe(CLIENTE);
+  });
+
+  it("o documento nunca vai em URL nem em log", async () => {
+    const aviso = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const { adaptador, chamadas } = montar({ "GET /customers": [{ status: 503 }, lista()], "POST /customers": { corpo: { id: "c" } } });
+    await adaptador.garantirCliente(ORG_DADOS);
+    expect(chamadas.map((c) => c.url.toString()).join(" ")).not.toContain("11222333000181");
+    expect(aviso.mock.calls.flat().join(" ")).not.toContain("11222333000181");
   });
 });

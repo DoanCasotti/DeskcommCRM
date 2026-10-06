@@ -24,6 +24,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 
 import { z } from "zod";
 
+import { documentoDoPagador } from "@/lib/cobranca/documento";
 import { FUSO_PADRAO } from "@/lib/cobranca/fuso";
 import { logger } from "@/lib/logger";
 
@@ -94,6 +95,14 @@ function ler<T>(schema: z.ZodType<T>, dados: unknown): T {
 }
 
 const comId = z.object({ id: z.string().min(1), deleted: z.boolean().nullish() });
+const UUID = z.string().uuid();
+
+/** A org vem da sessão; mesmo assim, um id que não é uuid vira ErroDoProvedor, nunca ZodError. */
+function uuidDaOrg(id: string): string {
+  const lido = UUID.safeParse(id);
+  if (!lido.success) throw new ErroDoProvedor(null, "org_invalida", false);
+  return lido.data;
+}
 const listaDoAsaas = <T extends z.ZodType>(item: T) => z.object({ data: z.array(item) });
 
 const DATA_CIVIL = /^(\d{4})-(\d{2})-(\d{2})$/;
@@ -371,6 +380,33 @@ export function criarAdaptadorAsaas(dep: DependenciasDoAsaas) {
     };
   }
 
+  /**
+   * Busca pela `externalReference` (= org) antes de criar: o POST não tem chave
+   * de idempotência, e é a busca que cura o clique repetido e a resposta
+   * perdida. O documento vai só no corpo do POST. `notificationDisabled`: quem
+   * avisa o pagador é a régua do sistema, com a marca da empresa; os e-mails,
+   * SMS e WhatsApp do Asaas sairiam em dobro, com a marca dele, e alguns são cobrados.
+   */
+  async function garantirCliente(org: Parameters<AdaptadorDeCobranca["garantirCliente"]>[0]): Promise<string> {
+    const orgId = uuidDaOrg(org.id);
+    if (org.documento === null) throw new ErroDoProvedor(null, "documento_obrigatorio", false);
+    const documento = documentoDoPagador(org.documento);
+    if (documento === null) throw new ErroDoProvedor(null, "documento_invalido", false);
+    const consulta = new URLSearchParams({ externalReference: orgId, limit: "10" });
+    const achado = ler(listaDoAsaas(comId), await chamar("GET", `/customers?${consulta}`)).data.find((c) => c.deleted !== true);
+    if (achado) return achado.id;
+    return ler(
+      comId,
+      await chamar("POST", "/customers", {
+        name: org.nome,
+        email: org.email,
+        cpfCnpj: documento,
+        externalReference: orgId,
+        notificationDisabled: true,
+      }),
+    ).id;
+  }
+
   return {
     id: "asaas" as const,
     clienteExiste,
@@ -378,5 +414,6 @@ export function criarAdaptadorAsaas(dep: DependenciasDoAsaas) {
     verificarWebhook: verificarWebhookAsaas,
     prepararWebhook,
     removerWebhooks,
+    garantirCliente,
   };
 }
