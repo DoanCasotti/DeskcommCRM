@@ -3,6 +3,7 @@ import { randomBytes } from "node:crypto";
 import { z } from "zod";
 import { encryptWebhookSecret, decryptWebhookSecret } from "@/lib/webhooks/secrets";
 import { metadataInicialDoCanal } from "@/lib/ai/elegibilidade/pre-go-live";
+import { fecharAvisoDePausaDoCanalArquivado } from "@/lib/channels/central-de-pausa";
 import { resolverSaudeDaConexaoRemovida } from "@/lib/channels/health";
 import { logger } from "@/lib/logger";
 import { inboxSupported, SOCIAL_PROVIDER } from "./catalog";
@@ -457,6 +458,10 @@ export async function disconnectSocialAccount(
       erro: err instanceof Error ? err.message : String(err),
     });
   }
+  // A conta pode ter sido pausada em Conexões (o mesmo PATCH …/disabled): o aviso
+  // de pausa resolve aqui, ou ficaria pedindo para retomar um canal arquivado.
+  // Best-effort e nunca lança, como o fechador de saúde acima (issue #2389).
+  await fecharAvisoDePausaDoCanalArquivado(db, { id: channel.id, organization_id: org });
   return {
     channel_id: channel.id,
     account_removed: removeAccount && listed,

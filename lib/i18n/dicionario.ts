@@ -1533,6 +1533,10 @@ export const DICIONARIO: Traducoes = {
   },
   "Nome de exibição": { es: "Nombre para mostrar" },
   "Razão social": { es: "Razón social" },
+  // Os rótulos da EMPRESA vêm do perfil do país (#1946, item 4): estes dois são
+  // os de Portugal, e quem escolhe espanhol precisa deles traduzidos.
+  "Denominação social": { es: "Denominación social" },
+  "NIPC": { es: "NIPC" },
   "DPO email": { es: "Email del DPO" },
   "Retenção de mídia (dias)": { es: "Retención de archivos multimedia (días)" },
   "Limpeza automática de mídia antiga": { es: "Limpieza automática de multimedia antigua" },
@@ -4227,8 +4231,8 @@ export const DICIONARIO: Traducoes = {
   "Modelo mais econômico do mesmo provedor — esta tarefa é uma classificação curta e não precisa do modelo do agente. Escolha outro no painel se preferir.": {
     es: "Modelo más económico del mismo proveedor: esta tarea es una clasificación corta y no necesita el modelo del agente. Elige otro en el panel si lo prefieres.",
   },
-  "O modelo econômico não respondeu; a chamada se repetiu no modelo de antes e nada se perdeu.": {
-    es: "El modelo económico no respondió; la llamada se repitió con el modelo anterior y no se perdió nada.",
+  "O modelo econômico não respondeu; a chamada foi repetida no modelo de antes, e o resultado dessa repetição aparece numa linha própria.": {
+    es: "El modelo económico no respondió; la llamada se repitió con el modelo anterior, y el resultado de esa repetición aparece en una línea propia.",
   },
   "Usando o padrão da organização.": {
     es: "Usando el valor predeterminado de la organización.",
@@ -11387,6 +11391,8 @@ export const DICIONARIO: Traducoes = {
   "O arquivo não está mais guardado. Envie de novo.": { es: "El archivo ya no está guardado. Envíalo de nuevo." },
   "Esta chave de idempotência já foi usada com outro conteúdo.": { es: "Esta clave de idempotencia ya se usó con otro contenido." },
   "Um canal está em modo de teste — a IA não responde ninguém nele": { es: "Un canal está en modo de prueba — la IA no responde a nadie en él" },
+  "Um canal foi pausado — não recebe nem envia mensagens": { es: "Un canal fue pausado — no recibe ni envía mensajes" },
+  "Se este canal precisar voltar a operar, retome a pausa em Conexões — este aviso se resolve sozinho quando a pausa for desfeita.": { es: "Si este canal necesita volver a operar, reanuda la pausa en Conexiones — este aviso se resuelve solo cuando se deshace la pausa." },
   "A mesma requisição ainda está em curso. Tente de novo em instantes.": { es: "La misma solicitud todavía está en curso. Inténtalo de nuevo en unos instantes." },
   "Filtros inválidos.": { es: "Filtros inválidos." },
   "Header Idempotency-Key é obrigatório.": { es: "El header Idempotency-Key es obligatorio." },
@@ -14733,6 +14739,12 @@ export const DICIONARIO: Traducoes = {
   "Cada aplicação cria as tarefas do plano na ordem e não duplica — a marca da aplicação é a prova.": {
     es: "Cada aplicación crea las tareas del plan en orden y no duplica — la marca de la aplicación es la prueba.",
   },
+
+  // ─── Seletor de canal ao iniciar conversa nova (#2382) ───
+  "Escolha o canal para iniciar a conversa": { es: "Elija el canal para iniciar la conversación" },
+  "A conversa fica vinculada ao canal escolhido, e as próximas mensagens saem por ele.": { es: "La conversación queda vinculada al canal elegido, y los próximos mensajes salen por él." },
+  "Canais disponíveis": { es: "Canales disponibles" },
+  "Iniciar conversa": { es: "Iniciar conversación" },
 };
 
 /**

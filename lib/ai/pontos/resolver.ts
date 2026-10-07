@@ -89,8 +89,10 @@ export const EXPLICACAO_DA_ORIGEM: Record<OrigemDaEscolha, string> = {
     "Herdado de quem disparou a chamada — o agente publicado, ou o roteador de intenção.",
   economico_do_provedor:
     "Modelo mais econômico do mesmo provedor — esta tarefa é uma classificação curta e não precisa do modelo do agente. Escolha outro no painel se preferir.",
+  // Esta linha é gravada ANTES de a reserva rodar: o desfecho dela ainda não
+  // existe, e "nada se perdeu" seria falso quando a reserva também cai.
   economico_coberto_pela_reserva:
-    "O modelo econômico não respondeu; a chamada se repetiu no modelo de antes e nada se perdeu.",
+    "O modelo econômico não respondeu; a chamada foi repetida no modelo de antes, e o resultado dessa repetição aparece numa linha própria.",
   padrao_da_organizacao: "Usando o padrão da organização.",
   fixo_do_produto: "O produto resolve este ponto sozinho — não há modelo a escolher.",
   // Duas origens, uma por desfecho: a frase única ("se ele está em observação,
@@ -306,12 +308,17 @@ export interface ModeloDoCatalogoEconomico {
  * - Desempate determinístico: menor saída, depois o id em ordem DECRESCENTE —
  *   entre `gemini-2.0-flash` e `gemini-2.5-flash-lite` (mesmo preço), a versão
  *   mais nova.
+ * - `temPrecoNoMotor`: o catálogo ter preço não basta — quem COBRA é a tabela do
+ *   motor (`precoDoModelo`). Se o atual é cobrado e o candidato não, a troca faz
+ *   o custo sair null e a chamada some do teto. Vem de quem chama para este
+ *   módulo seguir puro; ausente = sem essa restrição.
  */
 export function escolherModeloEconomico(
   catalogo: readonly ModeloDoCatalogoEconomico[],
   provider: string,
   modeloAtual: string | null,
   habilitados: readonly string[] = [],
+  temPrecoNoMotor?: (modelId: string) => boolean,
 ): string | null {
   if (!PROVEDORES_COM_CATALOGO_CURADO.has(provider) || modeloAtual === null) return null;
   const doProvedor = catalogo.filter(
@@ -324,8 +331,10 @@ export function escolherModeloEconomico(
   );
   const atual = doProvedor.find((m) => m.model_id === modeloAtual);
   if (atual === undefined) return null;
+  const exigePrecoNoMotor = temPrecoNoMotor !== undefined && temPrecoNoMotor(modeloAtual);
   const candidatos = doProvedor
     .filter((m) => habilitados.length === 0 || habilitados.includes(m.model_id))
+    .filter((m) => !exigePrecoNoMotor || temPrecoNoMotor(m.model_id))
     .sort(
       (a, b) =>
         a.input_price_per_million_cents! - b.input_price_per_million_cents! ||
