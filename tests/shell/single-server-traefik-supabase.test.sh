@@ -341,6 +341,44 @@ check "update: termina bem em quem não tem o terceiro arquivo" atualizar_arvore
 check "update: quem não tinha o terceiro arquivo continua sem ele" \
   test ! -e "$WORK/upd-sem-ponte/.runtime/supabase/docker-compose.deskcomm-traefik.yml"
 
+echo "saída do setup.sh oficial do Supabase"
+# O setup.sh da ref imprime NOME=valor de cada segredo que gera (service_role,
+# JWT_SECRET, senha do Postgres…). Medido na vps-teste em 07/10: 23 chaves na
+# tela de quem roda o comando do guia. Dublês: o `curl` entrega um setup.sh
+# falso que imprime um passo e um segredo, e o `sha256sum` devolve o SHA fixo
+# do instalador (o que está sob prova é o destino da saída, não o checksum).
+mkdir -p "$WORK/bin-setup"
+cat > "$WORK/setup-falso.sh" <<'DUBLO'
+#!/bin/sh
+echo "===> Gerando segredos"
+echo "JWT_SECRET=segredo_que_nao_pode_aparecer"
+while [ $# -gt 0 ]; do [ "$1" = --project-dir ] && d="$2"; shift; done
+mkdir -p "$d"
+printf 'ANON_KEY=a\nSERVICE_ROLE_KEY=s\nPOSTGRES_PASSWORD=p\nAPI_GW_HTTP_PORT=8000\nDISABLE_SIGNUP=false\n' > "$d/.env"
+DUBLO
+cat > "$WORK/bin-setup/curl" <<DUBLO
+#!/usr/bin/env bash
+while [ \$# -gt 0 ]; do [ "\$1" = -o ] && cp "$WORK/setup-falso.sh" "\$2"; shift; done
+DUBLO
+sha_fixo="$(sed -n 's/^readonly SUPABASE_SETUP_SHA256="\(.*\)"$/\1/p' "$KIT/install-single-server.sh")"
+printf '#!/usr/bin/env bash\necho "%s  -"\n' "$sha_fixo" > "$WORK/bin-setup/sha256sum"
+chmod +x "$WORK/bin-setup/curl" "$WORK/bin-setup/sha256sum"
+
+SETUP="$WORK/setup";  montar_arvore "$SETUP"; rm -f "$SETUP/.runtime/supabase/.env"
+LOG_SETUP="$SETUP/.runtime/supabase-setup.log"
+check "setup: instalador roda até o fim com o setup.sh baixado" \
+  rodar_instalador "$SETUP" PATH="$WORK/bin-setup:$WORK/bin:$PATH"
+check "setup: o passo do setup.sh aparece na tela" grep -qF '===> Gerando segredos' "$WORK/saida.log"
+check "setup: o segredo gerado NÃO aparece na tela" falha grep -qF 'segredo_que_nao_pode_aparecer' "$WORK/saida.log"
+check "setup: a saída inteira fica num arquivo" grep -qF 'segredo_que_nao_pode_aparecer' "$LOG_SETUP"
+check "setup: esse arquivo só o dono lê (600)" igual "$(stat -c %a "$LOG_SETUP" 2>/dev/null || stat -f %Lp "$LOG_SETUP")" 600
+# O filtro da tela não pode engolir a falha do setup.sh (pipefail).
+printf 'exit 7\n' >> "$WORK/setup-falso.sh"
+QUEBRA="$WORK/setup-quebra"; montar_arvore "$QUEBRA"; rm -f "$QUEBRA/.runtime/supabase/.env"
+check "setup: setup.sh que falha interrompe a instalação" \
+  falha rodar_instalador "$QUEBRA" PATH="$WORK/bin-setup:$WORK/bin:$PATH"
+check "setup: e a falha diz onde está a saída completa" grep -qF 'supabase-setup.log' "$WORK/saida.log"
+
 if [[ "$FAILS" -ne 0 ]]; then
   printf '\n%d teste(s) falharam.\n' "$FAILS"
   printf -- '--- saída do instalador (últimas 20 linhas) ---\n'

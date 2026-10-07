@@ -113,7 +113,14 @@ if [[ ! -f "$SUPABASE_DIR/.env" ]]; then
   curl -fsSL --max-time 30 "$SUPABASE_SETUP_URL" -o "$setup_tmp"
   checksum="$(sha256sum "$setup_tmp" | awk '{print $1}')"
   [[ "$checksum" == "$SUPABASE_SETUP_SHA256" ]] || die "O instalador oficial do Supabase nao passou na verificacao SHA-256."
-  (cd "$ROOT_DIR" && sh "$setup_tmp" -y --skip-deps --ref "$SUPABASE_REF" --project-dir ".runtime/supabase")
+  # O setup.sh oficial imprime NOME=valor de cada segredo que gera (service_role,
+  # JWT_SECRET, senha do Postgres): a saída inteira vai para um arquivo que só o
+  # root lê, e a tela recebe só os passos (`===>`), ao vivo.
+  setup_log="$RUNTIME_DIR/supabase-setup.log"
+  (umask 077 && : > "$setup_log")
+  (cd "$ROOT_DIR" && sh "$setup_tmp" -y --skip-deps --ref "$SUPABASE_REF" --project-dir ".runtime/supabase") 2>&1 \
+    | tee "$setup_log" | { grep --line-buffered '^===>' || true; } \
+    || die "O instalador oficial do Supabase falhou. A saída completa está em $setup_log (contém as chaves geradas; não compartilhe)."
   rm -f "$setup_tmp"
   trap - EXIT
 fi
