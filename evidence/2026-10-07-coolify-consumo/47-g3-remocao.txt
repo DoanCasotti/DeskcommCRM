@@ -27,3 +27,13 @@ http 404
 1
 2
 0
+== legenda (acrescentada em 2026-10-07 ~19:10Z, antes da primeira publicacao; reconstruida dos comandos que gravaram este arquivo, lidos na transcricao da Fase G)
+linha 1: hora (UTC); linha 2: terceiros_antes = conteineres que nao sao coolify*/deskcommcrm-*;
+linha 3 (2): linhas "deskcomm" no crontab do root ANTES da remocao;
+linhas 4-8 (0 0 0 0 0), depois da remocao: conteineres deskcommcrm*, volumes deskcommcrm*, redes deskcommcrm*, linhas deskcomm no crontab, 127.0.0.1:8001 escutando;
+linha 9 (coolify): a rede do proxy existe; "de-fora 503": codigo HTTP do dominio visto de fora;
+depois: hora, terceiros_depois, nomes dos conteineres vivos, "ls -a /root/pr4" (8 linhas) e o crontab (vazio);
+"https-corpo ...": primeiros 80 bytes do corpo https; "http 404": codigo no http;
+ultimas 4 linhas: 0 = cabecalhos x-request-id na resposta https; 1 = linhas "catchall" em /data/coolify/proxy/dynamic/default_redirect_503.yaml;
+2 = linhas de /root/medicao/crontab.antes; 0 = linhas de crontab.antes SEM "deskcomm".
+49-g5-remocao.txt: linhas 3-7 (0 0 0 0 0) na mesma ordem das linhas 4-8 acima, linha 8 = coolify.
