@@ -352,6 +352,7 @@ cat > "$WORK/setup-falso.sh" <<'DUBLO'
 #!/bin/sh
 echo "===> Gerando segredos"
 echo "JWT_SECRET=segredo_que_nao_pode_aparecer"
+umask > "${UMASK_DO_SETUP:-/dev/null}"
 while [ $# -gt 0 ]; do [ "$1" = --project-dir ] && d="$2"; shift; done
 mkdir -p "$d"
 printf 'ANON_KEY=a\nSERVICE_ROLE_KEY=s\nPOSTGRES_PASSWORD=p\nAPI_GW_HTTP_PORT=8000\nDISABLE_SIGNUP=false\n' > "$d/.env"
@@ -372,6 +373,16 @@ check "setup: o passo do setup.sh aparece na tela" grep -qF '===> Gerando segred
 check "setup: o segredo gerado NÃO aparece na tela" falha grep -qF 'segredo_que_nao_pode_aparecer' "$WORK/saida.log"
 check "setup: a saída inteira fica num arquivo" grep -qF 'segredo_que_nao_pode_aparecer' "$LOG_SETUP"
 check "setup: esse arquivo só o dono lê (600)" igual "$(stat -c %a "$LOG_SETUP" 2>/dev/null || stat -f %Lp "$LOG_SETUP")" 600
+# O setup.sh grava os init-scripts do Postgres em volumes/db/. Com o umask 077
+# herdado do terminal (o guia ensina o backup com umask 077), eles nascem 600 de
+# root e o Postgres do contêiner não os lê: o Supabase não sobe, sem mensagem
+# que aponte a causa (medido na vps-teste em 07/10, rodada r1a do PR 4).
+UMASK_ARV="$WORK/setup-umask"; montar_arvore "$UMASK_ARV"; rm -f "$UMASK_ARV/.runtime/supabase/.env"
+rodar_em_077() ( umask 077; rodar_instalador "$@" )  # subshell: o 077 não vaza para os outros casos
+check "setup: roda com umask 022 mesmo de um terminal em 077" \
+  rodar_em_077 "$UMASK_ARV" PATH="$WORK/bin-setup:$WORK/bin:$PATH" UMASK_DO_SETUP="$WORK/umask-do-setup"
+check "setup: o umask visto pelo setup.sh foi 0022" igual "$(cat "$WORK/umask-do-setup" 2>/dev/null)" 0022
+
 # O filtro da tela não pode engolir a falha do setup.sh (pipefail).
 printf 'exit 7\n' >> "$WORK/setup-falso.sh"
 QUEBRA="$WORK/setup-quebra"; montar_arvore "$QUEBRA"; rm -f "$QUEBRA/.runtime/supabase/.env"

@@ -118,7 +118,11 @@ if [[ ! -f "$SUPABASE_DIR/.env" ]]; then
   # root lê, e a tela recebe só os passos (`===>`), ao vivo.
   setup_log="$RUNTIME_DIR/supabase-setup.log"
   (umask 077 && : > "$setup_log")
-  (cd "$ROOT_DIR" && sh "$setup_tmp" -y --skip-deps --ref "$SUPABASE_REF" --project-dir ".runtime/supabase") 2>&1 \
+  # umask 022 FIXO: o setup.sh grava os init-scripts do Postgres em volumes/db/, e
+  # com o 077 de quem acabou de fazer um backup eles nasceriam 600 de root — o
+  # Postgres do contêiner não os lê e o Supabase não sobe, sem mensagem que aponte
+  # a causa. Quem protege os segredos é o .runtime 700, criado acima.
+  (umask 022 && cd "$ROOT_DIR" && sh "$setup_tmp" -y --skip-deps --ref "$SUPABASE_REF" --project-dir ".runtime/supabase") 2>&1 \
     | tee "$setup_log" | { grep --line-buffered '^===>' || true; } \
     || die "O instalador oficial do Supabase falhou. A saída completa está em $setup_log (contém as chaves geradas; não compartilhe)."
   rm -f "$setup_tmp"
