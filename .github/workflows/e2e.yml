@@ -1224,6 +1224,7 @@ jobs:
       SPECS_PARTE_6: >-
         agenda-google-meet.spec.ts
         agenda-presenca-recuperacao.spec.ts
+        celular-cabe-na-tela.spec.ts
         cobranca-desligada.spec.ts
         cobranca-suspensao-e-limites.spec.ts
         filtro-por-marcador-pela-tela.spec.ts

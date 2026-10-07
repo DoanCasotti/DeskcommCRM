@@ -1,5 +1,6 @@
 import type { EventHandler, EventRow, HandlerResult } from "@/lib/event-log/dispatcher";
 import { marcaDaSaida } from "@/lib/branding/saida";
+import { canalDoEventoDesativado } from "@/lib/channels/desativado";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { montarPayloadDeInbound, truncar } from "./push_payload";
 import { enviarPushAoUsuario, enviarPushDaOrg } from "./web_push";
@@ -11,6 +12,13 @@ import { rotuloDoContato, SEM_NOME } from "@/lib/contacts/rotulo-do-contato";
 export const WEB_PUSH_INBOUND_KEY = "web-push-inbound.v1";
 
 async function handleInbound(row: EventRow): Promise<HandlerResult> {
+  // Canal DESATIVADO (#2329): a lei do #2318 vale nos dois sentidos — o canal
+  // desligado não acorda a IA e também não enche o bolso de quem está de
+  // plantão com uma conversa que a inbox nem mostra. Mesma ida de
+  // `channel_session_id` que o payload do `fn_emit_message_event` já traz.
+  if (await canalDoEventoDesativado(createAdminClient(), row.organization_id, row.payload)) {
+    return { consumer_key: WEB_PUSH_INBOUND_KEY, status: "skipped", detail: "canal_desativado" };
+  }
   const conversationId =
     (typeof row.payload.conversation_id === "string" ? row.payload.conversation_id : null) ?? null;
   const previewRaw = row.payload.body_preview;
@@ -82,6 +90,11 @@ async function handleInbound(row: EventRow): Promise<HandlerResult> {
  * está falando. Título fixo, igual em toda organização.
  */
 async function handleGroupInbound(row: EventRow): Promise<HandlerResult> {
+  // Canal DESATIVADO (#2329): a mesma régua de `handleInbound` — a inbox
+  // esconde o grupo do canal pausado também, e o payload é o mesmo.
+  if (await canalDoEventoDesativado(createAdminClient(), row.organization_id, row.payload)) {
+    return { consumer_key: WEB_PUSH_INBOUND_KEY, status: "skipped", detail: "canal_desativado" };
+  }
   const conversationId =
     (typeof row.payload.conversation_id === "string" ? row.payload.conversation_id : null) ?? null;
   const previewRaw = row.payload.body_preview;

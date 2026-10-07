@@ -38,6 +38,8 @@ import { comandoDaConversa, ROTULO_DO_MOTIVO } from "@/lib/inbox/comando-da-conv
 import { ReassignDialog } from "@/components/inbox/ReassignDialog";
 import { SnoozeButton } from "@/components/inbox/SnoozeButton";
 import { DialButton } from "@/components/voice/DialButton";
+import { VideoCallButton } from "@/components/inbox/VideoCallButton";
+import { motivoDoContato } from "@/lib/inbox/motivo-do-envio-bloqueado";
 import type { ConversationWithContact } from "@/hooks/inbox/useConversationsRealtime";
 import { rotuloDoContato } from "@/lib/contacts/rotulo-do-contato";
 import { phoneForDisplay } from "@/lib/channels/phone-variants";
@@ -273,6 +275,25 @@ export function ConversationHeader({
         {!conversation.is_group && c?.id && (
           <DialButton contactId={c.id} hasPhone={!!c.phone_number} />
         )}
+        {/* Videochamada (#2440): sem JITSI_SERVER_URL este botão não renderiza,
+            então ele não ocupa lugar nem na instalação que não oferece a feature.
+            A sala é aleatória por chamada (#2441) — não depende de telefone,
+            só do link ir pelo chat.
+
+            `provider`/`lastInboundAt`, `bloqueio` e `encerrada` vêm para o
+            botão seguir a MESMA régua do composer: janela de 24h (a rota não
+            barra quem envia da tela — vira 131047 silencioso, #1614), a trava
+            de contato e a de conversa encerrada. Os textos saem da mesma função
+            do composer (lib/inbox/motivo-do-envio-bloqueado.ts); encerrada só
+            desabilita, sem texto, como o composer faz. `supportReadonly` fica
+            de fora: ele mora no `user`, que este componente não recebe. */}
+        <VideoCallButton
+          conversationId={conversation.id}
+          provider={conversation.channel_sessions?.provider ?? null}
+          lastInboundAt={conversation.last_inbound_at}
+          bloqueio={motivoDoContato(c, t)}
+          encerrada={status === "closed"}
+        />
         {isOpen && (
           <Button
             size="sm"

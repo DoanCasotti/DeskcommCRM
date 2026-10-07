@@ -3,7 +3,8 @@
  *
  * Verifies that the LGPD SLA calculator correctly skips:
  *  - Weekends (Saturday + Sunday)
- *  - Brazilian national holidays (fixed and moveable 2026-2030)
+ *  - Brazilian national holidays (fixed and moveable, calculated 2000-2100;
+ *    20/11 from 2024 on — Lei 14.759/2023)
  */
 
 import { describe, it, expect } from "vitest";
@@ -11,6 +12,7 @@ import { computeDueAt } from "@/lib/lgpd/sla";
 import {
   HOLIDAYS_BR_ISO,
   PRIMEIRO_ANO_COBERTO,
+  PRIMEIRO_ANO_DA_CONSCIENCIA_NEGRA,
   ULTIMO_ANO_COBERTO,
   feriadosDoBrasilDoAno,
 } from "@/lib/lgpd/holidays-br";
@@ -134,9 +136,10 @@ describe("computeDueAt — business day SLA calculator", () => {
   // Sanity check on the holiday list
   // -------------------------------------------------------------------------
 
-  it("HOLIDAYS_BR_ISO cobre 12 feriados por ano, com os fixos presentes (#2413)", () => {
-    const anosCobertos = ULTIMO_ANO_COBERTO - PRIMEIRO_ANO_COBERTO + 1;
-    expect(HOLIDAYS_BR_ISO).toHaveLength(12 * anosCobertos);
+  it("HOLIDAYS_BR_ISO cobre 12 feriados por ano até 2023 e 13 de 2024 em diante (#2413, #2421)", () => {
+    const anosDe12 = PRIMEIRO_ANO_DA_CONSCIENCIA_NEGRA - PRIMEIRO_ANO_COBERTO;
+    const anosDe13 = ULTIMO_ANO_COBERTO - PRIMEIRO_ANO_DA_CONSCIENCIA_NEGRA + 1;
+    expect(HOLIDAYS_BR_ISO).toHaveLength(12 * anosDe12 + 13 * anosDe13);
     // Amostra dos fixos: a data exata de cada um não muda com o ano.
     for (const data of ["2026-01-01", "2026-04-21", "2026-09-07", "2026-12-25"]) {
       expect(HOLIDAYS_BR_ISO).toContain(data);
@@ -155,7 +158,7 @@ describe("computeDueAt — business day SLA calculator", () => {
     ];
     for (const [ano, segunda, terca, sextaSanta, corpoDeDeus] of conhecidos) {
       const feriados = feriadosDoBrasilDoAno(ano);
-      expect(feriados).toHaveLength(12);
+      expect(feriados).toHaveLength(13); // os 12 da lista à mão + o 20/11 (#2421)
       expect(feriados).toContain(segunda);
       expect(feriados).toContain(terca);
       expect(feriados).toContain(sextaSanta);
@@ -172,7 +175,32 @@ describe("computeDueAt — business day SLA calculator", () => {
     const alvo = new Date().getFullYear() + 2;
     expect(ULTIMO_ANO_COBERTO).toBeGreaterThanOrEqual(alvo);
     expect(HOLIDAYS_BR_ISO).toContain(`${alvo}-12-25`);
-    expect(feriadosDoBrasilDoAno(alvo)).toHaveLength(12);
+    expect(feriadosDoBrasilDoAno(alvo)).toHaveLength(13);
+  });
+
+  // -------------------------------------------------------------------------
+  // 20 de novembro — doc 108, A (Lei 14.759/2023): feriado nacional desde 2024
+  // -------------------------------------------------------------------------
+
+  it("o 20/11 é feriado de 2024 em diante, e não antes (#2421)", () => {
+    expect(PRIMEIRO_ANO_DA_CONSCIENCIA_NEGRA).toBe(2024);
+    expect(HOLIDAYS_BR_ISO).not.toContain("2023-11-20");
+    expect(feriadosDoBrasilDoAno(2023)).toHaveLength(12);
+    for (const ano of [2024, 2026, 2030, 2100]) {
+      expect(HOLIDAYS_BR_ISO).toContain(`${ano}-11-20`);
+    }
+  });
+
+  it("o D+7 que atravessa o 20/11/2026 (sexta) vence um dia depois (#2421)", () => {
+    // Aberto seg 16/11: ter17(1) qua18(2) qui19(3) [sex20 feriado] seg23(4)
+    // ter24(5) qua25(6) qui26(7). Sem o 20/11, vencia na quarta 25.
+    expect(fmt(computeDueAt(d("2026-11-16"), 7))).toBe("2026-11-26");
+  });
+
+  it("o D+7 que atravessa o 20/11/2023 NÃO muda — a lei é de dezembro de 2023 (#2421)", () => {
+    // Aberto qui 16/11/2023: sex17(1) seg20(2, ainda dia útil) ter21(3) qua22(4)
+    // qui23(5) sex24(6) seg27(7). Contar o 20/11 aqui daria 28/11.
+    expect(fmt(computeDueAt(d("2023-11-16"), 7))).toBe("2023-11-27");
   });
 
   it("três anos depois de 2030, ancorados na Páscoa da tabela do Census (#2413)", () => {

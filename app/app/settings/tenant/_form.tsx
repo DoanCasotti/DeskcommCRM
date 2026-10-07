@@ -197,11 +197,11 @@ export function TenantForm({ initial }: Props) {
               </Label>
               <p className="text-xs text-muted-foreground">
                 {form.media_retention_enforced
-                  ? t("Ligado: apaga a mídia com mais de {n} dias.").replace(
+                  ? t("Ligado: apaga a mídia e o anexo de nota interna com mais de {n} dias.").replace(
                       "{n}",
                       String(form.media_retention_days),
                     )
-                  : t("Desligado: a mídia das conversas não é apagada por idade.")}
+                  : t("Desligado: a mídia das conversas e os anexos de nota interna não são apagados por idade.")}
               </p>
             </div>
             <Switch
@@ -209,7 +209,7 @@ export function TenantForm({ initial }: Props) {
               checked={form.media_retention_enforced}
               onCheckedChange={(v) => {
                 if (v && !form.media_retention_enforced) {
-                  if (window.confirm(t("Ao ligar, a mídia de mensagem com mais de {n} dias começará a ser apagada.").replace("{n}", String(form.media_retention_days)))) {
+                  if (window.confirm(t("Ao ligar, a mídia de mensagem e o anexo de nota interna com mais de {n} dias começarão a ser apagados.").replace("{n}", String(form.media_retention_days)))) {
                     set("media_retention_enforced", true);
                   }
                 } else {

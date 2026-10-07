@@ -6,7 +6,7 @@ import { comoUsuario, criarOrg, criarPlano, criarUsuarios, erroDe, numero, torna
 /**
  * A EMPRESA COM ASSINATURA VIVA NO PROVEDOR NÃO SAI DO BANCO — pendência do
  * recorte do #1967 (exclusão de empresa pelo admin da plataforma), migration
- * 0570, seção G.
+ * 0584, seção G.
  *
  * Apagar a organização leva `cobranca_assinaturas` em cascata, e o provedor
  * continuaria cobrando o cliente final sem ninguém do lado de cá para cancelar.
@@ -38,7 +38,7 @@ const apagar = (org: string) => erroDe(`delete from public.organizations where i
 const existe = (org: string) => numero(`select count(*) from public.organizations where id = '${org}';`);
 
 beforeAll(() => {
-  criarUsuarios([[ATOR, "ator-exc-0570@invariant.test"]]);
+  criarUsuarios([[ATOR, "ator-exc-0584@invariant.test"]]);
   tornarPlatformAdmin(ATOR, "full", ATOR);
   criarPlano({ id: PLANO, nome: "Exclusão" });
   [VIVA, DUAS_VIVAS, CANCELA_NO_FIM, SEM_PROVEDOR, NADA_VIVO, PELA_FUNCAO, PELA_SESSAO].forEach((org, i) => criarOrg(org, `cob-exc-${i + 1}`));

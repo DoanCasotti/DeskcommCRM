@@ -9902,6 +9902,7 @@ export type Database = {
       }
       webhook_sources: {
         Row: {
+          authorize_ai_on_capture: boolean
           created_at: string
           created_by_user_id: string | null
           default_pipeline_id: string
@@ -9921,6 +9922,7 @@ export type Database = {
           updated_at: string
         }
         Insert: {
+          authorize_ai_on_capture?: boolean
           created_at?: string
           created_by_user_id?: string | null
           default_pipeline_id: string
@@ -9940,6 +9942,7 @@ export type Database = {
           updated_at?: string
         }
         Update: {
+          authorize_ai_on_capture?: boolean
           created_at?: string
           created_by_user_id?: string | null
           default_pipeline_id?: string
@@ -10275,6 +10278,12 @@ export type Database = {
       }
     }
     Functions: {
+      fn_authorize_ai_form_capture: {
+        Args: { p_organization_id: string; p_source_id: string; p_lead_id: string; p_contact_id: string; p_request_id: string; p_ttl_ms: number }
+        Returns: boolean
+      }
+
+
       fn_channel_routing_claim: {
         Args: {
           p_channel: string

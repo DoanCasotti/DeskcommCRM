@@ -6,7 +6,7 @@ import {
 } from "./cobranca-helpers";
 
 /**
- * TESTE GRÁTIS NA CRIAÇÃO — invariante 7 da spec (§2.6, §7b), migration 0567.
+ * TESTE GRÁTIS NA CRIAÇÃO — invariante 7 da spec (§2.6, §7b), migration 0583.
  * A org que nasce pelo cadastro ganha `trial` com os dias do plano do cadastro
  * quando: a chave está ligada, existe plano do cadastro vigente, a org tem autor
  * e o autor não é platform admin ativo. O tenant criado pelo dono recebe o plano

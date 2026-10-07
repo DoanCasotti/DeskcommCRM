@@ -56,6 +56,7 @@ import { sendFinalResponse } from "./finalize";
 import { finalizeHandoff } from "./handoff";
 import { loadHistoryWithBudget } from "./history";
 import { mintEphemeralToken, revokeEphemeralToken } from "./mcp_token";
+import { carregarServidorMcpExternoDoTurno } from "@/lib/mcp/servidor-externo/carregar";
 import { pickToolsFromMcp, type RuntimeHandoffSignal } from "./tools";
 import { modulosLigados } from "@/lib/instalacao/modulos";
 import { capacidadesDaOrganizacao } from "@/lib/organizacao/capacidades";
@@ -612,6 +613,17 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       supabase: admin,
     };
     const handoffSignal: RuntimeHandoffSignal = { triggered: false };
+    // #2147 — servidor MCP externo que o dono da instalação registrou. `null`
+    // SEM REDE quando a versão não escolheu nenhuma remota (item 7) ou o TURNO
+    // TEM CONTATO (item 8, escolha (b)): sem o identificador do contato na
+    // chamada ao servidor remoto, a leitura de lá poderia devolver dado de
+    // outro cliente. `null` também sem registro ou com o servidor calado.
+    const servidorExterno = await carregarServidorMcpExternoDoTurno(
+      admin,
+      run.organization_id,
+      version.tool_ids ?? [],
+      { ...(contatoDoTurno ? { contatoDoTurno } : {}) },
+    );
     const tools = pickToolsFromMcp({
       supabase: admin,
       ctx,
@@ -624,6 +636,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       modulosLigados: await modulosLigados(admin),
       capacidadesLigadas: await capacidadesDaOrganizacao(admin, run.organization_id),
       handoffSignal,
+      ...(servidorExterno ? { servidorMcpExterno: servidorExterno } : {}),
       ...(contatoDoTurno ? { contatoDoTurno } : {}),
     });
 

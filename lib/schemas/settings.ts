@@ -255,6 +255,15 @@ export const pipelineConfigPatchSchema = z.object({
   /** Obrigatóriedade do motivo de ganho, opt-in por funil (padrão: não exigir). */
   won_reason_required: z.boolean().optional(),
   /**
+   * A comanda do ganho, opt-in por funil (CR do PR #2220, #1477). Ausente ou
+   * `false` é DESLIGADO — o padrão que a doutrina de extensões exige ("se
+   * nenhuma organização ativar isto, a operação comum continua inteira?"): em
+   * loja com checkout, infoproduto ou imobiliária o valor do negócio não é
+   * conta a receber. Quem lê é o consumidor de `lead.won`
+   * (`lib/financeiro/comanda-do-ganho.handler.ts`), não esta tela.
+   */
+  comanda_no_ganho: z.boolean().optional(),
+  /**
    * O que acontece quando um negócio ENCERRADO volta (issue #1538). Ausente é
    * `mesmo_registro`, o comportamento de antes: reabre o mesmo negócio. Com
    * `novo_negocio`, mover o encerrado para etapa aberta é recusado e a saída é

@@ -4,7 +4,7 @@ import { columnExists, sql } from "./gov-helpers";
 import { assinar, comoServidor, criarOrg, criarPlano, erroDe, numero, uuid, valor } from "./cobranca-helpers";
 
 /**
- * AS DUAS TABELAS DA COBRANÇA: forma, vocabulário e o que sai (migration 0567;
+ * AS DUAS TABELAS DA COBRANÇA: forma, vocabulário e o que sai (migration 0583;
  * spec cobrança do revendedor §2.1-§2.3). Nascem VAZIAS em toda instalação
  * (D-1), por isso a forma é provada no baseline que o kit aplica. O isolamento
  * entre organizações é o irmão cobranca-isolamento.test.ts.

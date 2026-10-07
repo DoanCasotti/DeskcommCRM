@@ -267,6 +267,25 @@ const DO_SERVIDOR: RecursoOpcional[] = [
     ler: peloServidor("voz_whatsapp"),
   },
   {
+    // Entra aqui pelo review do #2441: a feature passa a ser visível ao dono
+    // do servidor do mesmo jeito que a voz — `JITSI_SERVER_URL` no `.env`,
+    // liga ou não, sem rebuild. A linha existe mesmo o teste não cobrando
+    // recurso que vive só em env: quem chega nesta tela é justamente para
+    // saber o que está ligado, e a videochamada não pode ser a uma que só
+    // aparece quando alguém lembra do `.env`.
+    id: "videochamada_jitsi",
+    nome: "Videochamada (Jitsi Meet)",
+    oQueFaz:
+      "Abrir sala de vídeo no header da conversa: o contato entra pelo link no chat, sem instalar nada.",
+    nivel: "servidor",
+    padrao: "desligado",
+    quemDecide: "dono_do_servidor",
+    href: null,
+    comoLigar:
+      "No arquivo de ambiente, JITSI_SERVER_URL apontando para a origem da sala (ex.: https://meet.jit.si). Vazio = o botão Vídeo não aparece.",
+    ler: peloServidor("videochamada_jitsi"),
+  },
+  {
     id: "telefonia_sip",
     nome: "Telefonia por SIP",
     oQueFaz: "Atender e ligar por telefone de verdade, com agente de voz.",

@@ -1,6 +1,6 @@
 /**
  * O VOCABULÁRIO DA COBRANÇA DO REVENDEDOR: o lado TypeScript dos CHECKs de
- * `cobranca_planos` e `cobranca_assinaturas` (migration 0567; spec §2.2, §2.3,
+ * `cobranca_planos` e `cobranca_assinaturas` (migration 0583; spec §2.2, §2.3,
  * §2.7). Cada tupla é par de uma coluna, vigiado por
  * tests/invariants/vocabulario-banco-x-typescript.test.ts: valor novo entra no
  * CHECK (migration + apêndice do baseline) e aqui, no MESMO commit.

@@ -5,7 +5,7 @@ import { assinar, comoAnon, comoServidor, comoUsuario, criarOrg, criarPlano, err
 
 /**
  * QUEM A RECONCILIAÇÃO RELÊ — invariante 10 da spec da cobrança do revendedor
- * (§8, §12), migration 0570.
+ * (§8, §12), migration 0584.
  *
  * `fn_cobranca_reconciliaveis()` é o predicado ÚNICO: o cron da cobrança relê
  * as linhas com `precisa_reler` (ordem `relida_em nulls first`, 50 por rodada),

@@ -233,6 +233,12 @@ const MARCA_CONGELADA: Record<string, EntradaDeMarca> = {
       "nome do servidor MCP, que o cliente (Claude Desktop e afins) grava na própria configuração. Renomear derruba as conexões já configuradas de quem usa",
     marcas: ["deskcomm-crm"],
   },
+  "lib/mcp/servidor-externo/chamada.ts": {
+    categoria: "PROTOCOLO",
+    motivo:
+      "clientInfo do handshake `initialize` do MCP que este cliente manda ao servidor REMOTO: ele registra quem conectou e é comum haver regra de acesso por identificação do cliente lá do lado. Não é texto de interface — a tela nunca mostra — e renomear muda a identidade reportada no fio do protocolo",
+    marcas: ["deskcomm-crm"],
+  },
   "lib/supabase/admin.ts": {
     categoria: "PROTOCOLO",
     motivo:
@@ -329,6 +335,11 @@ const MARCA_CONGELADA: Record<string, EntradaDeMarca> = {
       "é a DEFINIÇÃO de DEFAULT_APP_NAME — o valor que aparece quando o operador não configurou marca nenhuma. Se esta linha sumir, some o padrão",
     marcas: ["deskcommcrm"],
   },
+  // `lib/video/jitsi.ts` ficou DE FORA por decisão do review do #2441: ele
+  // prefixa a sala do Jitsi com `sala-`, neutro. O link é repassado no chat e
+  // cai na tela do cliente final de quem revende a instalação — a sala não é
+  // lugar de marca. Com o prefixo neutro o arquivo não tem marca nenhuma, e
+  // lista só encolhe.
 };
 
 /**
@@ -1004,6 +1015,11 @@ const HOSTS_DECLARADOS: Record<string, EntradaDeHost> = {
     motivo:
       "placeholder do campo de base URL de gateway OpenAI-compatible na tela de provedores: amostra do formato aceito.",
   },
+  "meet.jit.si": {
+    categoria: "AMOSTRA",
+    motivo:
+      "a origem citada como EXEMPLO da URL da videochamada — na mensagem de erro do Zod de lib/env.ts (JITSI_SERVER_URL fora de http(s) desliga a feature), no comoLigar do catálogo de recursos opcionais e na tradução espanhola do mesmo texto. Não é destino de chamada: o produto nunca fala com `meet.jit.si`; quem chega lá é o operador e o contato, na aba que o link abre, pelo navegador deles — e o valor real é o do `.env` de cada instalação (em runtime, não queimado no build). Fica AMOSTRA porque chega à TELA, que é a razão de a régua exigir declaração em vez de silêncio.",
+  },
   "000000000000-xxxxxxxx.apps.googleusercontent.com": {
     categoria: "AMOSTRA",
     motivo:
@@ -1185,6 +1201,12 @@ describe("catraca de host de terceiro no código que embarca", () => {
       // abre é o celular do atendente. Crescimento escrito, como a regra pede.
       "maps.google.com",
       "meet.google.com",
+      // Decisão escrita, #2441: a origem do Jitsi aparece como EXEMPLO na
+      // mensagem do Zod de `JITSI_SERVER_URL`, no `comoLigar` do catálogo de
+      // recursos opcionais e na tradução do mesmo texto. O produto não fala
+      // com esse host (o valor real vem do `.env` em runtime); quem chega lá
+      // é quem abre o link. Crescimento escrito, como a regra pede.
+      "meet.jit.si",
       "meusistema.com",
       "mi-gateway.ejemplo.com",
       "partners.tiendanube.com",

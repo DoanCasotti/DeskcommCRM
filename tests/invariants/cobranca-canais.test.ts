@@ -9,7 +9,7 @@ import {
 } from "./cobranca-helpers";
 
 /**
- * O TETO DE NÚMEROS CONECTADOS — invariante 6 da spec (§5, §12), migration 0567.
+ * O TETO DE NÚMEROS CONECTADOS — invariante 6 da spec (§5, §12), migration 0583.
  * Conta canal não arquivado que não seja `wacalls` (voz); desarquivar, trocar o
  * provider e trocar de org contam; regravar `archived_at = null` num canal que
  * JÁ está no ar não conta (é o que a reconexão faz); a trava consultiva é a

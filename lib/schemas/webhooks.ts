@@ -261,6 +261,18 @@ const acoesFixas = [
       prioridade: z.enum(["low", "medium", "high", "urgent"]),
     }),
   }),
+  // #1752 — a SEQUÊNCIA: aplicar um plano de tarefas (`task_plans[]` em
+  // `organizations.settings.task_plans`) ao negócio, criando as N tarefas de
+  // uma vez e na ordem. Idempotente pela marca `task_plan_applied`: repetir a
+  // regra não duplica tarefa. `plano_id` é o id do JSON, não uuid — as
+  // tabelas da proposta (`task_plans` + `task_plan_steps`) ficam para a
+  // migration que esta entrega não traz.
+  z.object({
+    type: z.literal("apply_task_plan"),
+    config: z.object({
+      plano_id: z.string().trim().min(1).max(64),
+    }),
+  }),
 ] as const;
 
 /**
@@ -343,6 +355,7 @@ export const createWebhookSourceSchema = z.object({
 });
 export const updateWebhookSourceSchema = createWebhookSourceSchema.partial().extend({
   is_active: z.boolean().optional(),
+  authorize_ai_on_capture: z.boolean().optional(),
 });
 
 export const createAutomationRuleSchema = z

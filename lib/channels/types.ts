@@ -167,8 +167,10 @@ export interface OutboundEnvelope extends ChannelTenantScope {
 }
 
 /**
- * Uma conversão (hoje, a venda) no vocabulário neutro que o canal traduz — ver
- * `ChannelAdapter.reportConversion`.
+ * Uma conversão no vocabulário neutro que o canal traduz — ver
+ * `ChannelAdapter.reportConversion`. A venda (`Purchase`) e os eventos de ETAPA
+ * da Meta que o canal sabe repassar (`InitiateCheckout`, `LeadSubmitted`,
+ * `AddToCart`), que saem sem valor.
  */
 export interface ChannelConversionInput extends ChannelTenantScope {
   sessionRef: string;
@@ -176,11 +178,12 @@ export interface ChannelConversionInput extends ChannelTenantScope {
   providerConversationId: string | null;
   /** Só dígitos (E.164 sem `+`). Reforço de casamento, nunca o único. */
   phone: string | null;
-  event: "Purchase";
+  event: "Purchase" | "InitiateCheckout" | "LeadSubmitted" | "AddToCart";
   /** Chave de deduplicação na plataforma: o mesmo id nunca conta duas vezes. */
   eventId: string;
   occurredAt: Date;
-  valueCents: number;
+  /** `null` no evento de etapa, que sai sem valor. */
+  valueCents: number | null;
   currency: string;
 }
 

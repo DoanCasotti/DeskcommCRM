@@ -5,7 +5,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import pg from "pg";
 
 /**
- * O AVISO DO TETO DO PLANO E O DO ORÇAMENTO DA ORG CONVIVEM (migration 0567, seção G).
+ * O AVISO DO TETO DO PLANO E O DO ORÇAMENTO DA ORG CONVIVEM (migration 0583, seção G).
  *
  * Os dois abrem `budget_exceeded`: o do orçamento com `ref_kind = 'ai_budget'`
  * (ou nulo, nas linhas antigas), o do plano com `ref_kind = 'plano'`. A 0540
@@ -17,7 +17,7 @@ import pg from "pg";
  *   2. cada família continua com UM aberto por org (23505 no segundo), e o
  *      nulo antigo é da família do orçamento;
  *   3. o bloco da 0540 que o `update.sh` re-aplica não resolve o do plano;
- *   4. o bloco da 0567 troca o índice da forma antiga e, reaplicado, não mexe.
+ *   4. o bloco da 0583 troca o índice da forma antiga e, reaplicado, não mexe.
  *
  * Os blocos são LIDOS do `baseline.sql` pelo rótulo: é o texto que o kit aplica.
  */
@@ -37,8 +37,8 @@ const ORG = "c0de0552-0000-4000-8000-0000000000a1";
 
 const ROTULO_0540 =
   "-- ---- dedupe dos avisos de orçamento: índice único parcial (migration 0540) ----";
-const ROTULO_0567 =
-  "-- ---- cobrança do revendedor: o aviso do teto do plano não é calado pelo do orçamento (migration 0567) ----";
+const ROTULO_0583 =
+  "-- ---- cobrança do revendedor: o aviso do teto do plano não é calado pelo do orçamento (migration 0583) ----";
 
 function bloco(rotulo: string): string {
   const baseline = readFileSync(join(process.cwd(), "supabase", "baseline.sql"), "utf8");
@@ -129,7 +129,7 @@ describe("os blocos que o update.sh re-aplica", () => {
     expect(await abertos(pool)).toEqual(["ai_budget", "plano"]);
   });
 
-  it("o da 0567 troca o índice da forma da 0540 e, reaplicado, não mexe", async () => {
+  it("o da 0583 troca o índice da forma da 0540 e, reaplicado, não mexe", async () => {
     const c = await pool.connect();
     try {
       await c.query("begin");
@@ -144,7 +144,7 @@ describe("os blocos que o update.sh re-aplica", () => {
       expect(await abrir(c, "plano")).toBe("23505");
       await c.query("rollback to savepoint s");
 
-      await c.query(bloco(ROTULO_0567));
+      await c.query(bloco(ROTULO_0583));
       const depois = await definicoes(c);
       expect(depois.agent_inbox_budget_aberto_unico).toContain("(organization_id, kind)");
       expect(depois.agent_inbox_budget_aberto_unico).toContain("ref_kind is distinct from 'plano'::text");
@@ -155,7 +155,7 @@ describe("os blocos que o update.sh re-aplica", () => {
       const { rows: antes } = await c.query<{ oid: string }>(
         `select 'public.agent_inbox_budget_aberto_unico'::regclass::oid::text as oid`,
       );
-      await c.query(bloco(ROTULO_0567));
+      await c.query(bloco(ROTULO_0583));
       const { rows: reaplicado } = await c.query<{ oid: string }>(
         `select 'public.agent_inbox_budget_aberto_unico'::regclass::oid::text as oid`,
       );

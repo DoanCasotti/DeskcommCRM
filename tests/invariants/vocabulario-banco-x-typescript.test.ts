@@ -438,7 +438,7 @@ const PARES: Array<{
     tabela: "cobranca_planos",
     coluna: "intervalo",
     // lib/cobranca/vocabulario.ts. Os sete pares da cobrança nascem no MESMO
-    // commit da migration 0567.
+    // commit da migration 0583.
     arquivo: "lib/cobranca/vocabulario.ts",
     simbolo: "INTERVALOS",
   },

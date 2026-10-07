@@ -20,6 +20,7 @@ import {
   type PerfilDoPais,
 } from "@/lib/legal/perfil-do-pais";
 import { logger } from "@/lib/logger";
+import { textoLegivelDeMencao } from "@/lib/notifications/mentions";
 import { camposLegiveis, perguntasDosGrafos, type CampoLegivel } from "@/lib/lgpd/campos-personalizados";
 import { maskPhone } from "@/lib/lgpd/mask";
 import { phoneLookupVariants } from "@/lib/channels/phone-variants";
@@ -2081,7 +2082,9 @@ export async function collectExportData(args: CollectArgs): Promise<ExportPayloa
           .order("id")
           .range(offset, offset + pageSize - 1);
         if (error) throw error;
-        conversation_notes.push(...(data ?? []));
+        // Corpo legível: o token de menção (#2372) leva o UUID do atendente,
+        // que não é dado do titular.
+        conversation_notes.push(...(data ?? []).map((n) => ({ ...n, body: textoLegivelDeMencao(n.body) })));
         if (!data || data.length < pageSize) break;
       }
     }

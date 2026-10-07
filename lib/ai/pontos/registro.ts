@@ -452,6 +452,27 @@ export const PONTOS_DE_IA: readonly PontoDeIa[] = [
     registraEm: "llm_calls",
   },
 
+  {
+    // A conferência de fato (#2231): o ponto é dela (o Jev responde por aqui, e
+    // a credencial é a que resolve), não uma IA de sempre reservada — quem
+    // decide é só o Jev, e sem resposta a frase segue como está (fail-open).
+    id: "afirmacao_de_fato",
+    rotulo: "Conferir afirmações de fato na resposta",
+    oQueFaz:
+      "Lê a resposta que o assistente vai enviar e confere, nas evidências consultadas neste turno, se o que ele afirma sobre o negócio está escrito ali — ou se o material diz o contrário.",
+    papel: "proteger",
+    exige: {},
+    emissor: "lib/ai/decisao/afirmacao-de-fato.ts",
+    sintomaDeFalha:
+      "O agente diz ao cliente um horário, um preço ou um endereço que não está em nenhum material, e a pessoa vai até a loja ou à recepção por algo que não é verdade.",
+    registraEm: "llm_calls",
+    decisaoRapida: {
+      primitiva: "noul",
+      oQueOJevFaz:
+        "Lê a resposta que o assistente vai enviar e confere, nas evidências consultadas neste turno, se o que ele afirma sobre o negócio está escrito ali — ou se o material diz o contrário.",
+    },
+  },
+
   // ─────────────────────────── Lembrar e buscar ────────────────────────────
   {
     id: "compaction",

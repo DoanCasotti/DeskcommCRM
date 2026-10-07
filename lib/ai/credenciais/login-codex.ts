@@ -29,7 +29,7 @@
  * provider. Nada decifra o JSON dos tokens e o manda como chave de API.
  */
 import { byteaToBuffer, decryptKey } from "@/lib/crypto/aes_gcm";
-import { guardarCredencial, rotacionarCredencial } from "@/lib/ai/credenciais/guardar";
+import { guardarCredencialDoLogin, rotacionarCredencial } from "@/lib/ai/credenciais/guardar";
 import { moduloLigado } from "@/lib/instalacao/modulos";
 import { PROVEDOR_POR_ASSINATURA } from "@/lib/ai/pontos/provedores";
 import { renovacaoProxima, renovarSeProxima } from "@/lib/ai/pontos/renovacao-da-assinatura";
@@ -106,7 +106,7 @@ export async function guardarLoginCodex(p: {
         provider: PROVEDOR_POR_ASSINATURA,
         credentialId: existente.id,
       })
-    : await guardarCredencial({ ...comum, provider: PROVEDOR_POR_ASSINATURA });
+    : await guardarCredencialDoLogin(comum);
 
   if (r.ok) return { ok: true, id: r.id };
   if (r.motivo === "cifragem" || r.motivo === "label_em_uso") return { ok: false, motivo: r.motivo };
