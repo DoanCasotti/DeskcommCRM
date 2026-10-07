@@ -45772,6 +45772,105 @@ grant  execute on function public.emit_event(text, text, uuid, jsonb, jsonb, uui
 
 notify pgrst, 'reload schema';
 
+-- ---- relatório por canal: volume, 1ª resposta humana e vazamento (migration 0590) ----
+-- (issue #2390) Mesmo texto da migration, aplicado pelo kit self-host — o apêndice
+-- entra ANTES da VARREDURA anon de propósito: ele cria função.
+create or replace function public.fn_channel_metrics(
+  p_org uuid,
+  p_from timestamptz,
+  p_to timestamptz,
+  p_owner uuid default null
+) returns jsonb
+language sql stable
+set search_path = public
+as $$
+  with
+  -- Conversas da organização na régua de ATRIBUIÇÃO da irmã (0037 §6.5).
+  -- Sem janela AQUI de propósito: cada medida corta na SUA coluna — contagem e
+  -- vazamento em `assigned_at`, 1ª resposta em `first_human_out`. É o mesmo
+  -- desenho da irmã, cujo `ttfr` também não filtra `assigned_at`.
+  conversas as (
+    select
+      c.channel_session_id as channel_session_id,
+      c.channel as channel,
+      c.assigned_at as assigned_at,
+      fr.first_in,
+      fr.first_human_out
+    from public.conversations c
+    cross join lateral (
+      select
+        min(m.sent_at) filter (where m.direction = 'inbound') as first_in,
+        min(m.sent_at) filter (
+          where m.direction = 'outbound' and m.sent_by_user_id is not null
+        ) as first_human_out
+      from public.messages m
+      where m.conversation_id = c.id
+    ) fr
+    where c.organization_id = p_org
+      and c.channel_session_id is not null
+      and c.assigned_to_user_id is not null
+      and (p_owner is null or c.assigned_to_user_id = p_owner)
+  ),
+  -- Uma linha por canal: volume, 1ª resposta humana e vazamento no MESMO
+  -- `group by`, para a soma nunca divergir da média.
+  canais as (
+    select
+      c.channel_session_id,
+      -- O tipo é constante por sessão (0027/0368): `max()` agrupa uma coluna
+      -- funcionalmente dependente, não inventa valor.
+      max(c.channel) as channel,
+      -- Critério 1: volume por canal, janela semiaberta em `assigned_at`.
+      count(*) filter (
+        where c.assigned_at >= p_from and c.assigned_at < p_to
+      ) as conversations_handled,
+      -- Critério 3: o vazamento — conversa da janela que NUNCA teve 1ª resposta
+      -- humana. Conta aqui e só aqui; nunca mexe na média.
+      count(*) filter (
+        where c.assigned_at >= p_from and c.assigned_at < p_to
+          and c.first_human_out is null
+      ) as sem_resposta,
+      -- Critérios 2 e 4: a MESMA fórmula da irmã — bot fora e `t1 <= t0`
+      -- descartado. Sem par válido a média fica `null` (não medida), nunca 0.
+      avg(extract(epoch from (c.first_human_out - c.first_in))) filter (
+        where c.first_in is not null
+          and c.first_human_out is not null
+          and c.first_human_out > c.first_in
+          and c.first_human_out >= p_from and c.first_human_out < p_to
+      ) as avg_first_response_seconds
+    from conversas c
+    group by c.channel_session_id
+  )
+  select jsonb_build_object(
+    'channels', coalesce((
+      select jsonb_agg(
+        jsonb_build_object(
+          'channel_session_id', k.channel_session_id,
+          'channel_name', coalesce(cs.phone_number, cs.display_name, cs.waha_session_name),
+          'channel', k.channel,
+          'is_archived', (cs.archived_at is not null),
+          'conversations_handled', k.conversations_handled,
+          'avg_first_response_seconds', k.avg_first_response_seconds,
+          'sem_resposta', k.sem_resposta
+        ) order by k.conversations_handled desc, k.channel_session_id
+      )
+      from canais k
+      left join public.channel_sessions cs on cs.id = k.channel_session_id
+      -- Critério 5: canal sem atividade na janela não é linha, é ruído — a
+      -- resposta sem dado é `[]` e a tela diz "Sem atividade no período".
+      where k.conversations_handled > 0
+         or k.sem_resposta > 0
+         or k.avg_first_response_seconds is not null
+    ), '[]'::jsonb)
+  );
+$$;
+
+revoke all on function public.fn_channel_metrics(uuid, timestamptz, timestamptz, uuid) from public;
+revoke execute on function public.fn_channel_metrics(uuid, timestamptz, timestamptz, uuid) from anon;
+grant execute on function public.fn_channel_metrics(uuid, timestamptz, timestamptz, uuid)
+  to authenticated, service_role;
+
+notify pgrst, 'reload schema';
+
 -- ---- VARREDURA anon: função nova nasce exposta em quem ATUALIZA (migration 0116) ----
 --
 -- ⚠️ DE PROPÓSITO, NENHUMA FUNÇÃO É CRIADA DEPOIS DESTE BLOCO. Apêndice que cria
@@ -47864,6 +47963,62 @@ where l.id = repetidas.id
 create unique index if not exists uniq_comanda_do_ganho_por_negocio
   on public.crm_lead_links (organization_id, lead_id)
   where link_kind = 'comanda_no_ganho';
+
+
+
+-- ---- índices do caminho quente e da poda (migration 0585) ----
+--
+-- Cinco buscas rodavam sem índice que as servisse, e todas crescem com o uso:
+--
+-- 1. `send_ledger` por contato. "1º outbound" (`countPriorAcceptedSends`,
+--    disclosure e LGPD) conta envios `accepted` do contato DENTRO da transação
+--    que segura o lock do número; `ultimaInboundJaRespondida` procura envio
+--    `accepted`/`queued` do mesmo contato a cada turno. Nenhum índice começava
+--    por contato (o de busca é (organization_id, created_at)). O predicado
+--    cobre os dois status porque `status = 'accepted'` implica
+--    `status in ('accepted','queued')`: um índice serve as duas consultas.
+--    Custo aceito: `status` entra no predicado, então a troca de status de um
+--    envio deixa de ser HOT update — uma escrita a mais por envio, contra uma
+--    varredura por contato a cada turno.
+-- 2. `llm_calls.job_id`. `recordRunMetrics` soma as chamadas do run por job_id,
+--    e o `on delete set null` vindo de `job_queue` faz a poda diária
+--    (`fn_podar_fila_de_jobs`, até 1000 jobs por chamada) varrer a tabela uma vez
+--    por job apagado.
+-- 3/4. `lead_checkpoints.job_id` e `lead_state_transitions.job_id`: o mesmo
+--    `on delete set null`, a mesma varredura por job apagado.
+-- 5. `event_log` em `processing`. Dois polls fixos procuram eventos presos: o
+--    reaper do drain do agente (a cada tick, por event_type) e o do dreno geral
+--    (só status + updated_at). Os índices parciais existentes são de `pending`
+--    e `dead`. A chave é `event_type`, e NÃO `updated_at`: o trigger
+--    `trg_event_log_touch` reescreve updated_at em todo update, e indexá-lo tiraria
+--    o HOT update de toda escrita na tabela. `processing` é transitório, então o
+--    índice fica pequeno e o filtro de updated_at roda sobre poucas linhas.
+--
+-- Sem CONCURRENTLY, como no resto deste arquivo: um build concorrente que falha
+-- deixa o índice INVÁLIDO de pé, e o `if not exists` do update seguinte o pula
+-- para sempre. O update trava escrita nessas tabelas pelo tempo de construir
+-- cada índice.
+-- Sem função nova (nada a revogar de anon).
+
+create index if not exists idx_send_ledger_contato_entregue
+  on public.send_ledger (organization_id, contact_id)
+  where status in ('accepted', 'queued');
+
+create index if not exists idx_llm_calls_job_id
+  on public.llm_calls (job_id)
+  where job_id is not null;
+
+create index if not exists idx_lead_checkpoints_job_id
+  on public.lead_checkpoints (job_id)
+  where job_id is not null;
+
+create index if not exists idx_lead_state_transitions_job_id
+  on public.lead_state_transitions (job_id)
+  where job_id is not null;
+
+create index if not exists event_log_processing_por_tipo_idx
+  on public.event_log (event_type)
+  where status = 'processing';
 
 -- ---- dedupe do aviso de canal pausado: índice único parcial (migration 0589) ----
 -- Um canal pausado = um aviso aberto, garantido pelo banco: duas pausas

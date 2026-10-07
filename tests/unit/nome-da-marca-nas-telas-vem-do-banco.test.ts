@@ -31,6 +31,8 @@ const TELAS = [
   "app/onboarding/layout.tsx",
   "app/onboarding/welcome/page.tsx",
   "app/get-started/page.tsx",
+  // A página pública `/`: é a que o revisor do Google compara com o nome do app (#2510).
+  "app/page.tsx",
 ];
 
 /** O resolvedor do banco é quem decide — banco acima, `.env` como piso. */
