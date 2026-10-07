@@ -1,0 +1,1 @@
+2026-10-07T17:45:47Z terceiros=0 available=2633 lock=ocupado alheio=0

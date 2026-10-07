@@ -1,0 +1,29 @@
+2026-10-07T16:53:22Z
+terceiros_antes=1
+2
+0
+0
+0
+0
+0
+coolify
+de-fora 503
+2026-10-07T16:53:47Z
+terceiros_depois=1
+coolify coolify-db coolify-proxy coolify-realtime coolify-redis coolify-sentinel deskcomm-test-db-3812383 
+.
+..
+db-head.m.txt
+.dono-pr4
+install-r1.mascarado.log
+pr4.bundle
+pr4-u1.bundle
+rodar-r1.sh
+sb-logs.m.txt
+https-corpo no available server
+
+http 404
+0
+1
+2
+0
