@@ -401,12 +401,11 @@ dona do `/swapfile` (seção 2) vem de mensagem ao controlador.
 - Repouso com canal sem swap (F2 não remedida); VPS de 4 GB.
 - WhatsApp com número real (F5): não medido. A IA ficou **desligada** (o single-server instala
   sem chave): a conversa mede ingestão, banco e scheduler pelo `event_log`, não o agente.
-- Faxina do Coolify pela tela (G1 Passo 2): não medida, depende do ok da bancada compartilhada.
-  `40-antes-da-faxina.txt` é a régua de uma instalação que depois foi removida.
-- Reboot da VPS e fechamento persistente do painel do Coolify (8000/6001/6002), inclusive por
-  IPv6 (G6): não executados nesta medição. Nesta VPS essas portas chegaram PÚBLICAS
-  (`11-portas-antes-do-proxy.txt`); durante a medição ficaram fechadas por uma regra
-  `DOCKER-USER` temporária (IPv4), que não sobrevive a reboot.
+- Faxina do Coolify pela tela (G1 Passo 2): **medida depois** — ver "G1 Passo 2 e G6" abaixo.
+- Reboot e fechamento persistente do painel (G6): **medidos depois** — ver "G1 Passo 2 e G6"
+  abaixo. O fechamento por IPv6 foi aplicado, mas segue NÃO MEDIDO de fora (sem IPv6 público).
+  Nesta VPS essas portas chegaram PÚBLICAS (`11-portas-antes-do-proxy.txt`); até a G6 ficaram
+  fechadas por uma regra `DOCKER-USER` temporária (IPv4), que não sobrevive a reboot.
 - Atualizar para uma versão MAIS NOVA pelo caminho do guia e atualizar pela tela: não medidos.
 - Restaurar um backup: não medido. Levar o backup para fora da VPS: não medido.
 - Os avisos "Attention required" do servidor e do item "Proxy" no painel do Coolify, e o selo
@@ -450,3 +449,25 @@ correção (~19:1xZ); a segunda, com o status do GitHub lido na hora, está em
 - Ressalva: os segredos da C2 e da r1a não existem mais na VPS (as árvores foram removidas),
   então os arquivos dessas duas tentativas foram conferidos só na hora da gravação, quando a
   sonda deu `0` na cópia mascarada.
+
+## G1 Passo 2 e G6 (2026-10-07, 19:54Z–20:03Z)
+
+Medidos pelo controlador, segurando o `flock` da bancada do começo ao fim (lock às 19:54:12Z),
+com zero processo de teste e zero contêiner de outra sessão conferidos imediatamente antes.
+
+- **Faxina pela tela** (`71`, `72`, `73`): roteiro `coolify-cleanup` com *Unused volumes* e
+  *Unused networks* em **Keep**. Execução registrada pelo próprio Coolify às 19:55:40Z
+  (`success`). Volumes: iguais (4). Banco: iguais (194 tabelas em `public`, 1 usuário,
+  1 empresa, 5 mensagens). Saíram só imagens paradas: `alpine:3.20` (que o `backup.sh` usa e
+  baixa de novo), `nginx:alpine`, `pgvector/pgvector:pg15` e `postgres:17-alpine` (estas duas
+  de outras sessões da bancada, com o ok delas). Depois: raiz `307`, banco pelo domínio `200`.
+- **A faxina automática já existe:** a mesma tela mostra *Cleanup frequency* `0 0 * * *` e uma
+  execução às 00:00:03Z de 07/10, ou seja, o Coolify faz essa faxina sozinho todo dia, com as
+  opções que estiverem escolhidas.
+- **Fechamento persistente** (`74`): o bloco do guia deu `ipv4=3 ipv6=3` e o serviço `active`.
+- **Reboot** (`75`): disparado às 19:57:17Z, boot às 19:57:44Z, ssh de volta às 19:58:24Z. Três
+  minutos depois: `ipv4=3 ipv6=3`, serviço `active`, 23 contêineres (os mesmos de antes), 0 fora
+  de `Up`; de fora, 8000/6001/6002 **fechadas** e 80/443 abertas; raiz `307`; banco pelo domínio
+  `200`; banco com as mesmas contagens; painel pelo túnel `200`.
+- **Ressalva:** foi o **primeiro** reboot da VPS desde 30/09 (antes de tudo ser instalado). "Volta
+  sozinho" está medido **uma vez**, numa máquina recém-montada.
