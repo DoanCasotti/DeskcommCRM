@@ -332,7 +332,7 @@ do `free -m`. Sem swap: `64-resumo-sem-swap.txt` (bruto em `r60/`); com swap: `r
 | Repouso sem canal: máquina `used_max` | 2615 MiB (1ª amostra; as outras 9: 2585–2605) | 1531 MiB (1ª amostra; as outras 9: 1498–1520) | +1084 |
 | Conversa: coolify / supabase / crm | 590 / 1331 / 862 MiB | 368 / 569 / 446 MiB | +222 / +762 / +416 |
 | Conversa: soma dos três no mesmo instante | 2741 MiB (18:43:58Z) | 1362 MiB (`resumo.txt`, régua 2) | +1379 |
-| Conversa: máquina `used_max` (o **mínimo** da regra) | **2815 MiB** (18:45:59Z; faixa 2696–2815) | 1688 MiB — a 1ª amostra, no segundo do `docker run` do runner; a 2ª 1496; as outras 46 1370–1466 | +1127 (contra a faixa limpa: +1319 a +1445) |
+| Conversa: máquina `used_max` (o **mínimo** da regra) | **2815 MiB** (18:45:59Z; faixa 2696–2815) | 1688 MiB — a 1ª amostra, no segundo do `docker run` do runner; a 2ª 1496; as outras 46 1370–1466 | +1127 (contra a 2ª amostra, 1496: +1319; contra a faixa das outras 46, 1370–1466: +1349 a +1445) |
 | Conversa: máquina `available_min` | 4430 MiB | 5836 MiB | −1406 |
 | `memory.peak` (com cache, desde a subida): supabase / coolify | 2106 / 997 MiB | 1828 / 1019 MiB | +278 / −22 |
 | Repouso com canal | NÃO MEDIDO sem swap | 225 / 532 / 379 MiB, máquina 1360 (sessão em `FAILED`) | — |
@@ -344,7 +344,14 @@ G5, em vez da U1, com o onboarding refeito) e a sessão do WhatsApp em `SCAN_QR_
 Disco (F4 Passo 2 da F, `versoes-antes.txt`): imagens 19,84 GB no Docker (todas, inclui
 Coolify e terceiros), banco + anexos 105 MiB.
 
-**Decisão 8 GB × 16 GB: 16 GB, pela regra literal do plano** (`65-decisao-8gb-16gb.txt`):
+**Decisão 8 GB × 16 GB: 8 GB** (`67-decisao-corrigida-8gb.txt`). A regra do plano somava o
+`memory.peak` INTEIRO do Supabase e do Coolify por cima de um mínimo que já contém o residente
+deles — a mesma memória duas vezes (erro da regra, do controlador; não da medição). Sem a dupla
+contagem: 2815 + 1774 + (2106 − 1322) + (997 − 509) = **5861 MiB ≤ 6348 MiB → 8 GB**, com folga
+de 487 MiB até o limiar e ressalvas que puxam o número para cima (processos de outras sessões no
+`used`, `memory.peak` desde a subida, folga até o teto do `mem_limit`).
+
+Resultado literal da regra como estava escrita (`65-decisao-8gb-16gb.txt`), mantido para registro:
 recomendado = mínimo + folga até os `mem_limit` do CRM + `memory.peak` do Supabase e do Coolify
 = 2815 + 1774 + 2106 + 997 = **7692 MiB (7,51 GiB) > 6348 MiB** (80% de 7,8 GiB) → **16 GB**;
 8 GB ficou no limite. A mesma regra sobre os números com swap também dá 16 GB:
@@ -367,7 +374,9 @@ não vale. Máquina inteira sem swap: medida (acima). VPS de 4 GB: NÃO MEDIDA.
 - `resumo.txt`, F4 Passo 3: (1) o mínimo `1688` é a 1ª amostra da conversa, no segundo do
   `docker run` do runner (ver seção 3); (2) a "régua 3" (`1688 + 1611 = 3299`) soma números de
   instantes diferentes (16:05:51Z e 16:26:59Z, este depois da janela) e não é um limite superior
-  medido; (3) a decisão "NÃO TOMADA" foi tomada depois: 16 GB (acima).
+  medido; (3) a decisão "NÃO TOMADA" foi tomada depois: 8 GB (acima, `67-*`); (4) a linha 97
+  ("Durante as janelas o swap tinha ~1,6 GiB em uso") é falsa como está: a 1ª leitura do swap é de
+  16:22:46Z e a gravada de 16:26:59Z, as duas depois da F3 (que terminou 16:12:30Z).
 - `40-antes-da-faxina.txt`: são 4 volumes e **28 imagens** (32 linhas de nomes ao todo), mais
   dois números (arquivos em `volumes/` e KB de `db/data`).
 - `versoes-depois.txt` (U1) é filtrado: 44 linhas contra as 45 de `versoes-antes.txt` antes do

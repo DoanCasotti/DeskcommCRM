@@ -16,8 +16,10 @@ recomendado = 2815 + 1774 + 2106 + 997 = 7692 MiB (7.51 GiB)
 7692 MiB > 6348 MiB -> DECISAO: 16 GB. 8 GB ficou no limite (registrar no guia).
 
 Contexto, sem mudar a decisao:
-- A mesma regra literal sobre os numeros da Fase F (com swap de 4 GiB ligado, ~1,6 GiB dos nossos em swap) dava 1688 + 2124 + 2847 = 6659 MiB -> 16 GB (resumo.txt da F, "leitura B"). As duas medicoes levam a 16 GB.
+- A mesma regra literal sobre os numeros da Fase F (com swap de 4 GiB ligado; o swap DURANTE as janelas da F não foi lido — a leitura de ~1,6 GiB é de 16:26:59Z, depois delas) dava 1688 + 2124 + 2847 = 6659 MiB -> 16 GB (resumo.txt da F, "leitura B"). As duas medicoes levam a 16 GB.
 - Sem swap, o minimo subiu de 1688 (F, com swap) para 2815 MiB (+1127); o TOTAL dos grupos na conversa: coolify 368->590, supabase 569->1331, crm 446->862 MiB.
 - O minimo ja contem o residente do Supabase e do Coolify; a regra soma por cima o memory.peak deles. O numero e o da regra, como esta escrita.
 - Maquina inteira sem swap durante a conversa: available_min 4430 MiB de 7940 (64). VPS de 4 GB: NAO MEDIDA.
 - WAHA na F3 desta remedicao estava em SCAN_QR_CODE (crm-qr 18:41-18:42Z, conversa 18:43Z); na F original estava FAILED. Com numero real (F5): NAO MEDIDO.
+
+CORRIGIDO EM 67-decisao-corrigida-8gb.txt: a regra literal acima conta duas vezes o residente do Supabase e do Coolify; sem a dupla contagem, 5861 MiB -> 8 GB.
