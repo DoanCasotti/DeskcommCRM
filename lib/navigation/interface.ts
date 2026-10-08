@@ -127,6 +127,13 @@ export function destinosDaInterface(
    * sobre ela, e ligar o módulo em Recursos opcionais não acendia nada —
    * módulo ligado no banco, invisível na tela, sem aviso em lugar nenhum.
    *
+   * O CUSTO, declarado: o enxuto ganha UMA porta por módulo ligado — três no caso
+   * do B2B, que tem três telas, e nenhuma nos dois módulos que não criam porta.
+   * Módulo nasce desligado, então quem não liga nada não vê diferença. O número
+   * exato não fica escrito aqui porque envelheceria a cada tela nova; para medir:
+   * `destinosDaInterface({ preset: "simplificada" }, false, "admin", MODULOS_OPCIONAIS).length`
+   * contra o mesmo com `[]`.
+   *
    * `modulos` entra na condição de propósito: sem a lista (quem só pergunta
    * "sobra alguma porta?"), `permitidos` já deixou passar porta de módulo
    * DESLIGADO, e a exceção vazaria exatamente o que o gate existe para barrar.
