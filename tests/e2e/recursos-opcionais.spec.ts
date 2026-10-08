@@ -188,7 +188,17 @@ test("liga um módulo, a tela diz onde ele aparece, e a porta está lá no CRM",
     // grupo aberto nem de barra inferior. A rota segue conferida logo abaixo.
     await page.goto("/app/crm");
     await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
-    await expect(page.getByRole("link", { name: PORTA }).first()).toBeVisible();
+    // ⚠️ A ÂNCORA É O TÍTULO DO CARD, e as duas correções aqui vieram de medição.
+    //
+    // 1. `name: "Empresas"` sem `exact` casa por SUBSTRING e sem distinguir maiúsculas — e o card
+    //    "Prospecção" tem descrição "Busque EMPRESAS e conduza abordagens graduais com IA". Este
+    //    passo positivo ficava VERDE com o módulo desligado: a prova não provava nada.
+    // 2. Com `exact: true`, o `link` deixa de casar: o nome acessível do card do hub é o título
+    //    MAIS a descrição ("Empresas Cadastro B2B — razão social, CNPJ e decisores."). O que tem
+    //    nome exato é o `heading` de nível 3 dentro dele, como o snapshot da falha mostrou.
+    await expect(
+      page.getByRole("heading", { level: 3, name: PORTA, exact: true }),
+    ).toBeVisible();
 
     // E a rota abre de verdade — o gate do layout (`notFound()` com o módulo
     // desligado) não a está barrando.
@@ -205,6 +215,9 @@ test("liga um módulo, a tela diz onde ele aparece, e a porta está lá no CRM",
     await esperarModuloNoBanco(false);
 
     await page.goto("/app/crm");
-    await expect(page.getByRole("link", { name: PORTA })).toHaveCount(0);
+    // A mesma âncora do passo positivo, para os dois lados usarem a mesma régua. O `Received: 1`
+    // da rodada anterior era o card "Prospecção" casando por substring — foi ele que me fez
+    // perseguir três hipóteses erradas sobre revalidação e corrida de estado.
+    await expect(page.getByRole("heading", { level: 3, name: PORTA, exact: true })).toHaveCount(0);
   });
 });

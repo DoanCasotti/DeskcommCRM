@@ -351,7 +351,17 @@ function OndeAparece({
         <span key={porta.href}>
           {i > 0 && ", "}
           <span className="font-medium text-foreground">
-            {t(porta.grupo)} › {t(porta.label)}
+            {/*
+              O PASSO DO HUB aparece quando a porta não sobe ao menu lateral — e ele é o conserto
+              do relato "liguei e não aparece no CRM": sem ele o texto dizia "CRM › Empresas" e
+              mandava procurar no menu diário, onde a porta não está.
+
+              Cada passo passa por `t()` no SÍTIO, sobre o campo do parâmetro de iteração: é a
+              forma que a catraca do espanhol resolve. Um array de passos com `t(passo)` seria
+              reprovado como "parâmetro livre".
+            */}
+            {t(porta.grupo)} › {porta.hub ? <>{t(porta.hub)} › </> : null}
+            {t(porta.label)}
           </span>
         </span>
       ))}

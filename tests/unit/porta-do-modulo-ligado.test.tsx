@@ -20,7 +20,7 @@ import { describe, expect, it } from "vitest";
 import { NAV_CATALOG, NAV_GROUPS, type NavMetadata } from "@/lib/navigation/catalogo";
 import { ondeOModuloAparece } from "@/lib/navigation/onde-o-modulo-aparece";
 import { MODULOS_NA_TELA } from "@/app/admin/(protected)/sistema/_form";
-import { destinosDaInterface, permitidos } from "@/lib/navigation/interface";
+import { combinarInterfaces, destinosDaInterface, permitidos } from "@/lib/navigation/interface";
 import { MODULOS_OPCIONAIS, type ModuloOpcional } from "@/lib/instalacao/modulos";
 
 /**
@@ -156,6 +156,48 @@ describe("ondeOModuloAparece: a tela pode dizer o que ligar vai mudar", () => {
 });
 
 describe("o grupo é o que está NA TELA, não o rótulo do modelo de dados", () => {
+  /**
+   * ⚠️ O CAMINHO PRECISA DO PASSO DO HUB, e esta é a decisão do dono do produto (opção B).
+   *
+   * As nove portas de módulo têm `sidebar` ausente no catálogo, e isso significa "só no hub"
+   * (`NavMetadata.sidebar`: "Ausente = só no hub"). O filtro do menu lateral é
+   * `d.sidebar || (!group.hub && settings?.destinos)` — então elas NÃO aparecem no menu diário:
+   * só dentro de "Ver tudo em CRM".
+   *
+   * Era essa a causa do relato "liguei e não aparece no CRM": a pessoa ligou, olhou o menu
+   * lateral, e a porta está um clique adentro. E o meu texto dizia "CRM › Empresas", que sugere
+   * menu lateral — ou seja, ele mandava procurar no lugar errado.
+   *
+   * A decisão foi manter a porta no hub (o menu foi medido em 15 itens com folga 0 a 1280×900, e
+   * o hub existe para não reabrir essa corrida) e fazer o texto dizer o caminho de verdade.
+   */
+  it("⭐ porta que mora no hub declara o passo do hub", () => {
+    const onde = ondeOModuloAparece("crm_b2b");
+    expect(onde[0]!.grupo).toBe("CRM");
+    expect(onde[0]!.hub).toBe("Ver tudo em CRM");
+    expect(onde[0]!.label).toBe("Empresas");
+  });
+
+  it("⭐ grupo do RODAPÉ não ganha passo extra: o rodapé já É o hub", () => {
+    // O `Sidebar` desenha o grupo do rodapé mostrando SÓ o hub dele, então "Configurações" é o
+    // primeiro passo e não há um segundo. Dizer "Configurações › Configurações › Dados externos"
+    // seria inventar um clique que não existe.
+    const onde = ondeOModuloAparece("banco_externo");
+    expect(onde[0]!.grupo).toBe("Configurações");
+    expect(onde[0]!.hub).toBeUndefined();
+    expect(onde[0]!.label).toBe("Dados externos");
+  });
+
+  it("toda porta de módulo é de hub hoje — se alguma subir ao menu, este caso avisa", () => {
+    // Controle de vivacidade com dente: se um dia uma porta de módulo ganhar `sidebar: true`, ela
+    // deixa de precisar do passo do hub e este caso fica vermelho, forçando a revisão do texto.
+    const comHub = MODULOS_OPCIONAIS.flatMap((m) => ondeOModuloAparece(m)).filter((p) => p.hub);
+    const semHub = MODULOS_OPCIONAIS.flatMap((m) => ondeOModuloAparece(m)).filter((p) => !p.hub);
+    // As de `organizacao` (rodapé) não têm `hub`; todas as outras têm.
+    expect(comHub.length).toBeGreaterThan(0);
+    expect(semHub.every((p) => p.grupo === "Configurações")).toBe(true);
+  });
+
   it("⭐ grupo do rodapé: diz 'Configurações', que é o que o menu escreve", () => {
     // `banco_externo` e `propostas` moram no grupo `organizacao`, e esse grupo é
     // `GRUPO_NO_RODAPE`: o Sidebar o desenha mostrando só o hub ("Configurações").
@@ -169,5 +211,72 @@ describe("o grupo é o que está NA TELA, não o rótulo do modelo de dados", ()
     expect(ondeOModuloAparece("crm_b2b")[0]!.grupo).toBe("CRM");
     expect(ondeOModuloAparece("fluxos_atendimento")[0]!.grupo).toBe("Agente de IA");
     expect(ondeOModuloAparece("honorarios")[0]!.grupo).toBe("Análise");
+  });
+});
+
+/**
+ * ⚠️ A FORMA QUE A PRODUÇÃO ENTREGA, e não a crua — o conserto anterior era CÓDIGO MORTO.
+ *
+ * `destinosDaInterface` nunca recebe `{ preset: "simplificada" }` em produção. O caminho real é
+ * `lib/auth/server.ts` → `combinarInterfaces`, que converte qualquer escolha em
+ * `{ preset: "completa", destinos: [...] }`. Com `destinos` definido, a minha exceção para porta de
+ * módulo ligado não dispara: ela testava `settings.destinos === undefined`.
+ *
+ * Ou seja: os casos que eu havia escrito passavam numa forma de entrada que o produto não produz.
+ * É a mesma armadilha do dublê que inventa o formato do dado, só que aqui o "dublê" era a minha
+ * própria escolha de entrada. Um cético achou, medindo `combinarInterfaces` nas quatro combinações.
+ *
+ * Estes casos entram pela porta de produção. Eles reprovam enquanto a exceção não sobreviver à
+ * combinação.
+ */
+describe("a exceção da porta de módulo sobrevive ao caminho de produção", () => {
+  const vistos = (daEmpresa: unknown, doVinculo: unknown, modulo: ModuloOpcional) =>
+    destinosDaInterface(combinarInterfaces(daEmpresa, doVinculo), false, "admin", [modulo]).map(
+      (d) => d.href,
+    );
+
+  it("controle: sem escolha de ninguém, a porta do módulo ligado aparece", () => {
+    const porta = portaDo("crm_b2b")!;
+    expect(vistos(null, null, "crm_b2b")).toContain(porta);
+  });
+
+  it("⭐ empresa no preset simplificado: a porta do módulo ligado aparece", () => {
+    const porta = portaDo("crm_b2b")!;
+    expect(vistos({ preset: "simplificada" }, null, "crm_b2b")).toContain(porta);
+  });
+
+  it("⭐ vínculo no preset simplificado: idem", () => {
+    const porta = portaDo("crm_b2b")!;
+    expect(vistos(null, { preset: "simplificada" }, "crm_b2b")).toContain(porta);
+  });
+
+  it("⭐ os DOIS no preset simplificado: idem", () => {
+    const porta = portaDo("crm_b2b")!;
+    expect(vistos({ preset: "simplificada" }, { preset: "simplificada" }, "crm_b2b")).toContain(
+      porta,
+    );
+  });
+
+  it("escolha item a item de uma PESSOA continua mandando, mesmo pela combinação", () => {
+    // A distinção que o conserto tem de preservar: lista escrita à mão é decisão humana sobre
+    // portas que estavam na tela; preset é lista do produto.
+    const porta = portaDo("crm_b2b")!;
+    const escolhidos = permitidos(false, "admin")
+      .map((d) => d.href)
+      .filter((h) => h !== porta);
+    expect(vistos({ preset: "completa", destinos: escolhidos }, null, "crm_b2b")).not.toContain(
+      porta,
+    );
+  });
+
+  it("módulo DESLIGADO não aparece por esta porta (controle negativo)", () => {
+    const porta = portaDo("crm_b2b")!;
+    const sem = destinosDaInterface(
+      combinarInterfaces({ preset: "simplificada" }, null),
+      false,
+      "admin",
+      [],
+    ).map((d) => d.href);
+    expect(sem).not.toContain(porta);
   });
 });

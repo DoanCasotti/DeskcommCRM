@@ -204,9 +204,31 @@ const SO_O_ESSENCIAL: readonly NavDestinationId[] = ids.filter((id) =>
  * falha ABERTA, exatamente o oposto do pretendido aqui.
  */
 export function combinarInterfaces(daEmpresa: unknown, doVinculo: unknown): InterfaceSettings {
-  const empresa = conjuntoEscolhido(lerInterface(daEmpresa).settings);
-  const vinculo = conjuntoEscolhido(lerInterface(doVinculo).settings);
+  const sEmpresa = lerInterface(daEmpresa).settings;
+  const sVinculo = lerInterface(doVinculo).settings;
+  const empresa = conjuntoEscolhido(sEmpresa);
+  const vinculo = conjuntoEscolhido(sVinculo);
   if (!empresa && !vinculo) return INTERFACE_COMPLETA;
+
+  /**
+   * ⚠️ PRESET SOBREVIVE À COMBINAÇÃO, e sem isto a exceção da porta de módulo é CÓDIGO MORTO.
+   *
+   * `destinosDaInterface` distingue as duas origens de escolha: `destinos` é lista escrita por uma
+   * PESSOA, item a item, e manda sobre tudo; `simplificada` é lista do PRODUTO, e não pode ser
+   * lida como "esta empresa decidiu esconder Empresas". Mas esta função expandia o preset em
+   * `destinos` antes de entregar — e aí as duas origens chegavam lá idênticas.
+   *
+   * Resultado medido: a exceção para porta de módulo LIGADO nunca disparava em produção
+   * (`lib/auth/server.ts` chama esta função), e os casos que eu havia escrito passavam só porque
+   * usavam a forma crua `{ preset: "simplificada" }`, que o produto nunca entrega. Um cético
+   * achou, medindo as quatro combinações.
+   *
+   * Então: quando NENHUM dos lados escreveu lista à mão, o preset atravessa inteiro. Basta um lado
+   * ter lista explícita para o resultado voltar a ser lista — aí existe decisão humana a respeitar.
+   */
+  const soPreset = sEmpresa.destinos === undefined && sVinculo.destinos === undefined;
+  if (soPreset) return { preset: "simplificada" };
+
   const soUm = empresa ?? vinculo;
   if (!empresa || !vinculo) return { preset: "completa", destinos: [...(soUm as readonly NavDestinationId[])] };
   const comuns = empresa.filter((id) => vinculo.includes(id));

@@ -32,8 +32,18 @@ export interface PortaDoModulo {
   href: string;
   /** Rótulo da porta, como o menu a escreve. */
   label: string;
-  /** Rótulo do GRUPO do menu ("CRM", "Configurações"…) — onde procurar. */
+  /** Primeiro passo: o GRUPO do menu ("CRM", "Agente de IA", "Configurações"…). */
   grupo: string;
+  /**
+   * Passo DO MEIO, quando a porta não sobe ao menu lateral e só se alcança pelo hub do grupo
+   * ("Ver tudo em CRM"). Ausente = o grupo leva direto à porta.
+   *
+   * Os campos são separados, e não um array de passos, por causa da catraca do espanhol: ela
+   * resolve `t(porta.campo)` sobre o parâmetro de iteração e NÃO resolve `t(passo)` sobre elemento
+   * de array (viraria "parâmetro livre"). Então a forma do dado é escolhida para que cada passo
+   * possa ser traduzido no sítio da chamada.
+   */
+  hub?: string;
 }
 
 /**
@@ -59,5 +69,27 @@ const GRUPO: ReadonlyMap<string, string> = new Map(
 export function ondeOModuloAparece(modulo: ModuloOpcional): PortaDoModulo[] {
   return (NAV_CATALOG as readonly NavMetadata[])
     .filter((d) => d.modulo === modulo)
-    .map((d) => ({ href: d.href, label: d.label, grupo: GRUPO.get(d.group) ?? d.group }));
+    .map((d) => {
+      const grupo = NAV_GROUPS.find((g) => g.id === d.group);
+      /**
+       * ⚠️ O PASSO DO HUB. `sidebar` ausente significa "só no hub"
+       * (`NavMetadata.sidebar`), e o filtro do menu lateral é
+       * `d.sidebar || (!group.hub && settings?.destinos)` — então porta de módulo não aparece no
+       * menu diário, só dentro de "Ver tudo em CRM". Era exatamente essa a causa do relato
+       * "liguei e não aparece no CRM", e o texto anterior ("CRM › Empresas") mandava procurar no
+       * menu lateral, onde ela não está.
+       *
+       * O grupo do RODAPÉ é a exceção: o `Sidebar` o desenha mostrando só o hub dele, então
+       * "Configurações" já é o primeiro passo e não há um segundo — anunciar
+       * "Configurações › Configurações › Dados externos" inventaria um clique.
+       */
+      const noRodape = d.group === GRUPO_NO_RODAPE;
+      const precisaDoHub = !d.sidebar && !!grupo?.hub && !noRodape;
+      return {
+        href: d.href,
+        label: d.label,
+        grupo: GRUPO.get(d.group) ?? d.group,
+        ...(precisaDoHub ? { hub: grupo!.hub!.label } : {}),
+      };
+    });
 }
