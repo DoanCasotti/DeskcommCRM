@@ -188,6 +188,10 @@ export async function trocarPlanoDaOrg(
   let pedido = admin.from("cobranca_assinaturas").update(campos).eq("organization_id", orgId).eq("plano_id", atual.plano_id);
   pedido = atual.plano_agendado_id ? pedido.eq("plano_agendado_id", atual.plano_agendado_id) : pedido.is("plano_agendado_id", null);
   pedido = atual.provedor ? pedido.eq("provedor", atual.provedor) : pedido.is("provedor", null);
+  // No teste grátis, o link (ou a reserva dele) gravado depois da leitura faz esta troca perder.
+  if (emTeste) {
+    pedido = atual.checkout_expira_em ? pedido.eq("checkout_expira_em", atual.checkout_expira_em) : pedido.is("checkout_expira_em", null);
+  }
   const { data: gravada, error: erroDaGravacao } = await pedido.select("organization_id").maybeSingle();
   if (erroDaGravacao || !gravada) {
     // O provedor já aceitou o preço novo e o banco não o registrou: desfaz no provedor.

@@ -56,7 +56,7 @@ describe("trocarPlanoDaOrg", () => {
   it("teste grátis sem provedor: vale na hora, por compare-and-set no plano lido", async () => {
     expect(await trocar("pro")).toMatchObject({ ok: true, changed: true, quando: "imediato", planoId: "pro" });
     expect(Object.keys(argumentos(escritas()[0]!, "update")?.[0] as object).sort()).toEqual(["plano_agendado_id", "plano_id", "updated_at"]);
-    expect(filtros(escritas()[0]!)).toEqual([["eq", "organization_id", ORG], ["eq", "plano_id", "basico"], ["is", "plano_agendado_id", null], ["is", "provedor", null]]);
+    expect(filtros(escritas()[0]!)).toEqual([["eq", "organization_id", ORG], ["eq", "plano_id", "basico"], ["is", "plano_agendado_id", null], ["is", "provedor", null], ["is", "checkout_expira_em", null]]);
     expect(trocarNoProvedor).not.toHaveBeenCalled();
   });
 
@@ -120,6 +120,16 @@ describe("trocarPlanoDaOrg", () => {
     expect(await trocar("negociado")).toMatchObject({ ok: false, status: 422, code: "plano_invalido" });
     expect(await trocar("negociado", "dono")).toMatchObject({ ok: true, quando: "imediato", planoId: "negociado" });
   });
+  // O link (ou a reserva dele) gravado entre a leitura e a escrita faz a troca perder:
+  // o compare-and-set confere o prazo do link como foi LIDO.
+  it("⭐ teste grátis: o compare-and-set confere o link como foi lido", async () => {
+    await trocar("pro");
+    expect(filtros(escritas()[0]!)).toContainEqual(["is", "checkout_expira_em", null]);
+    m.linha = { ...EM_TESTE, provedor: "stripe", checkout_url: "https://checkout.stripe.com/c/pay/cs_x", checkout_expira_em: "2026-10-01T00:00:00Z" };
+    await trocar("pro");
+    expect(filtros(escritas()[1]!)).toContainEqual(["eq", "checkout_expira_em", "2026-10-01T00:00:00Z"]);
+  });
+
   it("⭐ CAS perdido depois de o provedor aceitar: 409 e o preço volta ao que o banco registra", async () => {
     m.linha = { ...PAGANDO };
     m.casPerdido = true;

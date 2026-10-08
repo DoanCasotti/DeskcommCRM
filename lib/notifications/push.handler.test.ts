@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PushPayload } from "./push_payload";
 
 // `state.vapidPronto` é mutável de propósito: os testes de grupo abaixo
@@ -250,6 +250,61 @@ describe("webPushInboundHandler", () => {
       expect(carregarDestinatariosMock).not.toHaveBeenCalled();
       expect(enviarPushDaOrgMock).not.toHaveBeenCalled();
       expect(enviarPushAQuemVeAConversaMock.mock.calls[0]![3]).toBeUndefined();
+    });
+  });
+
+  // A régua de quem vê é `fn_push_inscricoes_que_veem_a_conversa` (invariante
+  // `push-so-a-quem-ve-a-conversa`: em 'own', o agent não vê a conversa sem dono).
+  // Aqui o mock responde por ela: só QUEM_VE tem inscrição que vê a conversa.
+  describe("menção (user.mentioned) — só se o mencionado pode ver a conversa", () => {
+    const QUEM_VE = "user-que-ve";
+    beforeEach(() => {
+      state.vapidPronto = true;
+      enviarPushAQuemVeAConversaMock.mockImplementation(async (_org, _conv, _payload, soUsuarios) => ({
+        sent: (soUsuarios ?? []).filter((u) => u === QUEM_VE).length,
+        gone: 0,
+      }));
+    });
+    afterEach(() => {
+      enviarPushAQuemVeAConversaMock.mockImplementation(async () => ({ sent: 1, gone: 0 }));
+    });
+
+    function mencaoRow(payload: Record<string, unknown> = {}) {
+      return {
+        id: "e-mencao",
+        organization_id: "org1",
+        event_type: "user.mentioned",
+        entity_kind: "conversation_note",
+        entity_id: "conv-1",
+        payload: { conversation_id: "conv-1", from_user_id: "autor", body_preview: "dados do cliente", ...payload },
+        metadata: {},
+        consumed_by: [],
+        attempts: 0,
+      };
+    }
+
+    it("mencionado que NÃO vê a conversa: nenhum aviso, nem sem prévia", async () => {
+      const result = await webPushInboundHandler.handle(mencaoRow({ to_user_id: "user-que-nao-ve" }));
+      expect(result.detail).toBe("sent:0");
+      expect(enviarPushAoUsuarioMock).not.toHaveBeenCalled();
+      expect(enviarPushDaOrgMock).not.toHaveBeenCalled();
+      const [org, conv, , soUsuarios] = enviarPushAQuemVeAConversaMock.mock.calls[0]!;
+      expect([org, conv, soUsuarios]).toEqual(["org1", "conv-1", ["user-que-nao-ve"]]);
+    });
+
+    it("mencionado que vê a conversa: recebe o aviso com a prévia", async () => {
+      const result = await webPushInboundHandler.handle(mencaoRow({ to_user_id: QUEM_VE }));
+      expect(result.detail).toBe("sent:1");
+      const payload = enviarPushAQuemVeAConversaMock.mock.calls[0]![2];
+      expect(payload.title).toBe("Você foi mencionado");
+      expect(payload.body).toBe("dados do cliente");
+    });
+
+    it("sem conversa não há como conferir: ninguém recebe", async () => {
+      const result = await webPushInboundHandler.handle(mencaoRow({ to_user_id: QUEM_VE, conversation_id: undefined }));
+      expect(result.status).toBe("skipped");
+      expect(enviarPushAoUsuarioMock).not.toHaveBeenCalled();
+      expect(enviarPushAQuemVeAConversaMock).not.toHaveBeenCalled();
     });
   });
 });
