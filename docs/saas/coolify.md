@@ -300,7 +300,7 @@ O instalador não faz perguntas: o domínio já vai no comando.
 ===> Pulling Docker images
 ▶ Subindo o Supabase local
 ▶ Configurando o CRM sem perguntas adicionais
-⚠ sem SUPABASE_ACCESS_TOKEN — não dá para configurar os e-mails de acesso sozinho.
+✓ Supabase desta VPS: os e-mails de acesso já usam os moldes do app (gravados no GoTrue).
 ✓ dono criado e promovido a super-admin
 ✓ containers no ar
 ✓ app no ar e saudável
@@ -314,8 +314,10 @@ Credenciais iniciais (arquivo protegido com permissao 600):
 As chaves do banco **não aparecem na tela**: o instalador as guarda em
 `.runtime/supabase-setup.log`, um arquivo que só o root lê. Não compartilhe esse arquivo.
 
-Os avisos com `⚠` sobre `SUPABASE_ACCESS_TOKEN` e sobre o separador `&` apareceram em todas
-as instalações medidas e não impediram nada. No fim também aparece um aviso de que, sem
+A linha dos e-mails de acesso é a do kit atual (#2574, provada por teste). Na instalação
+medida, anterior a esse conserto, aparecia no lugar dela um aviso `⚠ sem SUPABASE_ACCESS_TOKEN`,
+que não se aplicava ao banco na própria VPS. O aviso com `⚠` sobre o separador `&` apareceu em
+todas as instalações medidas e não impediu nada. No fim também aparece um aviso de que, sem
 SMTP (o servidor que envia e-mails), "esqueci a senha" não envia e-mail: dá para configurar depois, no CRM.
 
 Na VPS medida, a instalação levou **2 min 44 s na primeira vez** (baixando as imagens) e
@@ -545,9 +547,11 @@ Os parênteses fazem a proteção valer só para o backup.
 **Você vai ver:** "✓ banco: … (conferido)", "✓ sessões WhatsApp salvas", "✓ anexos" e
 "✓ backup concluído". O backup guarda os 14 mais recentes em `~/deskcommcrm/backups/`.
 
-A pasta `deskcomm-guardado-…` nasce fechada (só o root entra). Mantenha-a assim: os
-arquivos `waha-*.tgz` (a sessão do WhatsApp) e `storage-*.tgz` (os anexos) saem do backup
-com a leitura aberta (permissão `644`, medido), e quem os protege é a pasta fechada.
+A pasta `deskcomm-guardado-…` nasce fechada (só o root entra). Mantenha-a assim: ela guarda
+a sessão do WhatsApp (`waha-*.tgz`) e os anexos (`storage-*.tgz`). Com o kit atual (#2565,
+provado por teste), esses arquivos e o banco já saem do backup só para o dono (permissão `600`)
+e a pasta `backups/` fica `700`. Na instalação medida, anterior a esse conserto, eles saíam com
+a leitura aberta (`644`), e quem os protegia era a pasta fechada.
 
 **2. Leve para fora da VPS duas coisas, por caminhos diferentes:**
 
