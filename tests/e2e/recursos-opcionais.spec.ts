@@ -73,3 +73,69 @@ test("dono do servidor vê a porta Recursos opcionais e os três blocos no Admin
   await expect(page.locator('[data-recurso="graph_parceiro"]')).toBeVisible();
   await page.screenshot({ path: evidencia("admin.png"), fullPage: true });
 });
+
+/**
+ * A JORNADA QUE O MANTENEDOR RELATOU, DE PONTA A PONTA.
+ *
+ * O relato: "os módulos que são ativados aqui, eles não aparecem no CRM". Três
+ * defeitos distintos produziam esse mesmo sintoma, e nenhum deles era o gate de
+ * módulo (esse sempre funcionou):
+ *
+ *   1. a tela do interruptor nunca dizia ONDE o módulo apareceria — o dado
+ *      existia (`ondeOModuloAparece`, lido do próprio menu) e só a tela da
+ *      EMPRESA o consumia, nunca a de quem liga;
+ *   2. `updateModuloDaInstalacao` revalidava só `/admin/sistema`; o menu do CRM
+ *      vive no layout de `/app` e continuava o de antes;
+ *   3. a empresa no preset "simplificada" nunca via porta de módulo nenhuma —
+ *      a lista do preset é NOSSA, escrita antes de existir módulo opcional.
+ *
+ * Esta spec dirige o produto como o mantenedor dirigiu: liga pela tela, LÊ o que
+ * a tela promete e vai ao CRM conferir se a promessa se cumpriu. Depois desliga
+ * e exige que a porta saia — senão o verde seria só a metade fácil.
+ */
+test("liga um módulo, a tela diz onde ele aparece, e a porta está lá no CRM", async ({ page }) => {
+  await afirmarDonoDoServidor(lerCreds().users.dono!.email);
+  await loginComoDono(page, lerCreds());
+
+  const PORTA = "Empresas";
+  const chave = page.getByRole("switch", { name: "Empresas e pessoas (venda para empresas)" });
+
+  await test.step("a tela diz onde o módulo vai aparecer ANTES de ligar", async () => {
+    await page.goto("/admin/sistema");
+    await expect(chave).toBeVisible();
+    const ligadoAntes = (await chave.getAttribute("aria-checked")) === "true";
+    if (ligadoAntes) {
+      await chave.click();
+      await expect(chave).toHaveAttribute("aria-checked", "false");
+    }
+    // A frase é o conserto: sem ela o operador liga e não sabe para onde olhar.
+    await expect(page.getByText(/Ao ligar, aparece no menu em:/)).toBeVisible();
+    await expect(page.getByText(/CRM › Empresas/).first()).toBeVisible();
+    await page.screenshot({ path: evidencia("modulo-desligado-diz-onde.png"), fullPage: true });
+  });
+
+  await test.step("liga, e a frase passa a falar no presente", async () => {
+    await chave.click();
+    await expect(chave).toHaveAttribute("aria-checked", "true");
+    await expect(page.getByText(/Aparece no menu em:/).first()).toBeVisible();
+    await page.screenshot({ path: evidencia("modulo-ligado-diz-onde.png"), fullPage: true });
+  });
+
+  await test.step("⭐ a porta ESTÁ no menu do CRM, sem recarregar à mão", async () => {
+    // O passo que o defeito 2 reprovava: o layout de `/app` servia o menu de
+    // antes porque nada o revalidava. Navegação normal, como o operador faz.
+    await page.goto("/app/companies");
+    await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+    await expect(page.getByRole("link", { name: PORTA }).first()).toBeVisible();
+    await page.screenshot({ path: evidencia("porta-no-menu-do-crm.png"), fullPage: true });
+  });
+
+  await test.step("desliga e a porta SAI — senão o verde era só a metade fácil", async () => {
+    await page.goto("/admin/sistema");
+    await expect(chave).toBeVisible();
+    await chave.click();
+    await expect(chave).toHaveAttribute("aria-checked", "false");
+    await page.goto("/app/inbox");
+    await expect(page.getByRole("link", { name: PORTA })).toHaveCount(0);
+  });
+});

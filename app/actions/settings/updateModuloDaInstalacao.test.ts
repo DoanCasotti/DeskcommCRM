@@ -6,12 +6,18 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const deps = vi.hoisted(() => ({ upsert: vi.fn(), audit: vi.fn(), rpc: vi.fn(), escrita: vi.fn() }));
+const deps = vi.hoisted(() => ({
+  upsert: vi.fn(),
+  audit: vi.fn(),
+  rpc: vi.fn(),
+  escrita: vi.fn(),
+  revalidar: vi.fn(),
+}));
 
 // A action passa por escritaDeAdminOuRecusa (regra D), que chama este helper.
 vi.mock("@/lib/auth/requirePlatformAdmin", () => ({ requirePlatformAdminEscrita: () => deps.escrita() }));
 vi.mock("next/headers", () => ({ headers: async () => new Headers() }));
-vi.mock("next/cache", () => ({ revalidatePath: () => undefined }));
+vi.mock("next/cache", () => ({ revalidatePath: deps.revalidar }));
 vi.mock("@/lib/audit", () => ({ audit: deps.audit }));
 vi.mock("@/lib/supabase/admin", () => ({
   createAdminClient: () => ({
@@ -54,6 +60,28 @@ describe("updateModuloDaInstalacao", () => {
   it("o banco externo liga como sempre", async () => {
     expect(await updateModuloDaInstalacao({ modulo: "banco_externo", ligado: true })).toEqual({ ok: true });
     expect(deps.upsert).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * O MENU DO CRM VIVE NO LAYOUT DE `/app`, e é ele que lê `modulosLigados()` para
+   * decidir as portas com `modulo:` (`app/app/layout.tsx` → `Sidebar`, `NavHub`,
+   * `CommandPalette`, `BarraInferior`). Sem revalidar esse layout, quem acabou de
+   * ligar um módulo volta ao CRM e continua vendo o menu de antes — o módulo está
+   * ligado no banco e invisível na tela.
+   *
+   * A irmã que também mexe no menu já faz isto e escreve o motivo:
+   * `atualizarInterfaceDaEmpresa` chama `revalidatePath("/app", "layout")`.
+   */
+  it("⭐ ligar um módulo revalida o MENU DO CRM, não só a tela de admin", async () => {
+    await updateModuloDaInstalacao({ modulo: "banco_externo", ligado: true });
+    const chamadas = deps.revalidar.mock.calls;
+    expect(chamadas).toEqual(expect.arrayContaining([["/admin/sistema"]]));
+    expect(chamadas).toEqual(expect.arrayContaining([["/app", "layout"]]));
+  });
+
+  it("DESLIGAR também revalida o menu — a porta tem de sumir na mesma hora", async () => {
+    await updateModuloDaInstalacao({ modulo: "banco_externo", ligado: false });
+    expect(deps.revalidar.mock.calls).toEqual(expect.arrayContaining([["/app", "layout"]]));
   });
 
   it.each(["forbidden_scope", "mfa_required"] as const)(

@@ -1283,13 +1283,43 @@ os recursos que dependem do servidor em tela nenhuma.
 
 | Caso | Spec | Estado |
 |---|---|---|
-| Admin da empresa chega a Configurações › Recursos opcionais pelo hub, vê a lista e o **Ajustar** de "A conversa fica com quem atendeu" o leva a Distribuição de atendimento | `tests/e2e/recursos-opcionais.spec.ts` | CI (PARTE_2) |
-| Dono do servidor acha **Recursos opcionais** no menu do Admin; a tela tem Módulos, Comportamento e Depende do servidor (só leitura, "configurado"/"não configurado") | idem | CI (PARTE_2) |
+| Admin da empresa chega a Configurações › Recursos opcionais pelo hub, vê a lista e o **Ajustar** de "A conversa fica com quem atendeu" o leva a Distribuição de atendimento | `tests/e2e/recursos-opcionais.spec.ts` | CI (e2e) |
+| Dono do servidor acha **Recursos opcionais** no menu do Admin; a tela tem Módulos, Comportamento e Depende do servidor (só leitura, "configurado"/"não configurado") | idem | CI (e2e) |
 | Módulo/porta novo fora da lista reprova | `tests/unit/recursos-opcionais-catalogo.test.ts` | unit |
+| **Liga o módulo pela tela, a tela diz onde ele aparece, a porta está no menu do CRM, desliga e ela sai** | `tests/e2e/recursos-opcionais.spec.ts` | CI (e2e) |
+| Toda linha de módulo responde "onde aparece": ou tem porta no menu, ou declara onde fica | `tests/unit/porta-do-modulo-ligado.test.tsx` | unit |
+| Módulo ligado acende a porta mesmo no preset "simplificada"; escolha item-a-item da empresa continua mandando | idem | unit |
+| Ligar/desligar revalida o layout de `/app`, não só `/admin/sistema` | `app/actions/settings/updateModuloDaInstalacao.test.ts` | unit |
+
+> A coluna dizia `PARTE_2` e a spec está em `SPECS_PARTE_6` — número de partição
+> envelhece sozinho a cada rebalanceamento do `e2e.yml`. Quem precisa do número
+> lê a fonte: `grep -n recursos-opcionais .github/workflows/e2e.yml`.
 
 **Não coberto pela tela:** gerente vendo a lista sem os botões de telas de admin
 (regra no `page.tsx`, sem spec); telefonia por SIP é "não dá para ver daqui" —
 ela vive nos contêineres, fora do alcance do app.
+
+### Achados de 2026-10-08 — "liguei e não aparece no CRM" eram TRÊS defeitos
+
+Relato do mantenedor: *"os módulos que são ativados aqui, eles não aparecem no
+CRM. Além de estarem em uma área de recursos opcionais, diferentes dos 'módulos'
+mesmo tendo o mesmo objetivo."* O gate de módulo nunca foi o problema — ele
+sempre soltou a porta assim que o módulo entrou na lista. O sintoma vinha de
+outros três lugares, medidos antes de consertar:
+
+| # | Achado | Como foi medido | Conserto |
+|---|---|---|---|
+| 20 | 🟠 **A tela do interruptor não dizia onde o módulo apareceria.** O dado existia (`portaDoModuloNaEmpresa`, lido do menu) e tinha UM consumidor: `/app/settings/recursos`, a tela da EMPRESA. A tela de quem LIGA não o recebia | `grep -rn portaDoModuloNaEmpresa` devolve 1 consumidor, e ele não é `/admin/sistema` | `lib/navigation/onde-o-modulo-aparece.ts` + a frase em cada linha, antes e depois de ligar |
+| 20b | 🟠 **Dois dos seis módulos por interruptor não criam porta nenhuma no CRM** (`cobranca`, `login_codex`) — ligar e procurar no menu era procurar o que não existe | zero ocorrências deles como `modulo:` em `lib/navigation/catalogo.ts` | cada um declara `foraDoMenu` e a tela diz com todas as letras; invariante reprova módulo novo sem resposta |
+| 21 | 🟠 **`updateModuloDaInstalacao` revalidava só `/admin/sistema`.** O menu vive no layout de `/app`, que lê `modulosLigados()` — quem ligava voltava ao CRM com o menu de antes | a única chamada era `revalidatePath("/admin/sistema")`; a irmã `atualizarInterfaceDaEmpresa`, que também mexe no menu, já fazia `revalidatePath("/app", "layout")` e escrevia o motivo | a mesma linha, com o motivo escrito |
+| 22 | 🟠 **Empresa no preset "simplificada" nunca via porta de módulo.** `destinosDaInterface` tratava igual as duas origens de `chosen`, e `SIMPLIFICADA` é lista do PRODUTO, escrita antes de existir módulo opcional | os 5 módulos com porta ficam fora do preset; teste vermelho nos 5 antes do conserto | porta de módulo LIGADO não é filtrada pelo PRESET; `destinos` item-a-item (escolha de uma pessoa) continua mandando |
+
+**O que a investigação mediu e NÃO consertou** — é decisão de produto, não
+defeito: as quatro superfícies onde se "instala" algo seguem separadas —
+`/admin/sistema` (bloco Módulos, 6 interruptores), `/admin/modulos` (ADR-0002,
+módulo com tabela própria; o catálogo tem 1), `/admin/extensoes` (só leitura do
+catálogo da instalação) e `/app/extensions` (a extensão declarativa, por
+empresa). A segunda metade do relato do mantenedor é sobre essa fragmentação.
 
 ## J36 — Perguntar ao acervo sem sair da conversa `[P1]` (2026-09-28)
 

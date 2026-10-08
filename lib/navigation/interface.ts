@@ -115,8 +115,31 @@ export function destinosDaInterface(
   const allowed = permitidos(platform, role, modulos, capacidades);
   const chosen =
     settings.destinos ?? (settings.preset === "simplificada" ? SIMPLIFICADA : undefined);
+  /**
+   * As DUAS origens de `chosen` não têm a mesma autoridade, e tratá-las igual
+   * escondia a porta de todo módulo que a instalação ligasse depois.
+   *
+   * `destinos` é escolha de uma PESSOA, item por item, numa tela que listava
+   * aquela porta — ela manda, inclusive sobre módulo ligado. Já `SIMPLIFICADA`
+   * é lista do PRODUTO, escrita antes de existir módulo opcional: ela diz
+   * "menu enxuto", nunca "esta empresa decidiu esconder Empresas". Quem
+   * escolheu o preset num dia em que a porta não existia não decidiu nada
+   * sobre ela, e ligar o módulo em Recursos opcionais não acendia nada —
+   * módulo ligado no banco, invisível na tela, sem aviso em lugar nenhum.
+   *
+   * `modulos` entra na condição de propósito: sem a lista (quem só pergunta
+   * "sobra alguma porta?"), `permitidos` já deixou passar porta de módulo
+   * DESLIGADO, e a exceção vazaria exatamente o que o gate existe para barrar.
+   * O papel segue decidindo antes — isto é apresentação, nunca autorização.
+   */
+  const deModuloLigado = (d: NavMetadata): boolean =>
+    settings.destinos === undefined && !!d.modulo && !!modulos && modulos.includes(d.modulo);
   return allowed.filter(
-    (d) => essencial(d, role, platform) || !chosen || chosen.includes(d.href as NavDestinationId),
+    (d) =>
+      essencial(d, role, platform) ||
+      deModuloLigado(d) ||
+      !chosen ||
+      chosen.includes(d.href as NavDestinationId),
   );
 }
 export function interfaceTemDestino(

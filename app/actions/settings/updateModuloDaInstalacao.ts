@@ -119,6 +119,18 @@ export async function updateModuloDaInstalacao(
     await audit({ ...quem, action: "cobranca.modulo_desligado", metadata: { liberadas } });
   }
   revalidatePath("/admin/sistema");
+  /**
+   * O MENU DO CRM VIVE NO LAYOUT DE `/app` — é ele que lê `modulosLigados()` e
+   * passa a lista para `Sidebar`, `NavHub`, `CommandPalette` e `BarraInferior`,
+   * que decidem as portas com `modulo:`. Sem esta linha, quem acabou de ligar um
+   * módulo voltava ao CRM e continuava com o menu de antes: ligado no banco e
+   * invisível na tela. Desligar tinha o espelho do problema — a porta sobrevivia
+   * ao desligamento até o próximo carregamento completo.
+   *
+   * É a mesma linha, pelo mesmo motivo, de `atualizarInterfaceDaEmpresa`, a
+   * outra action que mexe no menu lateral.
+   */
+  revalidatePath("/app", "layout");
 
   return { ok: true };
 }
