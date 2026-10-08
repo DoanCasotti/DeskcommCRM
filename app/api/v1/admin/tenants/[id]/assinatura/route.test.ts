@@ -159,7 +159,7 @@ describe("PATCH — trocar plano (§7e; PR 2 sem provedor)", () => {
     expect((await res.json()).data).toEqual({ changed: true, plano_id: PRO.id });
     const [update] = escritas();
     expect(Object.keys(argumentos(update!, "update")?.[0] as object).sort()).toEqual(["plano_agendado_id", "plano_id", "updated_at"]);
-    expect(filtros(update!)).toEqual([["eq", "organization_id", TENANT], ["eq", "plano_id", BASICO.id], ["is", "plano_agendado_id", null], ["is", "provedor", null]]);
+    expect(filtros(update!)).toEqual([["eq", "organization_id", TENANT], ["eq", "plano_id", BASICO.id], ["is", "plano_agendado_id", null], ["is", "provedor", null], ["is", "checkout_expira_em", null]]);
     expect(h.audit).toHaveBeenCalledWith(expect.objectContaining({
       action: "cobranca.plano_trocado", metadata: { de: BASICO.id, para: PRO.id, quando: "imediato" },
     }));
