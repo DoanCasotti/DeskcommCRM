@@ -109,15 +109,27 @@ test("liga um módulo, a tela diz onde ele aparece, e a porta está lá no CRM",
       await expect(chave).toHaveAttribute("aria-checked", "false");
     }
     // A frase é o conserto: sem ela o operador liga e não sabe para onde olhar.
-    await expect(page.getByText(/Ao ligar, aparece no menu em:/)).toBeVisible();
-    await expect(page.getByText(/CRM › Empresas/).first()).toBeVisible();
+    //
+    // ⚠️ ANCORADA NO MÓDULO, e com `^`. A primeira versão só procurava "Ao ligar,
+    // aparece no menu em:" e o Playwright recusou em strict mode: resolveu para
+    // QUATRO elementos, um por módulo com interruptor. O vermelho foi bom — ele
+    // imprimiu o texto dos quatro e provou que a tela renderiza o que devia,
+    // inclusive "Configurações › Dados externos", que é a exceção do grupo do
+    // rodapé. Mas asserção que casa com quatro linhas não diz qual delas mediu.
+    await expect(
+      page.getByText(/^Ao ligar, aparece no menu em: CRM › Empresas, CRM › Pessoas/),
+    ).toBeVisible();
     await page.screenshot({ path: evidencia("modulo-desligado-diz-onde.png"), fullPage: true });
   });
 
   await test.step("liga, e a frase passa a falar no presente", async () => {
     await chave.click();
     await expect(chave).toHaveAttribute("aria-checked", "true");
-    await expect(page.getByText(/Aparece no menu em:/).first()).toBeVisible();
+    // `^` separa os dois estados: "Ao ligar, aparece…" CONTÉM "aparece no menu
+    // em:", e sem a âncora o caso de ligado passaria com a frase de desligado.
+    await expect(
+      page.getByText(/^Aparece no menu em: CRM › Empresas, CRM › Pessoas/),
+    ).toBeVisible();
     await page.screenshot({ path: evidencia("modulo-ligado-diz-onde.png"), fullPage: true });
   });
 

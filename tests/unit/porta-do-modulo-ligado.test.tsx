@@ -17,15 +17,28 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { NAV_CATALOG, NAV_GROUPS } from "@/lib/navigation/catalogo";
+import { NAV_CATALOG, NAV_GROUPS, type NavMetadata } from "@/lib/navigation/catalogo";
 import { ondeOModuloAparece } from "@/lib/navigation/onde-o-modulo-aparece";
 import { MODULOS_NA_TELA } from "@/app/admin/(protected)/sistema/_form";
 import { destinosDaInterface, permitidos } from "@/lib/navigation/interface";
 import { MODULOS_OPCIONAIS, type ModuloOpcional } from "@/lib/instalacao/modulos";
 
+/**
+ * ⚠️ `NAV_CATALOG` é UNIÃO DE TIPOS LITERAIS, não `NavMetadata[]`: cada entrada tem só os
+ * campos que ela escreve, então `d.modulo` e `d.minRole` não existem no tipo da união e o
+ * acesso é `TS2339`. O arquivo da lib faz este mesmo alargamento; o teste tem de fazer
+ * igual.
+ *
+ * Como isto chegou ao CI: eu rodei `npx tsc --noEmit`, que usa o `tsconfig.json` — e esse
+ * EXCLUI os testes. A régua do projeto é `pnpm typecheck`
+ * (`tsc --noEmit -p tsconfig.typecheck.json`), que os inclui. Alias diferente, régua
+ * diferente, e o verde do comando errado não vale.
+ */
+const CATALOGO = NAV_CATALOG as readonly NavMetadata[];
+
 /** A primeira porta do menu que declara este módulo, ou `null` se ele não tem porta. */
 function portaDo(modulo: ModuloOpcional): string | null {
-  return NAV_CATALOG.find((d) => d.modulo === modulo)?.href ?? null;
+  return CATALOGO.find((d) => d.modulo === modulo)?.href ?? null;
 }
 
 const COM_PORTA = MODULOS_OPCIONAIS.filter((m) => portaDo(m) !== null);
@@ -71,10 +84,11 @@ describe("módulo ligado acende a porta mesmo no preset simplificada", () => {
   it("quem não passa o papel mínimo não ganha a porta pelo módulo (controle negativo)", () => {
     // O módulo é APRESENTAÇÃO; o papel continua decidindo. Sem este caso, a
     // exceção acima poderia estar abrindo porta de admin para `viewer`.
-    const soDeAdmin = NAV_CATALOG.find((d) => d.modulo && d.minRole === "admin");
-    if (!soDeAdmin) return; // nada a medir nesta versão do catálogo
+    const soDeAdmin = CATALOGO.find((d) => d.modulo && d.minRole === "admin");
+    const modulo = soDeAdmin?.modulo;
+    if (!soDeAdmin || !modulo) return; // nada a medir nesta versão do catálogo
     const vistos = destinosDaInterface({ preset: "simplificada" }, false, "viewer", [
-      soDeAdmin.modulo!,
+      modulo,
     ]).map((d) => d.href);
     expect(vistos).not.toContain(soDeAdmin.href);
   });
