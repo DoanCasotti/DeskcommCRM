@@ -15,7 +15,11 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 
+import { createClient } from "@supabase/supabase-js";
+
 import { expect, test } from "./helpers/test";
+import { credenciaisSupabaseDeTeste } from "../../scripts/lib/env-de-teste";
+import { moduloLigado } from "../../lib/instalacao/modulos";
 
 import { lerCreds, loginComoAdmin, loginComoDono } from "./helpers/login-admin";
 import { afirmarDonoDoServidor } from "./utils/precondicao";
@@ -27,6 +31,34 @@ function evidencia(nome: string): string {
 }
 
 test.describe.configure({ timeout: 120_000 });
+
+/**
+ * ESPERA O BANCO, NÃO A TELA — e isto é o conserto de um defeito do teste que me custou duas
+ * rodadas de CI, com dois sintomas opostos e UMA causa.
+ *
+ * O interruptor de `/admin/sistema` é OTIMISTA: `_form.tsx` vira o estado local no clique e só
+ * depois aguarda a action. Então `aria-checked` (e a frase "Aparece no menu em:", que lê o mesmo
+ * estado) ficam verdes ANTES de o banco ter a linha. Navegar nesse instante mede um servidor que
+ * ainda não sabe da mudança:
+ *
+ *   - ao LIGAR, `/app/companies` caiu no `notFound()` do layout e não havia barra lateral —
+ *     o link "não existia" (`element(s) not found`);
+ *   - ao DESLIGAR, a porta continuou lá (`Expected: 0  Received: 4`).
+ *
+ * Os dois sintomas são opostos e a causa é a mesma, que é exatamente o que torna esse tipo de
+ * corrida difícil de ler a partir de um só vermelho. A espera usa `moduloLigado`, a MESMA função
+ * que a aplicação usa para decidir — não uma consulta paralela que poderia divergir dela. É o
+ * padrão que `fluxo-de-atendimento.spec.ts` já usava.
+ */
+const db = createClient(
+  credenciaisSupabaseDeTeste().url,
+  credenciaisSupabaseDeTeste().serviceRole,
+  { auth: { persistSession: false } },
+);
+
+async function esperarModuloNoBanco(ligado: boolean): Promise<void> {
+  await expect.poll(async () => moduloLigado(db, "crm_b2b"), { timeout: 20_000 }).toBe(ligado);
+}
 
 test("admin da empresa acha os recursos opcionais e o Ajustar leva à tela certa", async ({ page }) => {
   await loginComoAdmin(page, lerCreds());
@@ -108,6 +140,7 @@ test("liga um módulo, a tela diz onde ele aparece, e a porta está lá no CRM",
       await chave.click();
       await expect(chave).toHaveAttribute("aria-checked", "false");
     }
+    await esperarModuloNoBanco(false);
     // A frase é o conserto: sem ela o operador liga e não sabe para onde olhar.
     //
     // ⚠️ ANCORADA NO MÓDULO, e com `^`. A primeira versão só procurava "Ao ligar,
@@ -125,6 +158,7 @@ test("liga um módulo, a tela diz onde ele aparece, e a porta está lá no CRM",
   await test.step("liga, e a frase passa a falar no presente", async () => {
     await chave.click();
     await expect(chave).toHaveAttribute("aria-checked", "true");
+    await esperarModuloNoBanco(true);
     // `^` separa os dois estados: "Ao ligar, aparece…" CONTÉM "aparece no menu
     // em:", e sem a âncora o caso de ligado passaria com a frase de desligado.
     await expect(
@@ -168,6 +202,7 @@ test("liga um módulo, a tela diz onde ele aparece, e a porta está lá no CRM",
     await expect(chave).toBeVisible();
     await chave.click();
     await expect(chave).toHaveAttribute("aria-checked", "false");
+    await esperarModuloNoBanco(false);
 
     await page.goto("/app/crm");
     await expect(page.getByRole("link", { name: PORTA })).toHaveCount(0);
