@@ -508,6 +508,13 @@ export const AUDIT_ACTIONS = [
   // "quem mexeu no cadastro dela?". Fundir as duas obrigaria a ler o metadata
   // para saber qual das duas coisas aconteceu.
   "org.branding_updated",
+  // As ALÍNEAS a), c) e d) do art. 15.º preenchidas pelo controlador
+  // (`organizations.settings.art15`, issue #2356) — mutação de TENANT com a
+  // mesma forma da anterior: `organization_id` + `resource_id` = uuid da org.
+  // Outra ação, e não `org.updated`, porque a pergunta da trilha é "quem
+  // declarou as alíneas que o relatório de acesso imprimiu?" — e o metadata
+  // guarda a declaração como ela foi gravada, que é o que a CNPD pode pedir.
+  "org.art15_updated",
 
   // ── Vindos da `main` durante a continuação do épico ──────────────────
   // Chegaram pelo painel (`action-codes.ts`) no mesmo intervalo em que este

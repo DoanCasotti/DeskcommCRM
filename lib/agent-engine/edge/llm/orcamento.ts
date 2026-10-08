@@ -485,9 +485,14 @@ const RECURSO_TETO_DE_IA: RecursoDoPlano = 'ia_usd_cents';
  * NÃO é somado: essa instalação não paga uma soma de `llm_calls` por chamada por
  * uma capacidade que não usa.
  *
- * LAÇO DE RETORNO: com teto e gasto abaixo dele (virou o mês, ou o plano subiu),
- * o `budget_exceeded` do PLANO aberto é resolvido. O filtro `teto is not null`
- * é uma condição sem correlação: sem teto, o Postgres nem varre a tabela.
+ * LAÇO DE RETORNO: o `budget_exceeded` do PLANO aberto é resolvido quando o gate
+ * perdeu a razão de bloquear — gasto abaixo do teto (virou o mês, ou o plano
+ * subiu) OU teto nenhum (a empresa ficou isenta, ou o plano perdeu o teto). A
+ * mesma régua de `SQL_ORCAMENTO`: sem o caso do teto nulo, o aviso "as conversas
+ * foram para a equipe" ficaria aceso para sempre, porque não há outro resolvedor.
+ * A cobrança DESLIGADA não chega aqui, salvo a janela do memo (o gate nem roda o
+ * statement); quem fecha esse caso é `fn_cobranca_liberar_suspensoes`, no ato de
+ * desligar.
  */
 export const SQL_TETO_DO_PLANO = `
 with plano as (
@@ -504,8 +509,7 @@ retrata as (
      and kind = 'budget_exceeded'
      and ref_kind = 'plano'
      and status = 'open'
-     and (select teto from leitura) is not null
-     and (select gasto from leitura) < (select teto from leitura)
+     and ((select teto from leitura) is null or (select gasto from leitura) < (select teto from leitura))
   returning 1
 )
 select teto, gasto from leitura;

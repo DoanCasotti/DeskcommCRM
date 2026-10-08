@@ -90,6 +90,22 @@ export async function updateModuloDaInstalacao(
     return { ok: false, error: "write_failed" };
   }
 
+  // Entre a liberação e a gravação, uma chamada de LLM ainda via a cobrança
+  // ligada e pode ter reaberto o aviso do teto do plano; com a chave já
+  // desligada, ninguém mais o fecharia. Liberar de novo é idempotente. Falhar
+  // aqui não desfaz nada: a chave gravou, e o primeiro passe já rodou.
+  if (liberadas !== null) {
+    const { data, error } = await db.rpc("fn_cobranca_liberar_suspensoes", { p_ator: user.id });
+    if (error) {
+      logger.warn("desligar a cobrança: a segunda liberação falhou; um aviso do plano pode ter ficado aberto", {
+        codigo: error.code,
+        detalhe: error.message,
+      });
+    } else {
+      liberadas += Number(data ?? 0);
+    }
+  }
+
   const hdrs = await headers();
   const quem = {
     actorUserId: user.id,

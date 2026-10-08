@@ -36,6 +36,7 @@
  * só se isto aparecer medido num perfil.
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
+import type pg from "pg";
 
 import { logger } from "@/lib/logger";
 
@@ -200,6 +201,33 @@ export async function moduloLigadoComMemo(
   if (memo !== undefined && memo.ate > agora) return memo.ligado;
   const ligado = await moduloLigado(db, modulo);
   memoDoModulo.set(modulo, { ligado, ate: agora + MEMO_DO_MODULO_MS });
+  return ligado;
+}
+
+/**
+ * A chave da COBRANÇA com o mesmo memo, para quem só tem o pool `pg`: o gate do
+ * LLM (lib/agent-engine/edge/llm/run-model-call.ts), que roda em TODA chamada
+ * com a chave da instalação. Lê pela função que o próprio `fn_limite_do_plano`
+ * consulta. Erro = desligada: o teto do plano não roda e a chamada segue — o
+ * mesmo lado de `lerTetoDoPlano` indisponível.
+ */
+export async function cobrancaLigadaComMemo(
+  db: Pick<pg.Pool, "query">,
+  agora: number = Date.now(),
+): Promise<boolean> {
+  const memo = memoDoModulo.get("cobranca");
+  if (memo !== undefined && memo.ate > agora) return memo.ligado;
+  let ligado = false;
+  try {
+    const { rows } = await db.query<{ ligada: boolean }>("select public.fn_cobranca_ligada() as ligada");
+    ligado = rows[0]?.ligada === true;
+  } catch (erro) {
+    logger.warn("módulos da instalação: leitura da cobrança falhou — tratando como desligada", {
+      codigo: (erro as { code?: unknown } | null)?.code,
+      detalhe: erro instanceof Error ? erro.message : String(erro),
+    });
+  }
+  memoDoModulo.set("cobranca", { ligado, ate: agora + MEMO_DO_MODULO_MS });
   return ligado;
 }
 

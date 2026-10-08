@@ -698,7 +698,9 @@ grant execute on function public.fn_reativar_organizacao(uuid, text, uuid) to se
 
 -- Desligar a chave (§7h) libera toda org suspensa por cobrança pela MESMA porta
 -- de reativação: item na Central, evento e aviso zerado. Nada é cancelado no
--- provedor. Devolve quantas reativou.
+-- provedor. Devolve quantas reativou. E fecha o aviso do teto de IA do PLANO de
+-- toda org: com a chave desligada o gate do LLM nem lê o teto, então ninguém mais
+-- o fecharia, e ele afirmaria uma parada que não existe mais.
 create or replace function public.fn_cobranca_liberar_suspensoes(p_ator uuid)
 returns integer
 language plpgsql
@@ -718,6 +720,8 @@ begin
       v_liberadas := v_liberadas + 1;
     end if;
   end loop;
+  update public.agent_inbox_items set status = 'resolved'
+   where kind = 'budget_exceeded' and ref_kind = 'plano' and status = 'open';
   return v_liberadas;
 end;
 $$;

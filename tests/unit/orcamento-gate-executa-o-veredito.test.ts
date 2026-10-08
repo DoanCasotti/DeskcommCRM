@@ -24,7 +24,7 @@
  * enforcement vivo nunca teve um teste, e uma mudança de semântica atravessava
  * `verify`, `invariants`, `build-and-size` e `e2e` verdes.
  */
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   decidirOrcamento,
@@ -43,6 +43,11 @@ import {
   LlmBudgetExceededError,
   normalizarErro,
 } from "@/lib/agent-engine/edge/llm/run-model-call";
+import { esquecerMemoDosModulos } from "@/lib/instalacao/modulos";
+
+// A chave da cobrança é lida com memo de processo (MEMO_DO_MODULO_MS): sem
+// esquecer, o primeiro caso decidiria a chave de todos os outros.
+beforeEach(() => esquecerMemoDosModulos());
 
 const ORG = "33333333-3333-4333-8333-333333333333";
 
@@ -73,6 +78,8 @@ interface Estado {
   plano?: { teto: number | null; gasto?: string } | "42883";
   /** A organização tem credencial própria: a chave NÃO é a da instalação. */
   byok?: boolean;
+  /** A chave MODULO_COBRANCA (`fn_cobranca_ligada`). Ausente = ligada. */
+  cobranca?: boolean | "erro";
 }
 
 function poolFalso(estado: Estado) {
@@ -82,6 +89,12 @@ function poolFalso(estado: Estado) {
 
   const query = vi.fn(async (sql: string, params: unknown[] = []) => {
     sqls.push(sql);
+    if (sql.includes("fn_cobranca_ligada")) {
+      if (estado.cobranca === "erro") {
+        throw Object.assign(new Error("function public.fn_cobranca_ligada() does not exist"), { code: "42883" });
+      }
+      return { rows: [{ ligada: estado.cobranca ?? true }] };
+    }
     if (sql.includes("fn_limite_do_plano")) {
       if (estado.plano === "42883") {
         throw Object.assign(new Error("function public.fn_limite_do_plano(uuid, text) does not exist"), {
@@ -258,9 +271,9 @@ describe("o gate de orçamento lê ai_budgets e executa o veredito", () => {
       expect(r.lancou).toBe(SENTINELA);
       // O atalho de custo: com 'off' em 100% das organizações no dia do
       // upgrade, o caminho de orçamento faz estritamente MENOS trabalho que o
-      // `assertBudget` de antes, que ia ao banco somar llm_calls. (O statement
-      // do teto do PLANO roda, mas sem teto não soma nada — ver o invariante
-      // tests/invariants/teto-do-plano.test.ts.)
+      // `assertBudget` de antes, que ia ao banco somar llm_calls. (Com a
+      // cobrança desligada o statement do teto do PLANO nem sai — ver "o teto
+      // de IA do plano" abaixo.)
       expect(r.sqls).not.toContain(SQL_ORCAMENTO);
     });
 
@@ -429,6 +442,28 @@ describe("o gate de orçamento lê ai_budgets e executa o veredito", () => {
     it("42883 com o orçamento da org em 'off': a chamada SEGUE (falha aberta)", async () => {
       const r = await chamar({ config: { modo: "off" }, plano: "42883" });
       expect(r.lancou).toBe(SENTINELA);
+    });
+
+    // A instalação de empresa única (a cobrança desligada, o caso de quase
+    // todas) não paga uma ida ao banco por chamada de LLM por uma capacidade
+    // que não usa — o precedente de MEMO_DO_MODULO_MS (lib/instalacao/modulos.ts).
+    it("⭐ cobrança DESLIGADA: o statement do teto do plano nem sai", async () => {
+      const r = await chamar({ cobranca: false, config: { modo: "off" }, plano: ESTOURADO });
+      expect(r.lancou).toBe(SENTINELA);
+      expect(r.sqls.some((s) => s.includes("fn_limite_do_plano"))).toBe(false);
+    });
+
+    it("⭐ a chave da cobrança é lida UMA vez por janela do memo, não a cada chamada", async () => {
+      const primeira = await chamar({ cobranca: false, config: { modo: "off" } });
+      const segunda = await chamar({ cobranca: false, config: { modo: "off" } });
+      expect(primeira.sqls.filter((s) => s.includes("fn_cobranca_ligada"))).toHaveLength(1);
+      expect(segunda.sqls.some((s) => s.includes("fn_cobranca_ligada"))).toBe(false);
+    });
+
+    it("leitura da chave da cobrança falha: o teto do plano não roda e a chamada SEGUE (falha aberta, como o 42883)", async () => {
+      const r = await chamar({ cobranca: "erro", config: { modo: "off" }, plano: ESTOURADO });
+      expect(r.lancou).toBe(SENTINELA);
+      expect(r.sqls.some((s) => s.includes("fn_limite_do_plano"))).toBe(false);
     });
   });
 

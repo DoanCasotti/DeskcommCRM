@@ -10166,7 +10166,14 @@ alter table public.agent_inbox_items
     -- lista pelas razões de sempre (#159; a janela do `midia-nao-lida.test.ts`).
     'jev_pedido_de_humano',
     'jev_parar_de_receber',
-    -- (migration 0584) a cobrança do revendedor fala com a empresa: os avisos
+    -- (migration 0589, issue #2389) A pausa de uma conexão era silenciosa para
+    -- todo mundo menos para quem clicou. O audit registrava `channel.disabled`
+    -- / `channel.enabled`, mas audit é histórico para quem procura, não
+    -- comunicação — a Central é onde a operação inteira olha. O item nasce na
+    -- pausa e se resolve sozinho na retomada ou no arquivamento, com o motivo
+    -- no corpo (laço do canal-mudo-watcher, só que instantâneo).
+    'canal_pausado',
+    -- (migration 0601) a cobrança do revendedor fala com a empresa: os avisos
     -- da régua (teste acabando, venceu, suspende em breve, suspensa) nascem sem
     -- referência, e o de 80% do teto de IA do plano nasce com ref_kind plano. Os
     -- dois abrem Configurações › Plano e cobrança, só para quem administra.
@@ -14499,7 +14506,7 @@ alter table public.webhook_events_log
 alter table public.webhook_events_log
   add constraint webhook_events_log_provider_check check (provider in (
     'waha', 'nuvemshop', 'generic', 'meta_cloud', 'zernio', 'datafy',
-    -- (migration 0584) os provedores de cobrança do revendedor. A linha deles
+    -- (migration 0601) os provedores de cobrança do revendedor. A linha deles
     -- nasce com organization_id nulo e corpo {id,type}: é ponteiro, nunca o
     -- corpo do provedor, e fica invisível ao tenant pela própria policy.
     'stripe', 'asaas'
@@ -45774,6 +45781,877 @@ grant  execute on function public.emit_event(text, text, uuid, jsonb, jsonb, uui
 
 notify pgrst, 'reload schema';
 
+-- ---- relatório por canal: volume, 1ª resposta humana e vazamento (migration 0590) ----
+-- (issue #2390) Mesmo texto da migration, aplicado pelo kit self-host — o apêndice
+-- entra ANTES da VARREDURA anon de propósito: ele cria função.
+create or replace function public.fn_channel_metrics(
+  p_org uuid,
+  p_from timestamptz,
+  p_to timestamptz,
+  p_owner uuid default null
+) returns jsonb
+language sql stable
+set search_path = public
+as $$
+  with
+  -- Conversas da organização na régua de ATRIBUIÇÃO da irmã (0037 §6.5).
+  -- Sem janela AQUI de propósito: cada medida corta na SUA coluna — contagem e
+  -- vazamento em `assigned_at`, 1ª resposta em `first_human_out`. É o mesmo
+  -- desenho da irmã, cujo `ttfr` também não filtra `assigned_at`.
+  conversas as (
+    select
+      c.channel_session_id as channel_session_id,
+      c.channel as channel,
+      c.assigned_at as assigned_at,
+      fr.first_in,
+      fr.first_human_out
+    from public.conversations c
+    cross join lateral (
+      select
+        min(m.sent_at) filter (where m.direction = 'inbound') as first_in,
+        min(m.sent_at) filter (
+          where m.direction = 'outbound' and m.sent_by_user_id is not null
+        ) as first_human_out
+      from public.messages m
+      where m.conversation_id = c.id
+    ) fr
+    where c.organization_id = p_org
+      and c.channel_session_id is not null
+      and c.assigned_to_user_id is not null
+      and (p_owner is null or c.assigned_to_user_id = p_owner)
+  ),
+  -- Uma linha por canal: volume, 1ª resposta humana e vazamento no MESMO
+  -- `group by`, para a soma nunca divergir da média.
+  canais as (
+    select
+      c.channel_session_id,
+      -- O tipo é constante por sessão (0027/0368): `max()` agrupa uma coluna
+      -- funcionalmente dependente, não inventa valor.
+      max(c.channel) as channel,
+      -- Critério 1: volume por canal, janela semiaberta em `assigned_at`.
+      count(*) filter (
+        where c.assigned_at >= p_from and c.assigned_at < p_to
+      ) as conversations_handled,
+      -- Critério 3: o vazamento — conversa da janela que NUNCA teve 1ª resposta
+      -- humana. Conta aqui e só aqui; nunca mexe na média.
+      count(*) filter (
+        where c.assigned_at >= p_from and c.assigned_at < p_to
+          and c.first_human_out is null
+      ) as sem_resposta,
+      -- Critérios 2 e 4: a MESMA fórmula da irmã — bot fora e `t1 <= t0`
+      -- descartado. Sem par válido a média fica `null` (não medida), nunca 0.
+      avg(extract(epoch from (c.first_human_out - c.first_in))) filter (
+        where c.first_in is not null
+          and c.first_human_out is not null
+          and c.first_human_out > c.first_in
+          and c.first_human_out >= p_from and c.first_human_out < p_to
+      ) as avg_first_response_seconds
+    from conversas c
+    group by c.channel_session_id
+  )
+  select jsonb_build_object(
+    'channels', coalesce((
+      select jsonb_agg(
+        jsonb_build_object(
+          'channel_session_id', k.channel_session_id,
+          'channel_name', coalesce(cs.phone_number, cs.display_name, cs.waha_session_name),
+          'channel', k.channel,
+          'is_archived', (cs.archived_at is not null),
+          'conversations_handled', k.conversations_handled,
+          'avg_first_response_seconds', k.avg_first_response_seconds,
+          'sem_resposta', k.sem_resposta
+        ) order by k.conversations_handled desc, k.channel_session_id
+      )
+      from canais k
+      left join public.channel_sessions cs on cs.id = k.channel_session_id
+      -- Critério 5: canal sem atividade na janela não é linha, é ruído — a
+      -- resposta sem dado é `[]` e a tela diz "Sem atividade no período".
+      where k.conversations_handled > 0
+         or k.sem_resposta > 0
+         or k.avg_first_response_seconds is not null
+    ), '[]'::jsonb)
+  );
+$$;
+
+revoke all on function public.fn_channel_metrics(uuid, timestamptz, timestamptz, uuid) from public;
+revoke execute on function public.fn_channel_metrics(uuid, timestamptz, timestamptz, uuid) from anon;
+grant execute on function public.fn_channel_metrics(uuid, timestamptz, timestamptz, uuid)
+  to authenticated, service_role;
+
+notify pgrst, 'reload schema';
+
+-- ---- as tabelas append-only da IA ganham prazo (migration 0587) ----
+-- llm_calls/metrics/skill_activations/ai_router_decisions (400/100),
+-- pacing_ledger (2/2, a última linha do número fica), outbound_copies (30/7,
+-- as últimas windowSize do número ficam) e lead_checkpoints (180/30, só o
+-- superado e sem job vivo). event_log NÃO entra. Corpo IDÊNTICO ao da
+-- migration 0587, com o racional inteiro lá. ANTES da varredura anon: cria
+-- função.
+-- Índices de poda: sem eles o DELETE por idade vira seq scan diário. Nenhuma
+-- das sete tinha índice começando pelo relógio da poda.
+create index if not exists idx_llm_calls_expurgo_created_at
+  on public.llm_calls (created_at) where legacy_invocation_id is null;
+create index if not exists idx_metrics_expurgo_created_at
+  on public.metrics (created_at);
+create index if not exists idx_skill_activations_expurgo_created_at
+  on public.skill_activations (created_at);
+create index if not exists idx_ai_router_decisions_expurgo_created_at
+  on public.ai_router_decisions (created_at);
+create index if not exists idx_pacing_ledger_expurgo_sent_at
+  on public.pacing_ledger (sent_at);
+create index if not exists idx_outbound_copies_expurgo_sent_at
+  on public.outbound_copies (sent_at);
+create index if not exists idx_lead_checkpoints_expurgo_created_at
+  on public.lead_checkpoints (created_at);
+
+-- 1. Telemetria da IA: quatro tabelas, um prazo. Cada tabela leva até
+--    `p_limite` linhas por chamada e o retorno é a SOMA — "soma < limite"
+--    implica que nenhuma das quatro encheu o lote, que é a condição de parada
+--    do laço do cron.
+create or replace function public.fn_expurgar_telemetria_de_ia_vencida(
+  p_retencao_dias int default null,
+  p_limite int default null
+) returns int
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_dias int := greatest(coalesce(p_retencao_dias, 400), 100);
+  v_limite int := least(greatest(coalesce(p_limite, 1000), 1), 10000);
+  v_corte timestamptz := now() - make_interval(days => v_dias);
+  v_n int;
+  v_total int := 0;
+begin
+  with vencidas as (
+    select c.id from public.llm_calls c
+     where c.created_at < v_corte and c.legacy_invocation_id is null
+     order by c.created_at limit v_limite
+  )
+  delete from public.llm_calls c using vencidas v where c.id = v.id;
+  get diagnostics v_n = row_count;
+  v_total := v_total + v_n;
+
+  with vencidas as (
+    select m.id from public.metrics m
+     where m.created_at < v_corte
+     order by m.created_at limit v_limite
+  )
+  delete from public.metrics m using vencidas v where m.id = v.id;
+  get diagnostics v_n = row_count;
+  v_total := v_total + v_n;
+
+  with vencidas as (
+    select s.id from public.skill_activations s
+     where s.created_at < v_corte
+     order by s.created_at limit v_limite
+  )
+  delete from public.skill_activations s using vencidas v where s.id = v.id;
+  get diagnostics v_n = row_count;
+  v_total := v_total + v_n;
+
+  with vencidas as (
+    select r.id from public.ai_router_decisions r
+     where r.created_at < v_corte
+     order by r.created_at limit v_limite
+  )
+  delete from public.ai_router_decisions r using vencidas v where r.id = v.id;
+  get diagnostics v_n = row_count;
+  v_total := v_total + v_n;
+
+  return v_total;
+end;
+$$;
+revoke execute on function public.fn_expurgar_telemetria_de_ia_vencida(int,int) from public, anon, authenticated;
+grant  execute on function public.fn_expurgar_telemetria_de_ia_vencida(int,int) to service_role;
+
+-- 2. Ritmo de envio: a última linha de cada número nunca sai.
+create or replace function public.fn_expurgar_ritmo_de_envio_vencido(
+  p_retencao_dias int default null,
+  p_limite int default null
+) returns int
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_dias int := greatest(coalesce(p_retencao_dias, 2), 2);
+  v_limite int := least(greatest(coalesce(p_limite, 1000), 1), 10000);
+  v_apagadas int;
+begin
+  -- O "existe um mais novo" fica no `where`, ANTES do `limit` (a lição da
+  -- 0167): filtrar depois faria um lote só de últimas linhas devolver 0 e o
+  -- cron parar com backlog atrás.
+  with vencidas as (
+    select p.id from public.pacing_ledger p
+     where p.sent_at < now() - make_interval(days => v_dias)
+       and exists (
+         select 1 from public.pacing_ledger n
+          where n.organization_id = p.organization_id
+            and n.channel_session_id = p.channel_session_id
+            and n.sent_at > p.sent_at
+       )
+     order by p.sent_at limit v_limite
+  )
+  delete from public.pacing_ledger p using vencidas v where p.id = v.id;
+  get diagnostics v_apagadas = row_count;
+  return v_apagadas;
+end;
+$$;
+revoke execute on function public.fn_expurgar_ritmo_de_envio_vencido(int,int) from public, anon, authenticated;
+grant  execute on function public.fn_expurgar_ritmo_de_envio_vencido(int,int) to service_role;
+
+-- 3. Cópias enviadas: nunca as últimas `windowSize` do número.
+create or replace function public.fn_expurgar_copias_enviadas_vencidas(
+  p_retencao_dias int default null,
+  p_limite int default null
+) returns int
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_dias int := greatest(coalesce(p_retencao_dias, 30), 7);
+  v_limite int := least(greatest(coalesce(p_limite, 1000), 1), 10000);
+  v_apagadas int;
+begin
+  with janelas as (
+    -- A janela de cada número, como `loadSpinningKnobs` a resolveria, nunca
+    -- menor que o padrão de 20 (`SPINNING_DEFAULTS.windowSize`).
+    select ck.organization_id, ck.channel_session_id,
+           -- O `case` repete o filtro de propósito: com a CTE embutida no
+           -- plano, nada garante que o `where` rode antes do cast.
+           greatest(20, case when jsonb_typeof(ck.spinning_knobs->'windowSize') = 'number'
+                             then ceil((ck.spinning_knobs->>'windowSize')::numeric) end) as janela
+      from public.channel_knobs ck
+     where jsonb_typeof(ck.spinning_knobs) = 'object'
+       and jsonb_typeof(ck.spinning_knobs->'windowSize') = 'number'
+  ),
+  vencidas as (
+    select o.id from public.outbound_copies o
+      left join janelas j
+        on j.organization_id = o.organization_id and j.channel_session_id = o.channel_session_id
+     where o.sent_at < now() - make_interval(days => v_dias)
+       and coalesce(j.janela, 20) <= 10000
+       and (
+         select count(*) from (
+           select 1 from public.outbound_copies n
+            where n.organization_id = o.organization_id
+              and n.channel_session_id = o.channel_session_id
+              and n.sent_at > o.sent_at
+            -- `least` ANTES do cast: o Postgres não promete avaliar o `<= 10000`
+            -- acima primeiro, e um knob de 1e20 estouraria o `::int` aqui.
+            limit least(coalesce(j.janela, 20), 10000)::int
+         ) mais_novas
+       ) >= coalesce(j.janela, 20)
+     order by o.sent_at limit v_limite
+  )
+  delete from public.outbound_copies o using vencidas v where o.id = v.id;
+  get diagnostics v_apagadas = row_count;
+  return v_apagadas;
+end;
+$$;
+revoke execute on function public.fn_expurgar_copias_enviadas_vencidas(int,int) from public, anon, authenticated;
+grant  execute on function public.fn_expurgar_copias_enviadas_vencidas(int,int) to service_role;
+
+-- 4. Checkpoints: só o superado, de job morto, passado do prazo.
+create or replace function public.fn_expurgar_checkpoints_superados(
+  p_retencao_dias int default null,
+  p_limite int default null
+) returns int
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_dias int := greatest(coalesce(p_retencao_dias, 180), 30);
+  v_limite int := least(greatest(coalesce(p_limite, 1000), 1), 10000);
+  v_apagadas int;
+begin
+  with jobs_vivos as materialized (
+    -- Como texto: o `origin_job_id` vem de payload jsonb, e um cast para uuid
+    -- derrubaria a poda inteira na primeira linha malformada.
+    select j.id::text as ref from public.job_queue j
+     where j.status in ('pending', 'running')
+    union
+    select j.payload->>'origin_job_id' from public.job_queue j
+     where j.status in ('pending', 'running') and j.payload ? 'origin_job_id'
+  ),
+  vencidas as (
+    select k.id from public.lead_checkpoints k
+     where k.created_at < now() - make_interval(days => v_dias)
+       and exists (
+         select 1 from public.lead_checkpoints n
+          where n.organization_id = k.organization_id
+            and n.contact_id = k.contact_id
+            and n.conversation_id is not distinct from k.conversation_id
+            and n.service_revision is not distinct from k.service_revision
+            and n.demanda_id is not distinct from k.demanda_id
+            and n.demanda_revision is not distinct from k.demanda_revision
+            and n.seq > k.seq
+       )
+       and (k.job_id is null
+            or not exists (select 1 from jobs_vivos v where v.ref = k.job_id::text))
+     order by k.created_at limit v_limite
+  )
+  delete from public.lead_checkpoints k using vencidas v where k.id = v.id;
+  get diagnostics v_apagadas = row_count;
+  return v_apagadas;
+end;
+$$;
+revoke execute on function public.fn_expurgar_checkpoints_superados(int,int) from public, anon, authenticated;
+grant  execute on function public.fn_expurgar_checkpoints_superados(int,int) to service_role;
+
+notify pgrst, 'reload schema';
+
+-- ---- a tela de uso de IA agrega no banco, não em JS sobre uma amostra (migration 0586) ----
+-- Entra ANTES da VARREDURA anon (que proíbe create function depois dela). Por
+-- ser invoker, a varredura nem a alcançaria: os revokes abaixo são a proteção.
+--
+-- `/api/v1/ai/usage` buscava as linhas de `llm_calls` e somava em TypeScript.
+-- O PostgREST corta toda resposta em `max_rows` (1000 no `supabase/config.toml`
+-- do kit), e a consulta era em ordem ASCENDENTE: passada a milésima chamada do
+-- período, os dias MAIS RECENTES sumiam da tela — custo, tokens e latência
+-- calculados sobre o começo do mês. O denominador da taxa de passagem para uma
+-- pessoa (`messages` inbound) e o numerador (`event_log`) cortavam do mesmo jeito.
+--
+-- Esta função devolve UM jsonb, e não linhas: uma função que devolvesse tabela
+-- voltaria a passar pelo `max_rows` assim que o período tivesse dias × tipos
+-- suficientes.
+--
+-- `security invoker`, NÃO `definer`: quem chama é a rota com o cliente da
+-- sessão (`authenticated`), e a RLS de `llm_calls`, `messages` e `event_log`
+-- continua sendo quem isola a organização. `p_org` filtra de novo como defesa em
+-- profundidade — e, por ser invoker, um `p_org` alheio devolve zero, não o gasto
+-- de outra empresa (vigiado por tests/invariants/uso-de-ia-agregado-no-banco.test.ts,
+-- que roda no job `invariants` do CI).
+--
+-- Não substitui `fn_gasto_de_ia_do_mes`: aquela é a régua do MÊS que o teto de
+-- orçamento usa; esta responde "o que aconteceu neste período", com a janela que
+-- quem olha escolher.
+--
+-- "Turnos do agente" = jobs distintos com chamada `agent_turn` de status 'ok'.
+-- A chamada que falhou grava `agent_turn` na mesma tabela (status 'erro', custo
+-- null): contar o job dela como turno inventaria respostas que nunca saíram e
+-- puxaria o custo médio por turno para baixo.
+--
+-- O custo do turno é o do JOB inteiro (checkpoint, classificador de etapa,
+-- compactação), e essas chamadas gravam `agent_id` null. Por isso os turnos NÃO
+-- passam pelos filtros de `p_agent_id`/`p_purpose` das outras somas: o agente
+-- escolhe quais jobs entram (pela chamada `agent_turn` dele), e o custo de cada
+-- job é sempre inteiro. Filtrar antes faria o mesmo cartão mostrar um custo por
+-- turno menor com o filtro ligado, e "sem turnos" ao filtrar por outro tipo.
+--
+-- `llm_calls.job_id` é `on delete set null`, então um turno cujo job a poda da
+-- fila já apagou (`JOB_QUEUE_RETENTION_DAYS`, padrão 90) deixa de ser contado —
+-- e o custo dele sai junto do custo por turno, para a média não ficar inflada.
+create or replace function public.fn_uso_de_ia(
+  p_org uuid,
+  p_desde timestamptz,
+  p_ate timestamptz,
+  p_agent_id uuid default null,
+  p_purpose text default null
+)
+returns jsonb
+  language sql
+  stable
+  security invoker
+  set search_path to 'public', 'pg_temp'
+as $$
+  with chamadas as (
+    select (c.created_at at time zone 'UTC')::date as dia,
+           c.purpose,
+           c.cost_cents,
+           c.input_tokens,
+           c.output_tokens,
+           c.cache_read_tokens,
+           c.cache_write_tokens,
+           c.latency_ms
+      from public.llm_calls c
+     where c.organization_id = p_org
+       and c.created_at >= p_desde
+       and c.created_at <= p_ate
+       and (p_agent_id is null or c.agent_id = p_agent_id)
+       and (p_purpose is null or c.purpose = p_purpose)
+  ),
+  jobs_de_turno as (
+    select distinct c.job_id
+      from public.llm_calls c
+     where c.organization_id = p_org
+       and c.created_at >= p_desde
+       and c.created_at <= p_ate
+       and c.purpose = 'agent_turn'
+       and c.status = 'ok'
+       and c.job_id is not null
+       and (p_agent_id is null or c.agent_id = p_agent_id)
+  ),
+  turnos as (
+    select (select count(*) from jobs_de_turno) as turnos,
+           coalesce(sum(c.cost_cents), 0) as custo_dos_turnos_cents
+      from public.llm_calls c
+      join jobs_de_turno t on t.job_id = c.job_id
+     where c.organization_id = p_org
+       and c.created_at >= p_desde
+       and c.created_at <= p_ate
+  ),
+  agregado as (
+    select grouping(dia) as sem_dia,
+           grouping(purpose) as sem_purpose,
+           dia,
+           purpose,
+           count(*) as chamadas,
+           coalesce(sum(cost_cents), 0) as custo_cents,
+           coalesce(sum(input_tokens), 0) as input_tokens,
+           coalesce(sum(output_tokens), 0) as output_tokens,
+           coalesce(sum(cache_read_tokens), 0) as cache_read_tokens,
+           coalesce(sum(cache_write_tokens), 0) as cache_write_tokens,
+           coalesce(percentile_disc(0.5) within group (order by latency_ms) filter (where latency_ms > 0), 0) as p50_latency_ms,
+           coalesce(percentile_disc(0.95) within group (order by latency_ms) filter (where latency_ms > 0), 0) as p95_latency_ms
+      from chamadas
+     group by grouping sets ((dia), (purpose), ())
+  ),
+  inbounds as (
+    select (m.created_at at time zone 'UTC')::date as dia, count(*) as n
+      from public.messages m
+     where m.organization_id = p_org
+       and m.direction = 'inbound'
+       and m.created_at >= p_desde
+       and m.created_at <= p_ate
+     group by 1
+  ),
+  handoffs as (
+    select (e.created_at at time zone 'UTC')::date as dia, count(*) as n
+      from public.event_log e
+     where e.organization_id = p_org
+       and e.event_type = 'ai.handoff_triggered'
+       and e.created_at >= p_desde
+       and e.created_at <= p_ate
+     group by 1
+  )
+  select jsonb_build_object(
+    'totais', (select (to_jsonb(a) - 'sem_dia' - 'sem_purpose' - 'dia' - 'purpose') || to_jsonb(tr)
+                 from agregado a, turnos tr where a.sem_dia = 1 and a.sem_purpose = 1),
+    'dias', coalesce((select jsonb_agg(to_jsonb(a) - 'sem_dia' - 'sem_purpose' - 'purpose' order by a.dia)
+                        from agregado a where a.sem_dia = 0), '[]'::jsonb),
+    'purposes', coalesce((select jsonb_agg(to_jsonb(a) - 'sem_dia' - 'sem_purpose' - 'dia' order by a.purpose)
+                            from agregado a where a.sem_dia = 1 and a.sem_purpose = 0), '[]'::jsonb),
+    'inbounds', coalesce((select jsonb_object_agg(i.dia::text, i.n) from inbounds i), '{}'::jsonb),
+    'handoffs', coalesce((select jsonb_object_agg(h.dia::text, h.n) from handoffs h), '{}'::jsonb)
+  );
+$$;
+
+comment on function public.fn_uso_de_ia(uuid, timestamptz, timestamptz, uuid, text) is
+  'Uso de IA da organização num período, agregado no banco para a tela Uso de IA (/api/v1/ai/usage): totais, por dia (UTC) e por purpose de llm_calls — custo, tokens, cache, p50/p95 de latência de UMA chamada, turnos do agente (jobs distintos com agent_turn ok, sem os filtros de agente/purpose sobre o custo do job) e o custo desses turnos, só nos totais — mais inbounds e ai.handoff_triggered por dia. Devolve jsonb para não passar pelo max_rows do PostgREST. security invoker: a RLS isola; p_org é defesa em profundidade. Não é a régua do teto mensal (fn_gasto_de_ia_do_mes).';
+
+revoke execute on function public.fn_uso_de_ia(uuid, timestamptz, timestamptz, uuid, text)
+  from public, anon;
+grant  execute on function public.fn_uso_de_ia(uuid, timestamptz, timestamptz, uuid, text)
+  to authenticated, service_role;
+-- ---- cifragem at-rest do CPF: encrypt_cpf / decrypt_cpf (migration 0597, issue #2522) ----
+-- Racional e a história do defeito: cabeçalho da 0597. ANTES da VARREDURA anon,
+-- porque cria função. Corpo IDÊNTICO ao da migration — quem aplica a cadeia e
+-- quem aplica o baseline ficam com a mesma função (`apendice-do-baseline-nao-diverge`).
+--
+-- Sem chave levanta `CPF_ENCRYPTION_KEY ausente` (régua da `fn_encrypt_oauth`); o
+-- chamador grava então a linha SEM CPF, nunca `cpf_hash` sem `cpf_encrypted` —
+-- é o CHECK `contacts_cpf_consistency` que recusava a linha inteira (#2522).
+
+create extension if not exists pgcrypto with schema extensions;
+
+create schema if not exists private;
+create table if not exists private.app_secrets (
+  name text primary key,
+  value text not null,
+  updated_at timestamptz not null default now()
+);
+revoke all on schema private from public;
+revoke all on all tables in schema private from public;
+
+-- Fonte da chave da cifra de CPF: GUC `app.cpf_key` como override, senão a
+-- linha `cpf_key` de private.app_secrets (mesma precedência de private.fn_oauth_key).
+create or replace function private.fn_cpf_key() returns text
+    language sql security definer
+    set search_path to 'private', 'pg_temp'
+    as $$
+  select coalesce(
+    nullif(current_setting('app.cpf_key', true), ''),
+    (select value from private.app_secrets where name = 'cpf_key')
+  );
+$$;
+revoke all on function private.fn_cpf_key() from public;
+
+create or replace function public.encrypt_cpf(p_plaintext text) returns bytea
+    language plpgsql security definer
+    set search_path to 'public', 'private', 'extensions', 'pg_temp'
+    as $$
+declare
+  k text := private.fn_cpf_key();
+begin
+  if k is null or length(k) < 32 then
+    raise exception 'CPF_ENCRYPTION_KEY ausente';
+  end if;
+  return pgp_sym_encrypt(p_plaintext, k, 'cipher-algo=aes256');
+end$$;
+
+create or replace function public.decrypt_cpf(p_contact_id uuid) returns text
+    language plpgsql security definer
+    set search_path to 'public', 'private', 'extensions', 'pg_temp'
+    as $$
+declare
+  v_cipher bytea;
+  v_org    uuid;
+begin
+  select cpf_encrypted, organization_id into v_cipher, v_org
+    from public.contacts where id = p_contact_id;
+
+  -- Guardas na MESMA ordem da 0240 (#754): null, depois o piso medido, depois a
+  -- cara de pacote PGP, e só então decifra — `get_byte` em bytea vazio estoura.
+  -- `contacts.cpf_encrypted` é nullable (não há linha de enfeite), mas cifra nova
+  -- carrega guarda nova: é o que a catraca `credencial-de-enfeite` cobra.
+  if v_cipher is null then return null; end if;
+  if octet_length(v_cipher) < 66 then
+    raise exception 'cpf_ciphertext_invalido';
+  end if;
+  if get_byte(v_cipher, 0) < 128 then
+    raise exception 'cpf_ciphertext_invalido';
+  end if;
+
+  -- Tenancy: só quem pertence à organização do contato (ou platform admin).
+  -- `fn_user_org_ids()` devolve SETOF uuid — a spec 02 escrevia
+  -- `x.organization_id`, que não compila contra a assinatura real.
+  if not exists (
+    select 1 from public.fn_user_org_ids() o where o = v_org
+  ) and not public.fn_is_platform_admin() then
+    raise exception 'forbidden_org';
+  end if;
+
+  -- Papel: a mesma régua de getContactHandler (manager+), conferida também
+  -- dentro da função, como fazem as funções irmãs.
+  if not public.fn_role_at_least(v_org, 'manager') and not public.fn_is_platform_admin() then
+    raise exception 'forbidden_role';
+  end if;
+
+  -- Audit antes do plaintext: decrypt sem rastro é decrypt que a LGPD não vê.
+  insert into public.api_audit_log
+    (organization_id, actor_user_id, action, resource_type, resource_id, metadata)
+  values
+    (v_org, auth.uid(), 'contact.cpf_decrypted', 'contact', p_contact_id,
+     jsonb_build_object('purpose', current_setting('app.decrypt_purpose', true)));
+
+  return pgp_sym_decrypt(v_cipher, private.fn_cpf_key());
+end$$;
+
+revoke execute on function public.encrypt_cpf(text) from public, anon;
+grant  execute on function public.encrypt_cpf(text) to authenticated, service_role;
+
+revoke execute on function public.decrypt_cpf(uuid) from public, anon;
+grant  execute on function public.decrypt_cpf(uuid) to authenticated, service_role;
+
+notify pgrst, 'reload schema';
+-- ---- o recorte da janela ANTES do lateral nas métricas (migration 0596, #2514) ----
+-- (issue #2514) Mesmo texto da migration, aplicado pelo kit self-host — o apêndice
+-- entra ANTES da VARREDURA anon de propósito: ele cria função.
+-- `fn_attendant_metrics` (0037/0266) e `fn_channel_metrics` (0590) ganham o conjunto de
+-- candidatas antes do `cross join lateral`; o resto do corpo, inclusive o filtro da janela
+-- dentro do agregado, é o mesmo de antes. O porquê de cada predicado está na migration.
+
+create or replace function public.fn_attendant_metrics(
+  p_org uuid,
+  p_from timestamptz,
+  p_to timestamptz,
+  p_owner uuid default null
+) returns jsonb
+language sql stable
+set search_path = public
+as $$
+  with
+  lead_agg as (
+    select
+      owner_user_id as user_id,
+      count(*) filter (where status = 'won')  as won,
+      count(*) filter (
+        where status = 'lost'
+          -- A transferência entre funis não é perda comercial (migration 0266).
+          and coalesce(lost_reason, '') <> 'moved_to_another_pipeline'
+      ) as lost
+    from public.crm_leads
+    where organization_id = p_org
+      and status in ('won', 'lost')
+      and closed_at >= p_from and closed_at < p_to
+      and owner_user_id is not null
+      and (p_owner is null or owner_user_id = p_owner)
+    group by owner_user_id
+  ),
+  conv_agg as (
+    select
+      assigned_to_user_id as user_id,
+      count(*) as conversations_handled
+    from public.conversations
+    where organization_id = p_org
+      and assigned_to_user_id is not null
+      and assigned_at >= p_from and assigned_at < p_to
+      and (p_owner is null or assigned_to_user_id = p_owner)
+    group by assigned_to_user_id
+  ),
+  -- (0235) Chamada de voz ATENDIDA conta como trabalho.
+  --
+  -- Quem passa o dia ao telefone tinha produtividade zero nesta função: ela
+  -- lia negócios fechados, conversas atribuídas e primeira resposta por
+  -- MENSAGEM, e nenhuma das três enxerga uma ligação.
+  --
+  -- `owner_user_id` é quem esteve NA LINHA (a rota de atender grava; a ponte de
+  -- eventos confirma pelo `owner` do upstream) — e não `created_by`, que só
+  -- existe na chamada iniciada pelo CRM e diria zero para toda ligação
+  -- recebida. `answered_at is not null` é o que separa trabalho de telefone
+  -- tocando.
+  voice_agg as (
+    select
+      owner_user_id as user_id,
+      count(*) as calls_answered,
+      coalesce(sum(duration_ms), 0)::bigint as call_ms
+    from public.voice_calls
+    where organization_id = p_org
+      and owner_user_id is not null
+      and answered_at is not null
+      and answered_at >= p_from and answered_at < p_to
+      and (p_owner is null or owner_user_id = p_owner)
+    group by owner_user_id
+  ),
+  -- ─── #2514: o recorte ANTES do lateral, não depois dele ────────────────────
+  --
+  -- O `ttfr` media a 1ª resposta humana de TODA conversa atribuída da
+  -- organização: o `cross join lateral` rodava uma vez por conversa e a janela
+  -- só entrava no filtro do agregado. 1 dia e 90 dias faziam o mesmo trabalho
+  -- (medido: 13,9 s contra 15,8 s), e o dashboard chama isso com janela curta a
+  -- cada visita.
+  --
+  -- O candidato é EXATO, não uma margem: a média só pode nascer de conversa cuja
+  -- 1ª resposta humana cai na janela (`fr.first_human_out >= p_from and <
+  -- p_to`, predicado que já existia), e toda conversa assim tem UMA mensagem
+  -- humana de saída na janela — é justamente ela a 1ª. O que
+  -- `ttfr_candidatas` deixa de fora não passava daquele filtro de qualquer
+  -- forma: não era contagem, não era vazamento, só pagava o lateral.
+  --
+  -- O custo do candidato acompanha a JANELA: `idx_messages_org_direction_sent`
+  -- (0133) cobre o predicado inteiro, `(organization_id, direction, sent_at)`.
+  ttfr_candidatas as (
+    select distinct m.conversation_id
+    from public.messages m
+    where m.organization_id = p_org
+      and m.direction = 'outbound'
+      and m.sent_by_user_id is not null
+      and m.sent_at >= p_from
+      and m.sent_at < p_to
+  ),
+  ttfr as (
+    select
+      c.assigned_to_user_id as user_id,
+      avg(extract(epoch from (fr.first_human_out - fr.first_in))) as avg_first_response_seconds
+    from public.conversations c
+    -- A linha de fora do candidato nunca entrou na média; ela só existia para
+    -- ser varrida. O lateral e o filtro de baixo estão INTACTOS.
+    join ttfr_candidatas k on k.conversation_id = c.id
+    cross join lateral (
+      select
+        min(m.sent_at) filter (where m.direction = 'inbound') as first_in,
+        min(m.sent_at) filter (
+          where m.direction = 'outbound' and m.sent_by_user_id is not null
+        ) as first_human_out
+      from public.messages m
+      where m.conversation_id = c.id
+    ) fr
+    where c.organization_id = p_org
+      and c.assigned_to_user_id is not null
+      and (p_owner is null or c.assigned_to_user_id = p_owner)
+      and fr.first_in is not null
+      and fr.first_human_out is not null
+      and fr.first_human_out > fr.first_in
+      and fr.first_human_out >= p_from and fr.first_human_out < p_to
+    group by c.assigned_to_user_id
+  ),
+  attendant_ids as (
+    select user_id from lead_agg
+    union select user_id from conv_agg
+    union select user_id from ttfr
+    union select user_id from voice_agg
+  )
+  select jsonb_build_object(
+    'funnel', coalesce((
+      select jsonb_agg(
+        jsonb_build_object(
+          'stage_id', s.id,
+          'stage_name', s.name,
+          'position', s.position,
+          'count', coalesce(l.cnt, 0)
+        ) order by s.position, s.name
+      )
+      from public.crm_stages s
+      left join (
+        select stage_id, count(*) as cnt
+        from public.crm_leads
+        where organization_id = p_org
+          and status = 'open'
+          and (p_owner is null or owner_user_id = p_owner)
+        group by stage_id
+      ) l on l.stage_id = s.id
+      where s.organization_id = p_org
+        and s.is_archived = false
+    ), '[]'::jsonb),
+    'attendants', coalesce((
+      select jsonb_agg(
+        jsonb_build_object(
+          'user_id', a.user_id,
+          'won', coalesce(la.won, 0),
+          'lost', coalesce(la.lost, 0),
+          'conversations_handled', coalesce(ca.conversations_handled, 0),
+          'avg_first_response_seconds', tf.avg_first_response_seconds,
+          'calls_answered', coalesce(va.calls_answered, 0),
+          'call_seconds', (coalesce(va.call_ms, 0) / 1000)::bigint
+        ) order by coalesce(la.won, 0) desc, a.user_id
+      )
+      from attendant_ids a
+      left join lead_agg la on la.user_id = a.user_id
+      left join conv_agg ca on ca.user_id = a.user_id
+      left join ttfr tf on tf.user_id = a.user_id
+      left join voice_agg va on va.user_id = a.user_id
+    ), '[]'::jsonb)
+  );
+$$;
+
+create or replace function public.fn_channel_metrics(
+  p_org uuid,
+  p_from timestamptz,
+  p_to timestamptz,
+  p_owner uuid default null
+) returns jsonb
+language sql stable
+set search_path = public
+as $$
+  with
+  -- ─── #2514: o recorte ANTES do lateral, não depois dele ────────────────────
+  --
+  -- A irmã lia TODA conversa da organização com `channel_session_id` e pagava o
+  -- lateral (`messages`, com a RLS de `messages` por linha) para cada uma; a
+  -- janela só cortava dentro do agregado, então 1 dia e 90 dias custavam igual
+  -- (medido: 13,971 s contra 14,068 s).
+  --
+  -- As duas condições são as que a SAÍDA exige, e nada mais:
+  --
+  --   (a) `assigned_at` na janela — é o predicado de `conversations_handled` e
+  --       de `sem_resposta`, que já existia no `count(*) filter`;
+  --   (b) mensagem humana de saída na janela — é o caso necessário de
+  --       `first_human_out >= p_from and < p_to`: toda conversa cuja 1ª
+  --       resposta humana cai na janela TEM uma mensagem humana de saída na
+  --       janela, porque a 1ª é uma delas.
+  --
+  -- Linha que fica de fora não movia nenhum número: contagem 0, vazamento 0,
+  -- média nula. Ela só pagava o lateral. O `UNION` deduplica as que são as duas
+  -- coisas ao mesmo tempo.
+  --
+  -- Custos cobertos por índice que já existe, um para cada ramo:
+  -- `idx_conversations_org_assignee_assigned` (0037) em (a) e
+  -- `idx_messages_org_direction_sent` (0133) em (b).
+  candidatas as (
+    -- (a) recorte da contagem e do vazamento: janela semiaberta em
+    -- `assigned_at`, com o resto dos predicados do `conv_agg` da irmã — são os
+    -- mesmos que o `where` de `conversas` já exige, e juntos casam com o índice.
+    select c.id
+    from public.conversations c
+    where c.organization_id = p_org
+      and c.assigned_to_user_id is not null
+      and c.channel_session_id is not null
+      and c.assigned_at >= p_from and c.assigned_at < p_to
+      and (p_owner is null or c.assigned_to_user_id = p_owner)
+    union
+    -- (b) recorte da média: 1ª resposta humana na janela.
+    select c.id
+    from public.messages m
+    join public.conversations c on c.id = m.conversation_id
+    where m.organization_id = p_org
+      and m.direction = 'outbound'
+      and m.sent_by_user_id is not null
+      and m.sent_at >= p_from
+      and m.sent_at < p_to
+  ),
+  -- Uma linha por conversa na régua de ATRIBUIÇÃO da irmã (0037 §6.5).
+  -- O lateral e o seu `where` estão intactos: o que mudou é que ele roda para as
+  -- candidatas, e não para a organização inteira.
+  conversas as (
+    select
+      c.channel_session_id as channel_session_id,
+      c.channel as channel,
+      c.assigned_at as assigned_at,
+      fr.first_in,
+      fr.first_human_out
+    from public.conversations c
+    join candidatas k on k.id = c.id
+    cross join lateral (
+      select
+        min(m.sent_at) filter (where m.direction = 'inbound') as first_in,
+        min(m.sent_at) filter (
+          where m.direction = 'outbound' and m.sent_by_user_id is not null
+        ) as first_human_out
+      from public.messages m
+      where m.conversation_id = c.id
+    ) fr
+    where c.organization_id = p_org
+      and c.channel_session_id is not null
+      and c.assigned_to_user_id is not null
+      and (p_owner is null or c.assigned_to_user_id = p_owner)
+  ),
+  -- Uma linha por canal: volume, 1ª resposta humana e vazamento no MESMO
+  -- `group by`, para a soma nunca divergir da média.
+  canais as (
+    select
+      c.channel_session_id,
+      -- O tipo é constante por sessão (0027/0368): `max()` agrupa uma coluna
+      -- funcionalmente dependente, não inventa valor.
+      max(c.channel) as channel,
+      -- Critério 1: volume por canal, janela semiaberta em `assigned_at`.
+      count(*) filter (
+        where c.assigned_at >= p_from and c.assigned_at < p_to
+      ) as conversations_handled,
+      -- Critério 3: o vazamento — conversa da janela que NUNCA teve 1ª resposta
+      -- humana. Conta aqui e só aqui; nunca mexe na média.
+      count(*) filter (
+        where c.assigned_at >= p_from and c.assigned_at < p_to
+          and c.first_human_out is null
+      ) as sem_resposta,
+      -- Critérios 2 e 4: a MESMA fórmula da irmã — bot fora e `t1 <= t0`
+      -- descartado. Sem par válido a média fica `null` (não medida), nunca 0.
+      avg(extract(epoch from (c.first_human_out - c.first_in))) filter (
+        where c.first_in is not null
+          and c.first_human_out is not null
+          and c.first_human_out > c.first_in
+          and c.first_human_out >= p_from and c.first_human_out < p_to
+      ) as avg_first_response_seconds
+    from conversas c
+    group by c.channel_session_id
+  )
+  select jsonb_build_object(
+    'channels', coalesce((
+      select jsonb_agg(
+        jsonb_build_object(
+          'channel_session_id', k.channel_session_id,
+          'channel_name', coalesce(cs.phone_number, cs.display_name, cs.waha_session_name),
+          'channel', k.channel,
+          'is_archived', (cs.archived_at is not null),
+          'conversations_handled', k.conversations_handled,
+          'avg_first_response_seconds', k.avg_first_response_seconds,
+          'sem_resposta', k.sem_resposta
+        ) order by k.conversations_handled desc, k.channel_session_id
+      )
+      from canais k
+      left join public.channel_sessions cs on cs.id = k.channel_session_id
+      -- Critério 5: canal sem atividade na janela não é linha, é ruído — a
+      -- resposta sem dado é `[]` e a tela diz "Sem atividade no período".
+      where k.conversations_handled > 0
+         or k.sem_resposta > 0
+         or k.avg_first_response_seconds is not null
+    ), '[]'::jsonb)
+  );
+$$;
+
 -- ---- cobrança do revendedor: planos e limites (migration 0583) ----
 -- Capacidade do núcleo com chave da instalação (spec cobrança do revendedor
 -- §2, §5). Corpo e porquê: a migration 0583, copiada seção a seção, byte a
@@ -46450,7 +47328,9 @@ grant execute on function public.fn_reativar_organizacao(uuid, text, uuid) to se
 
 -- Desligar a chave (§7h) libera toda org suspensa por cobrança pela MESMA porta
 -- de reativação: item na Central, evento e aviso zerado. Nada é cancelado no
--- provedor. Devolve quantas reativou.
+-- provedor. Devolve quantas reativou. E fecha o aviso do teto de IA do PLANO de
+-- toda org: com a chave desligada o gate do LLM nem lê o teto, então ninguém mais
+-- o fecharia, e ele afirmaria uma parada que não existe mais.
 create or replace function public.fn_cobranca_liberar_suspensoes(p_ator uuid)
 returns integer
 language plpgsql
@@ -46470,6 +47350,8 @@ begin
       v_liberadas := v_liberadas + 1;
     end if;
   end loop;
+  update public.agent_inbox_items set status = 'resolved'
+   where kind = 'budget_exceeded' and ref_kind = 'plano' and status = 'open';
   return v_liberadas;
 end;
 $$;
@@ -46477,9 +47359,168 @@ $$;
 revoke execute on function public.fn_cobranca_liberar_suspensoes(uuid) from public, anon, authenticated;
 grant execute on function public.fn_cobranca_liberar_suspensoes(uuid) to service_role;
 
--- ---- cobrança do revendedor: webhook, avisos e reconciliação (migration 0584) ----
+-- ---- publicar agente com login por assinatura (migration 0592, #2456/#1639) ----
+-- Para `custom` e `openai-assinatura`, o modelo é conferido na lista que o
+-- endpoint autenticado devolveu (`models_available` da credencial da versão),
+-- não no catálogo global `ai_models`. Substitui o corpo do bloco da 0418 acima
+-- (a última definição vence). Racional inteiro no cabeçalho da migration; a
+-- definição abaixo é a MESMA, byte a byte.
+create or replace function public.fn_publish_ai_agent_version(
+  p_org_id uuid,
+  p_agent_id uuid,
+  p_version_id uuid,
+  p_platform_credential_verified boolean,
+  p_expected_provenance text
+)
+returns table (
+  agent_id uuid,
+  version_id uuid,
+  previous_version_id uuid,
+  published_at timestamptz
+)
+language plpgsql
+security definer
+set search_path to 'public'
+as $$
+declare
+  v_agent record;
+  v_version record;
+  v_credential record;
+  v_session record;
+  v_model_count integer;
+  v_previous_version_id uuid;
+  v_published_at timestamptz := now();
+begin
+  select a.id, a.organization_id, a.published_version_id, a.archived_at
+    into v_agent
+  from public.ai_agents a
+  where a.id = p_agent_id
+  for update;
+
+  if not found then
+    raise exception 'agent_not_found' using errcode = 'P0001';
+  end if;
+  if v_agent.organization_id <> p_org_id then
+    raise exception 'agent_not_found' using errcode = 'P0001';
+  end if;
+  if v_agent.archived_at is not null then
+    raise exception 'agent_archived' using errcode = 'P0001';
+  end if;
+
+  select v.id, v.organization_id, v.agent_id, v.status, v.provider, v.model,
+         v.credential_id, v.channel_session_id, v.provisioning_origin
+    into v_version
+  from public.ai_agent_versions v
+  where v.id = p_version_id
+  for update;
+
+  if not found then
+    raise exception 'version_not_found' using errcode = 'P0001';
+  end if;
+  if v_version.agent_id <> p_agent_id or v_version.organization_id <> p_org_id then
+    raise exception 'version_not_found' using errcode = 'P0001';
+  end if;
+  if p_expected_provenance is not null and (
+    p_expected_provenance not in('onboarding','legacy_reconciliation') or
+    v_version.provisioning_origin is distinct from p_expected_provenance or
+    (select count(*) from public.ai_agent_versions own_version where own_version.organization_id=p_org_id and own_version.agent_id=p_agent_id)<>1
+  ) then raise exception 'existing_version_requires_review' using errcode='P0001';end if;
+  if v_version.status not in ('draft', 'superseded') then
+    raise exception 'version_invalid_state' using errcode = 'P0001';
+  end if;
+
+  if v_version.credential_id is null and p_platform_credential_verified is not true then
+    raise exception 'credential_missing' using errcode = 'P0001';
+  end if;
+
+  if v_version.credential_id is not null then
+  select c.id, c.organization_id, c.provider, c.is_active, c.validated_at,
+         c.models_available
+    into v_credential
+  from public.ai_provider_credentials c
+  where c.id = v_version.credential_id;
+
+  if not found or v_credential.organization_id <> p_org_id then
+    raise exception 'credential_not_found' using errcode = 'P0001';
+  end if;
+  if not v_credential.is_active then
+    raise exception 'credential_inactive' using errcode = 'P0001';
+  end if;
+  if v_credential.validated_at is null then
+    raise exception 'credential_not_validated' using errcode = 'P0001';
+  end if;
+  if v_credential.provider <> v_version.provider then
+    raise exception 'credential_provider_mismatch' using errcode = 'P0001';
+  end if;
+
+  end if;
+
+  select s.id, s.organization_id, s.status
+    into v_session
+  from public.channel_sessions s
+  where s.id = v_version.channel_session_id;
+
+  if not found or v_session.organization_id <> p_org_id then
+    raise exception 'channel_session_not_found' using errcode = 'P0001';
+  end if;
+  if v_session.status <> 'WORKING' then
+    raise exception 'channel_session_offline' using errcode = 'P0001';
+  end if;
+
+  -- `custom` e o login por assinatura consultam um catálogo autenticado ou
+  -- específico da empresa; quem confirma que o modelo existe é a lista
+  -- gravada na credencial já conferida acima. Não usar `ai_models`, que é
+  -- global entre organizações.
+  if v_version.provider in ('custom', 'openai-assinatura') then
+    if v_version.credential_id is null then
+      raise exception 'model_not_found' using errcode = 'P0001';
+    end if;
+    if not (v_version.model = any(coalesce(v_credential.models_available, '{}'::text[]))) then
+      raise exception 'model_not_found' using errcode = 'P0001';
+    end if;
+  else
+    select count(*)
+      into v_model_count
+    from public.ai_models m
+    where m.provider = v_version.provider
+      and m.model_id = v_version.model
+      and m.deprecated_at is null;
+
+    if v_model_count = 0 then
+      raise exception 'model_not_found' using errcode = 'P0001';
+    end if;
+  end if;
+
+  v_previous_version_id := v_agent.published_version_id;
+
+  if v_previous_version_id is not null and v_previous_version_id <> p_version_id then
+    update public.ai_agent_versions
+       set status = 'superseded', superseded_at = v_published_at
+     where id = v_previous_version_id;
+  end if;
+
+  update public.ai_agent_versions
+     set status = 'published',
+         published_at = v_published_at,
+         superseded_at = null
+   where id = p_version_id;
+
+  update public.ai_agents
+     set published_version_id = p_version_id,
+         updated_at = v_published_at
+   where id = p_agent_id;
+
+  return query
+    select p_agent_id, p_version_id, v_previous_version_id, v_published_at;
+end;
+$$;
+
+revoke execute on function public.fn_publish_ai_agent_version(uuid,uuid,uuid,boolean,text) from public,anon,authenticated;
+grant execute on function public.fn_publish_ai_agent_version(uuid,uuid,uuid,boolean,text) to service_role;
+
+-- ---- cobrança do revendedor: webhook, avisos e reconciliação (migration 0601) ----
 -- Spec cobrança do revendedor §2.4, §2.5, §8. Corpo e porquê: a migration
--- 0584, copiada seção a seção, byte a byte. As seções que alargam CHECK (A e C)
+-- 0601, copiada seção a seção, byte a byte. As seções que alargam CHECK (A e C)
 -- editam o bloco único de cada constraint, mais acima; aqui só o que é novo.
 -- ANTES da VARREDURA anon porque cria função; DEPOIS do bloco do PR 2.
 
@@ -48765,6 +49806,133 @@ where l.id = repetidas.id
 create unique index if not exists uniq_comanda_do_ganho_por_negocio
   on public.crm_lead_links (organization_id, lead_id)
   where link_kind = 'comanda_no_ganho';
+
+
+
+-- ---- índices do caminho quente e da poda (migration 0585) ----
+--
+-- Cinco buscas rodavam sem índice que as servisse, e todas crescem com o uso:
+--
+-- 1. `send_ledger` por contato. "1º outbound" (`countPriorAcceptedSends`,
+--    disclosure e LGPD) conta envios `accepted` do contato DENTRO da transação
+--    que segura o lock do número; `ultimaInboundJaRespondida` procura envio
+--    `accepted`/`queued` do mesmo contato a cada turno. Nenhum índice começava
+--    por contato (o de busca é (organization_id, created_at)). O predicado
+--    cobre os dois status porque `status = 'accepted'` implica
+--    `status in ('accepted','queued')`: um índice serve as duas consultas.
+--    Custo aceito: `status` entra no predicado, então a troca de status de um
+--    envio deixa de ser HOT update — uma escrita a mais por envio, contra uma
+--    varredura por contato a cada turno.
+-- 2. `llm_calls.job_id`. `recordRunMetrics` soma as chamadas do run por job_id,
+--    e o `on delete set null` vindo de `job_queue` faz a poda diária
+--    (`fn_podar_fila_de_jobs`, até 1000 jobs por chamada) varrer a tabela uma vez
+--    por job apagado.
+-- 3/4. `lead_checkpoints.job_id` e `lead_state_transitions.job_id`: o mesmo
+--    `on delete set null`, a mesma varredura por job apagado.
+-- 5. `event_log` em `processing`. Dois polls fixos procuram eventos presos: o
+--    reaper do drain do agente (a cada tick, por event_type) e o do dreno geral
+--    (só status + updated_at). Os índices parciais existentes são de `pending`
+--    e `dead`. A chave é `event_type`, e NÃO `updated_at`: o trigger
+--    `trg_event_log_touch` reescreve updated_at em todo update, e indexá-lo tiraria
+--    o HOT update de toda escrita na tabela. `processing` é transitório, então o
+--    índice fica pequeno e o filtro de updated_at roda sobre poucas linhas.
+--
+-- Sem CONCURRENTLY, como no resto deste arquivo: um build concorrente que falha
+-- deixa o índice INVÁLIDO de pé, e o `if not exists` do update seguinte o pula
+-- para sempre. O update trava escrita nessas tabelas pelo tempo de construir
+-- cada índice.
+-- Sem função nova (nada a revogar de anon).
+
+create index if not exists idx_send_ledger_contato_entregue
+  on public.send_ledger (organization_id, contact_id)
+  where status in ('accepted', 'queued');
+
+create index if not exists idx_llm_calls_job_id
+  on public.llm_calls (job_id)
+  where job_id is not null;
+
+create index if not exists idx_lead_checkpoints_job_id
+  on public.lead_checkpoints (job_id)
+  where job_id is not null;
+
+create index if not exists idx_lead_state_transitions_job_id
+  on public.lead_state_transitions (job_id)
+  where job_id is not null;
+
+create index if not exists event_log_processing_por_tipo_idx
+  on public.event_log (event_type)
+  where status = 'processing';
+
+-- ---- dedupe do aviso de canal pausado: índice único parcial (migration 0589) ----
+-- Um canal pausado = um aviso aberto, garantido pelo banco: duas pausas
+-- simultâneas leriam "nenhum aberto" e inseririam dois. O segundo INSERT
+-- recebe 23505 e `lib/channels/central-de-pausa.ts` o trata como "a outra
+-- rodada já abriu". O kind entrou no bloco ÚNICO de
+-- `agent_inbox_items_kind_check`; cabeçalho da 0589 para o racional inteiro.
+with repetidas as (
+  select id,
+         row_number() over (
+           partition by organization_id, kind, ref_id
+           order by created_at asc, id asc
+         ) as ordem
+    from public.agent_inbox_items
+   where status = 'open'
+     and kind = 'canal_pausado'
+)
+update public.agent_inbox_items i
+   set status = 'resolved',
+       resolved_at = now()
+  from repetidas r
+ where i.id = r.id
+   and r.ordem > 1;
+
+create unique index if not exists agent_inbox_canal_pausado_aberto_unico
+  on public.agent_inbox_items (organization_id, kind, ref_id)
+  where status = 'open' and kind = 'canal_pausado';
+
+-- ---- Campos personalizados nos formulários de captação (migration 0595) ----
+alter table public.webhook_sources
+  add column if not exists form_fields jsonb not null default '[]'::jsonb;
+
+comment on column public.webhook_sources.form_fields is
+  'Definições dos campos adicionais que o formulário HTML gerado por esta fonte exibe; valores submetidos continuam em crm_leads.custom_fields e webhook_lead_captures.fields.';
+
+notify pgrst, 'reload schema';
+
+-- ---- Gemini 3.5 Flash-Lite no catálogo Google (migration 0599) ----
+-- manifest: Gemini 3.5 Flash-Lite no catálogo Google, com preço Standard em ambas as tabelas.
+-- Fonte (06/10/2026): https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash-lite
+-- Preço: https://ai.google.dev/gemini-api/docs/pricing
+-- O sincronizador automático só consulta a OpenRouter; modelos Google são curados.
+
+insert into public.ai_models
+  (provider, model_id, display_name, description, context_window,
+   input_price_per_million_cents, output_price_per_million_cents,
+   supports_tools, supports_vision, is_default_for_provider, deprecated_at)
+values
+  ('google', 'gemini-3.5-flash-lite', 'Gemini 3.5 Flash-Lite',
+   'Modelo Google de baixa latência para atendimento com ferramentas; aceita texto, imagem, áudio, vídeo e PDF.',
+   1048576, 30, 250, true, true, false, null)
+on conflict (provider, model_id) do update set
+  display_name = excluded.display_name,
+  description = excluded.description,
+  context_window = excluded.context_window,
+  input_price_per_million_cents = excluded.input_price_per_million_cents,
+  output_price_per_million_cents = excluded.output_price_per_million_cents,
+  supports_tools = excluded.supports_tools,
+  supports_vision = excluded.supports_vision,
+  deprecated_at = null;
+
+insert into public.ai_pricing
+  (model, prompt_cents_per_million_tokens, completion_cents_per_million_tokens, notes)
+values
+  ('gemini-3.5-flash-lite', 30, 250,
+   'catálogo 0599 — Google Gemini API Standard, 06/10/2026; cache e armazenamento cobrados à parte')
+on conflict (model) do update set
+  prompt_cents_per_million_tokens = excluded.prompt_cents_per_million_tokens,
+  completion_cents_per_million_tokens = excluded.completion_cents_per_million_tokens,
+  notes = excluded.notes,
+  superseded_at = null;
 
 -- ---- cobrança do revendedor: o aviso do teto do plano não é calado pelo do orçamento (migration 0583) ----
 -- Seção G da 0583, byte a byte. No FIM do arquivo, e não no bloco da cobrança

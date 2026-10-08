@@ -107,6 +107,31 @@ describe("o teto de IA do plano no Postgres real", () => {
     expect(abertos(ORG, "plano")).toBe(1);
   });
 
+  // LAÇO DE RETORNO quando o teto SOME: a empresa ficou isenta (DELETE da
+  // assinatura) ou o plano perdeu o teto. O gate devolve 'sem_teto' e a IA volta
+  // a responder; o aviso "As conversas foram para a equipe" não pode ficar aceso
+  // afirmando uma parada que não existe mais — a régua do SQL_ORCAMENTO.
+  it("⭐ empresa sem teto (isenta): o item do plano fecha na chamada seguinte", () => {
+    ligarCobranca(true);
+    abrirItem(ORG_B, "plano");
+    expect(rodarTeto(ORG_B)).toEqual({ teto: "", gasto: "" });
+    expect(abertos(ORG_B, "plano"), "o aviso do plano ficou aceso depois de o teto sumir").toBe(0);
+  });
+
+  it("⭐ desligar a cobrança fecha o aviso do plano de TODA empresa", () => {
+    // Com a cobrança desligada o gate nem lê o teto (memo de módulos), então
+    // quem fecha é o ato de desligar: fn_cobranca_liberar_suspensoes, a mesma
+    // função que solta as empresas suspensas por cobrança.
+    ligarCobranca(true);
+    // O caso "gasto no teto" acima deixa o item de ORG aberto (um por org, 0583 G).
+    if (abertos(ORG, "plano") === 0) abrirItem(ORG, "plano");
+    abrirItem(ORG_B, "plano");
+    expect(abertos(ORG, "plano") + abertos(ORG_B, "plano")).toBe(2);
+    sql(`select public.fn_cobranca_liberar_suspensoes(null);`);
+    expect(abertos(ORG, "plano"), "desligar a cobrança deixou o aviso do plano aceso").toBe(0);
+    expect(abertos(ORG_B, "plano"), "desligar a cobrança deixou o aviso do plano aceso").toBe(0);
+  });
+
   it("⭐ a retrata do orçamento da org fecha o item dela e o legado, NUNCA o do plano", () => {
     // O item do orçamento e o legado sem ref_kind são a MESMA família no
     // índice da 0540 (um aberto por org; o do plano tem o seu, 0583 seção G):
