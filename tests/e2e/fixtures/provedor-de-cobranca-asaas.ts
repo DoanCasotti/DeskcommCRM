@@ -25,7 +25,7 @@
  * `enviarAvisoForjado` (token errado) e `enviarAvisoMentiroso` (token CERTO,
  * corpo que jura "pago": o token vazou).
  */
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomInt } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 const FUSO = "America/Sao_Paulo";
@@ -150,7 +150,7 @@ function completar(base: number[], p1: number[], p2: number[]): string {
   const um = digitoVerificador(base, p1);
   return [...base, um, digitoVerificador([...base, um], p2)].join("");
 }
-const aleatorios = (n: number) => [...randomBytes(n)].map((b) => b % 10);
+const aleatorios = (n: number) => Array.from({ length: n }, () => randomInt(10));
 /** CPF de teste com verificador certo, gerado agora (nunca um número fixo de alguém). */
 export const gerarCpf = (): string => completar(aleatorios(9), PESOS_CPF_1, PESOS_CPF_2);
 /** CNPJ de teste (matriz 0001) com verificador certo, gerado agora. */
