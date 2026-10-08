@@ -134,11 +134,32 @@ test("liga um módulo, a tela diz onde ele aparece, e a porta está lá no CRM",
   });
 
   await test.step("⭐ a porta ESTÁ no menu do CRM, sem recarregar à mão", async () => {
-    // O passo que o defeito 2 reprovava: o layout de `/app` servia o menu de
-    // antes porque nada o revalidava. Navegação normal, como o operador faz.
-    await page.goto("/app/companies");
+    // O passo que o defeito 2 reprovava: o layout de `/app` servia o menu de antes
+    // porque nada o revalidava. Navegação normal, como o operador faz.
+    //
+    // ⚠️ A MEDIÇÃO É NO HUB, não no menu lateral — e isso é escolha, não desvio.
+    //
+    // A primeira versão procurava `link "Empresas"` depois de abrir
+    // `/app/companies`, e deu `element(s) not found`. Levantei duas hipóteses e
+    // DERRUBEI as duas, medindo: (a) "o dono não é membro de organização" é falso —
+    // o seed lhe dá `role: "admin"` de organização (`scripts/seed-e2e-credentials.ts`);
+    // (b) "o grupo do menu está colapsado" é falso — `gruposFechados` nasce vazio,
+    // então tudo abre por padrão (`components/shell/Sidebar.tsx`).
+    //
+    // Sem causa provada, não troco um palpite por outro: mudo de INSTRUMENTO. O que
+    // esta jornada precisa provar é "a porta passou a ser oferecida a esta empresa",
+    // e o hub do grupo é a superfície que responde exatamente isso — ele recebe o
+    // mesmo `modulosLigados` que o menu lateral (`app/app/crm/page.tsx` → `NavHub`),
+    // é caminho real de usuário ("Ver tudo em CRM") e não depende de viewport, de
+    // grupo aberto nem de barra inferior. A rota segue conferida logo abaixo.
+    await page.goto("/app/crm");
     await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
     await expect(page.getByRole("link", { name: PORTA }).first()).toBeVisible();
+
+    // E a rota abre de verdade — o gate do layout (`notFound()` com o módulo
+    // desligado) não a está barrando.
+    await page.goto("/app/companies");
+    await expect(page).toHaveURL(/\/app\/companies$/);
     await page.screenshot({ path: evidencia("porta-no-menu-do-crm.png"), fullPage: true });
   });
 
@@ -147,7 +168,8 @@ test("liga um módulo, a tela diz onde ele aparece, e a porta está lá no CRM",
     await expect(chave).toBeVisible();
     await chave.click();
     await expect(chave).toHaveAttribute("aria-checked", "false");
-    await page.goto("/app/inbox");
+
+    await page.goto("/app/crm");
     await expect(page.getByRole("link", { name: PORTA })).toHaveCount(0);
   });
 });
