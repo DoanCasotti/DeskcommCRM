@@ -77,12 +77,14 @@ test.describe("cobrança — contra a Stripe de verdade, em modo teste", () => {
     const orgs: string[] = [];
     const contextos: BrowserContext[] = [];
     let cliente: string | null = null;
+    let emailB: string | null = null;
     let endpointId: string | null = null;
     let planoId: string | null = null;
     let falha: unknown;
     try {
       const dono = await criarPessoa("stripe-dono", sufixo);
       const adminB = await criarPessoa("stripe-admin-b", sufixo);
+      emailB = adminB.email;
       pessoas.push(dono.id, adminB.id);
       const agora = new Date().toISOString();
       const orgDono = await inserir("organizations", { slug: `stripe-dono-${sufixo}`, display_name: `Dono ${sufixo}`, legal_name: "Dono", onboarded_at: agora });
@@ -134,6 +136,12 @@ test.describe("cobrança — contra a Stripe de verdade, em modo teste", () => {
       await pB.locator("#cardExpiry").fill("12 / 34");
       await pB.locator("#cardCvc").fill("123");
       await pB.locator("#billingName").fill("Assinante de Teste");
+      // O Checkout escolhe o país pelo IP de quem abre: de uma VPS nos EUA ele pede
+      // CEP americano, e o Link ("Salve minhas informações") vem marcado pedindo
+      // telefone. Brasil e Link desmarcado: o formulário que o cliente daqui vê.
+      await pB.locator("#billingCountry").selectOption("BR");
+      const salvar = pB.getByRole("checkbox", { name: /Salve minhas informações|Save my info/i });
+      if (await salvar.isChecked().catch(() => false)) await salvar.uncheck();
       await pB.getByTestId("hosted-payment-submit-button").click();
       await pB.waitForURL(/\/app\/settings\/billing\?voltou=1/, { timeout: 90_000 });
       await expect(pB.getByText(/1ª cobrança agendada/)).toBeVisible({ timeout: 60_000 });
@@ -189,7 +197,15 @@ test.describe("cobrança — contra a Stripe de verdade, em modo teste", () => {
         test.info().annotations.push({ type: "cleanup", description: `chaves não restauradas: ${e instanceof Error ? e.message : String(e)}` });
       }
       for (const [o, f] of [
-        ["cliente", () => (cliente ? stripe("DELETE", `/customers/${cliente}`) : null)],
+        ["cliente", async () => {
+          if (cliente) return stripe("DELETE", `/customers/${cliente}`);
+          // Falhou antes de ler o cliente (ex.: no checkout): ele já pode existir na
+          // Stripe. O e-mail do assinante é único por rodada.
+          if (!emailB) return null;
+          const achados = await stripe<{ data: Array<{ id: string }> }>("GET", `/customers?email=${encodeURIComponent(emailB)}&limit=10`);
+          for (const c of achados.data) await stripe("DELETE", `/customers/${c.id}`);
+          return null;
+        }],
         ["endpoint", () => (endpointId ? stripe("DELETE", `/webhook_endpoints/${endpointId}`) : null)],
       ] as const) {
         try {
