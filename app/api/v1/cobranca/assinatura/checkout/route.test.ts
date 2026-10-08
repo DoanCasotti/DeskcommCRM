@@ -173,6 +173,12 @@ describe("checkout da assinatura", () => {
     expect(filtros(escritas[1]!)).toContainEqual(["eq", "checkout_expira_em", reserva.checkout_expira_em]);
   });
 
+  it("⭐ a gravação do link confere também o plano que o gerou", async () => {
+    await assinar();
+    const escritas = h.banco.cadeias.filter((c) => c.tabela === "cobranca_assinaturas" && operacao(c) === "update");
+    expect(filtros(escritas[1]!)).toContainEqual(["eq", "plano_id", EM_TESTE.plano_id]);
+  });
+
   it("⭐ erro que não é do provedor (banco na fase 3): 500 no envelope com X-Request-Id, logado sem segredo, reserva liberada", async () => {
     let escritas = 0;
     const base = responder;

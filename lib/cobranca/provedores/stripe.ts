@@ -51,8 +51,8 @@ export const STRIPE_API_BASE = "https://api.stripe.com/v1";
  * Subscription e Invoice, e passa a responder erro "Failed Tax Calculation" em
  * Billing/Checkout. (Remover `payment_method_types` do Checkout não nos pega:
  * nenhum código ou brief o envia.) Subir para a endive é decisão da Task 22, que
- * prova contra a conta de teste; essa prova (scripts/smoke-stripe.ts) ainda NÃO
- * existe.
+ * prova contra a conta de teste: essa prova é scripts/smoke-stripe.ts (fora do
+ * CI), que roda na STRIPE_VERSION daqui — trocar a constante e rodá-lo.
  */
 export const STRIPE_VERSION = "2026-08-26.dahlia";
 

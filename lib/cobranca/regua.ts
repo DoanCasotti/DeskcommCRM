@@ -24,7 +24,7 @@ const JANELA_DO_AVISO_FINAL_MS = 2 * DIA_MS;
 const ESPERA_DEPOIS_DO_AVISO_FINAL_MS = 48 * HORA_MS;
 const LEITURA_FRESCA_MS = HORA_MS;
 const ANTECEDENCIA_DO_FIM_DO_TESTE_MS = 3 * DIA_MS;
-/** Suspensa e ainda devendo: um lembrete por semana, com o link de pagamento no e-mail. */
+/** Suspensa e ainda devendo: um lembrete por semana, com o caminho para pagar no e-mail. */
 const LEMBRETE_DA_SUSPENSAO_MS = 7 * DIA_MS;
 
 export interface AssinaturaNaRegua {

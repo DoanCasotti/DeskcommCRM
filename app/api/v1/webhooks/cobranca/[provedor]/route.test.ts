@@ -87,7 +87,7 @@ describe("webhook da cobrança", () => {
     expect((await pedido()).status).toBe(401);
     expect(doLog("insert").map((c) => argumentos(c, "insert")?.[0])).toEqual([
       {
-        organization_id: null, provider: "stripe", raw_body: "{}", headers: null, signature_header: "t=1,v1=ab",
+        organization_id: null, provider: "stripe", raw_body: "{}", headers: null, signature_header: null,
         valid_signature: false, external_id: null, status: "error", error_message: "assinatura_invalida",
       },
     ]);

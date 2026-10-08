@@ -245,6 +245,8 @@ async function gerarCheckout(
     .eq("organization_id", orgId)
     .eq("checkout_expira_em", quem.reserva)
     .is("checkout_url", null)
+    // O link vale só para o plano com que foi gerado.
+    .eq("plano_id", lida.plano_id)
     .select("organization_id")
     .maybeSingle();
   if (error || !gravada) throw new Error(`cobranca: link de pagamento não gravado (${error?.code ?? "reserva_perdida"})`);

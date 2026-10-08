@@ -42,7 +42,7 @@ const trocar = (planoId: string, origem?: "empresa" | "dono") =>
     origem,
   });
 const escritas = () => banco.cadeias.filter((c) => c.tabela === "cobranca_assinaturas" && operacao(c) === "update");
-const EM_TESTE = { plano_id: "basico", plano_agendado_id: null, estado: "trial", trial_ate: "2026-10-20T00:00:00Z", provedor: null, provedor_assinatura_id: null, proximo_vencimento: null, checkout_url: null };
+const EM_TESTE = { plano_id: "basico", plano_agendado_id: null, estado: "trial", trial_ate: "2026-10-20T00:00:00Z", provedor: null, provedor_assinatura_id: null, proximo_vencimento: null, checkout_url: null, checkout_expira_em: null };
 const PAGANDO = { ...EM_TESTE, estado: "ativa", provedor: "stripe", provedor_assinatura_id: "sub_1", proximo_vencimento: "2026-11-01T00:00:00Z" };
 
 beforeEach(() => {
@@ -157,6 +157,19 @@ describe("trocarPlanoDaOrg", () => {
       m.linha = { ...PAGANDO, plano_id: "atualx", plano_agendado_id: "pro" };
       expect(await trocar("atualx")).toMatchObject({ ok: true, quando: "agendado", planoAgendadoId: null });
     } finally { PLANOS.pop(); }
+  });
+
+  it("⭐ teste grátis com link de pagamento em aberto: a troca é recusada com 409 checkout_em_aberto e nada muda", async () => {
+    m.linha = { ...EM_TESTE, provedor: "stripe", checkout_url: "https://pagar.exemplo/s1", checkout_expira_em: "2026-10-10T13:00:00Z" };
+    expect(await trocar("pro")).toMatchObject({ ok: false, status: 409, code: "checkout_em_aberto" });
+    expect(escritas()).toEqual([]);
+    expect(trocarNoProvedor).not.toHaveBeenCalled();
+  });
+
+  it("teste grátis com link de pagamento já expirado: a troca vale na hora e o link sai junto", async () => {
+    m.linha = { ...EM_TESTE, provedor: "stripe", checkout_url: "https://pagar.exemplo/s1", checkout_expira_em: "2026-10-10T11:00:00Z" };
+    expect(await trocar("pro")).toMatchObject({ ok: true, quando: "imediato", planoId: "pro" });
+    expect(argumentos(escritas()[0]!, "update")?.[0]).toMatchObject({ plano_id: "pro", checkout_url: null, checkout_expira_em: null });
   });
 
   it("desfazer o agendamento com uso acima do plano atual não dá 409 plan_limit_reached", async () => {

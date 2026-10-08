@@ -75,13 +75,14 @@ export async function POST(req: NextRequest, { params }: Rota) {
     // Recusa de segurança deixa rastro que o dono VÊ: a Visão geral conta estas
     // linhas (Task 38). Um segredo trocado à mão faria todo aviso voltar 401 em
     // silêncio, e a Stripe desativaria o endpoint em 3 dias. Sem org, sem id e
-    // sem cabeçalhos; a retenção de 90 dias poda.
+    // sem cabeçalhos — nem o de assinatura, que aqui é texto livre de quem não se
+    // autenticou; a retenção de 90 dias poda.
     await admin.from("webhook_events_log").insert({
       organization_id: null,
       provider: provedor,
       raw_body: "{}",
       headers: null,
-      signature_header: assinatura,
+      signature_header: null,
       valid_signature: false,
       external_id: null,
       status: "error",

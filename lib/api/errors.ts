@@ -137,6 +137,8 @@ export const ApiErrorCodes = {
   url_publica_invalida: "url_publica_invalida",
   // Outro clique está gerando o link de pagamento desta empresa (reserva de 2 min).
   checkout_em_preparo: "checkout_em_preparo",
+  // Troca de plano recusada enquanto houver link de pagamento em aberto.
+  checkout_em_aberto: "checkout_em_aberto",
   // Já existe assinatura esperando o 1º pagamento (`details.link_de_pagamento`).
   pagamento_em_andamento: "pagamento_em_andamento",
   // Tornar isenta exige cancelar antes no provedor.

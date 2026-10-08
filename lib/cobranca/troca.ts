@@ -10,6 +10,8 @@
  *   - depois do teste, com provedor: fica AGENDADA e vira na próxima cobrança
  *     paga (`aplicarLeitura`) — subir no dia 1 e descer no dia 28 não compensa;
  *   - em dívida, ou teste vencido sem assinatura: recusa ("regularize antes");
+ *   - teste com link de pagamento em aberto e sem assinatura: recusa até o link
+ *     ser pago ou expirar (`checkout_em_aberto`);
  *   - uso acima do plano novo: recusa com a lista do que remover (D-4).
  * O provedor é chamado ANTES da escrita e fora de transação; a escrita é um
  * compare-and-set no plano E no agendamento lidos. Se a escrita não acontece
@@ -46,6 +48,7 @@ interface Atual {
   provedor_assinatura_id: string | null;
   proximo_vencimento: string | null;
   checkout_url: string | null;
+  checkout_expira_em: string | null;
 }
 interface Plano {
   id: string;
@@ -82,7 +85,7 @@ export async function trocarPlanoDaOrg(
   const agora = (deps.agora ?? (() => new Date()))();
   const { data: lida, error } = await admin
     .from("cobranca_assinaturas")
-    .select("plano_id, plano_agendado_id, estado, trial_ate, provedor, provedor_assinatura_id, proximo_vencimento, checkout_url")
+    .select("plano_id, plano_agendado_id, estado, trial_ate, provedor, provedor_assinatura_id, proximo_vencimento, checkout_url, checkout_expira_em")
     .eq("organization_id", orgId)
     .maybeSingle();
   if (error) return recusa(500, "internal_error", "Não foi possível ler a assinatura.");
@@ -106,6 +109,11 @@ export async function trocarPlanoDaOrg(
   const desfazendo = novo !== null && novo.id === atual.plano_id;
   if (!novo || !antigo || (!desfazendo && (novo.arquivado_em !== null || novo.intervalo !== antigo.intervalo))) {
     return recusa(422, "plano_invalido", "Escolha um plano ativo com o mesmo intervalo de cobrança.");
+  }
+  // Enquanto houver link de pagamento em aberto, o plano não muda.
+  const linkEmAberto = atual.checkout_url !== null && atual.checkout_expira_em !== null && Date.parse(atual.checkout_expira_em) > agora.getTime();
+  if (!desfazendo && emTeste && atual.provedor && !atual.provedor_assinatura_id && linkEmAberto) {
+    return recusa(409, "checkout_em_aberto", "Há um link de pagamento em aberto com o plano atual. Conclua o pagamento ou aguarde o link expirar para trocar de plano.");
   }
   if (!desfazendo) {
     // Plano negociado: só o dono atribui (a tela da empresa nem o lista).
@@ -170,9 +178,10 @@ export async function trocarPlanoDaOrg(
         plano_id: novo.id,
         plano_agendado_id: null,
         updated_at: agora.toISOString(),
-        // Link de checkout pendente saiu com o preço antigo: o próximo "Assinar" gera outro.
-        // Com a assinatura já no provedor (o Asaas a cria no Assinar), o provedor acabou
-        // de pôr o preço novo na fatura aberta: o link é o mesmo e fica.
+        // O link em aberto sem assinatura já foi recusado acima; o que sobra sai junto, e o
+        // próximo "Assinar" parte do plano gravado. Com a assinatura já no provedor (o Asaas a
+        // cria no Assinar), o provedor acabou de pôr o preço novo na fatura aberta: o link é o
+        // mesmo e fica.
         ...(atual.checkout_url && !provedorDaTroca ? { checkout_url: null, checkout_expira_em: null } : {}),
       }
     : { plano_agendado_id: novo.id === atual.plano_id ? null : novo.id, updated_at: agora.toISOString() };

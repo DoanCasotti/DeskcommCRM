@@ -14956,6 +14956,7 @@ export const DICIONARIO: Traducoes = {
   "O provedor de pagamento não respondeu. Nada mudou; tente de novo em alguns minutos.": { es: "El proveedor de pago no respondió. Nada cambió; inténtalo de nuevo en unos minutos." },
   "O provedor de pagamento recusou o pedido. Fale com quem administra o sistema.": { es: "El proveedor de pago rechazó la solicitud. Habla con quien administra el sistema." },
   "Já estamos gerando o seu link de pagamento. Aguarde alguns segundos.": { es: "Ya estamos generando tu enlace de pago. Espera unos segundos." },
+  "Há um link de pagamento em aberto com o plano atual. Conclua o pagamento ou aguarde o link expirar para trocar de plano.": { es: "Hay un enlace de pago abierto con el plan actual. Completa el pago o espera a que el enlace expire para cambiar de plan." },
   "Você já tem um pagamento em andamento. Use o link para concluir.": { es: "Ya tienes un pago en curso. Usa el enlace para completarlo." },
   "O administrador do sistema ainda não conectou a cobrança.": { es: "El administrador del sistema aún no conectó el cobro." },
   "Sua empresa não tem plano de cobrança.": { es: "Tu empresa no tiene plan de cobro." },

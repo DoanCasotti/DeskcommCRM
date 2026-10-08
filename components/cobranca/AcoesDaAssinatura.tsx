@@ -45,6 +45,7 @@ const FRASE_DO_ERRO: Record<string, string> = {
   provedor_indisponivel: "O provedor de pagamento não respondeu. Nada mudou; tente de novo em alguns minutos.",
   provedor_recusou: "O provedor de pagamento recusou o pedido. Fale com quem administra o sistema.",
   checkout_em_preparo: "Já estamos gerando o seu link de pagamento. Aguarde alguns segundos.",
+  checkout_em_aberto: "Há um link de pagamento em aberto com o plano atual. Conclua o pagamento ou aguarde o link expirar para trocar de plano.",
   pagamento_em_andamento: "Você já tem um pagamento em andamento. Use o link para concluir.",
   sem_link_de_pagamento: "Não há cobrança aberta para pagar agora. Atualize o cartão em Gerenciar pagamento: a próxima tentativa sai sozinha.",
   provedor_nao_conectado: "O administrador do sistema ainda não conectou a cobrança.",
