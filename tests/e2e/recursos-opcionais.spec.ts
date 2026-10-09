@@ -143,6 +143,11 @@ test("liga um módulo, a tela diz onde ele aparece, e a porta está lá no CRM",
     await esperarModuloNoBanco(false);
     // A frase é o conserto: sem ela o operador liga e não sabe para onde olhar.
     //
+    // ⚠️ O CAMINHO INCLUI O PASSO DO HUB ("Ver tudo em CRM"), e é isso que a opção B entrega. Este
+    // regex já ficou velho uma vez: eu mudei o texto da tela e esqueci a spec, então ela cobrava
+    // "CRM › Empresas" e a tela dizia "CRM › Ver tudo em CRM › Empresas". Teste que afirma texto
+    // de tela envelhece junto com a tela.
+    //
     // ⚠️ ANCORADA NO MÓDULO, e com `^`. A primeira versão só procurava "Ao ligar,
     // aparece no menu em:" e o Playwright recusou em strict mode: resolveu para
     // QUATRO elementos, um por módulo com interruptor. O vermelho foi bom — ele
@@ -150,7 +155,7 @@ test("liga um módulo, a tela diz onde ele aparece, e a porta está lá no CRM",
     // inclusive "Configurações › Dados externos", que é a exceção do grupo do
     // rodapé. Mas asserção que casa com quatro linhas não diz qual delas mediu.
     await expect(
-      page.getByText(/^Ao ligar, aparece no menu em: CRM › Empresas, CRM › Pessoas/),
+      page.getByText(/^Ao ligar, aparece no menu em: CRM › Ver tudo em CRM › Empresas/),
     ).toBeVisible();
     await page.screenshot({ path: evidencia("modulo-desligado-diz-onde.png"), fullPage: true });
   });
@@ -162,7 +167,7 @@ test("liga um módulo, a tela diz onde ele aparece, e a porta está lá no CRM",
     // `^` separa os dois estados: "Ao ligar, aparece…" CONTÉM "aparece no menu
     // em:", e sem a âncora o caso de ligado passaria com a frase de desligado.
     await expect(
-      page.getByText(/^Aparece no menu em: CRM › Empresas, CRM › Pessoas/),
+      page.getByText(/^Aparece no menu em: CRM › Ver tudo em CRM › Empresas/),
     ).toBeVisible();
     await page.screenshot({ path: evidencia("modulo-ligado-diz-onde.png"), fullPage: true });
   });

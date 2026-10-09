@@ -15,6 +15,9 @@
  * - preset `simplificada` → lista do PRODUTO. Não pode ser lida como decisão da
  *   empresa sobre uma porta que ela nunca viu na tela.
  */
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import { NAV_CATALOG, NAV_GROUPS, type NavMetadata } from "@/lib/navigation/catalogo";
@@ -278,5 +281,56 @@ describe("a exceção da porta de módulo sobrevive ao caminho de produção", (
       [],
     ).map((d) => d.href);
     expect(sem).not.toContain(porta);
+  });
+});
+
+/**
+ * ⚠️ A FRASE DA TELA E A FRASE DA SPEC TÊM DE SER A MESMA, e este caso é a amarra.
+ *
+ * A spec de e2e afirma o texto do caminho (`^Ao ligar, aparece no menu em: CRM › Ver tudo em
+ * CRM › Empresas`). Quando a opção B acrescentou o passo do hub, eu mudei a tela e ESQUECI a spec:
+ * ela cobrava "CRM › Empresas", a tela dizia "CRM › Ver tudo em CRM › Empresas", e o único aviso
+ * foi uma rodada de e2e de 16 minutos — a quinta seguida vermelha no mesmo arquivo.
+ *
+ * Este caso compara a spec com a FONTE (`ondeOModuloAparece`), que é o que a tela renderiza. Ele é
+ * barato, roda no `verify` e reprova em segundos, antes de o e2e ser gasto.
+ */
+describe("a spec de e2e cita o caminho que a fonte produz", () => {
+  it("⭐ o texto afirmado na spec bate com o que ondeOModuloAparece devolve", () => {
+    const spec = readFileSync(
+      join(__dirname, "..", "..", "tests", "e2e", "recursos-opcionais.spec.ts"),
+      "utf8",
+    );
+    const primeira = ondeOModuloAparece("crm_b2b")[0]!;
+    const esperado = primeira.hub
+      ? `${primeira.grupo} › ${primeira.hub} › ${primeira.label}`
+      : `${primeira.grupo} › ${primeira.label}`;
+
+    /**
+     * ⚠️ SÓ OS LITERAIS DE `getByText`, nunca o arquivo inteiro.
+     *
+     * A primeira versão fazia `expect(spec).toContain(esperado)` sobre o texto bruto — e passou na
+     * sabotagem, porque o COMENTÁRIO que explica esta guarda cita "CRM › Empresas" como exemplo do
+     * texto velho. A sonda estava contando o próprio comentário. É o modo de falha mais discreto
+     * que existe num gate de texto: ele fica verde por causa da prosa que o descreve.
+     */
+    const afirmados = [...spec.matchAll(/getByText\(\/\^([^/]+)\//g)].map((m) => m[1]!);
+
+    // Controle de vivacidade: se a spec deixar de afirmar a frase, este caso perde o objeto e
+    // precisa sair junto — em vez de ficar verde medindo nada.
+    // Dois literais: o de desligado ("Ao ligar, aparece…") e o de ligado ("Aparece…"). Menos que
+    // isso significa que a spec parou de afirmar um dos estados, e aí esta guarda perdeu objeto.
+    //
+    // ⚠️ A comparação é pelo CAMINHO, não pela frase. A versão anterior exigia que todo literal
+    // contivesse "aparece no menu em:" e reprovou sozinha: "Aparece no menu em:" começa com
+    // maiúscula e não contém a forma minúscula. Caixa já me pegou três vezes hoje; o invariante
+    // que importa aqui é o caminho, que é o que envelhece quando a tela muda.
+    expect(afirmados.length).toBeGreaterThanOrEqual(2);
+    //
+    // ⚠️ ANCORADO EM ": ", e não no caminho solto. Sem a âncora a sabotagem PASSA por coincidência
+    // de rótulo: o hub do CRM se chama "Ver tudo em CRM", então
+    // "…: CRM › Ver tudo em CRM › Empresas" contém "CRM › Empresas" como substring. A guarda
+    // cobriria a classe e deixaria passar justamente o módulo que ela nasceu para vigiar.
+    for (const afirmado of afirmados) expect(afirmado).toContain(`: ${esperado}`);
   });
 });
