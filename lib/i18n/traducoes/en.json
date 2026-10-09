@@ -8993,5 +8993,21 @@
   "Remova opções repetidas.": "Remove repeated options.",
   "O formulário pode ter até 20 perguntas.": "The form can have up to 20 questions.",
   "Cada pergunta precisa ter uma chave diferente.": "Each question needs a different key.",
-  "Revise os campos do formulário.": "Review the form fields."
+  "Revise os campos do formulário.": "Review the form fields.",
+  "Agendar pausa": "Schedule pause",
+  "Janela de manutenção": "Maintenance window",
+  "A pausa e a retomada acontecem sozinhas no horário marcado. A mensagem que chegar durante a pausa fica gravada e volta na retomada.": "The pause and the resume happen on their own at the marked time. Any message that arrives during the pause is stored and comes back when it resumes.",
+  "A pausa começa (hora local)": "Pause starts (local time)",
+  "A pausa termina (hora local)": "Pause ends (local time)",
+  "Fuso da organização": "Organization timezone",
+  "Para todas as conexões": "For all connections",
+  "Janelas agendadas": "Scheduled windows",
+  "Cancelar janela": "Cancel window",
+  "Agendando…": "Scheduling…",
+  "Informe os dois horários da janela.": "Enter both times of the window.",
+  "O fim precisa ser depois do início.": "The end must come after the start.",
+  "Janela agendada: a pausa e a retomada acontecem sozinhas.": "Window scheduled: the pause and the resume happen on their own.",
+  "Não foi possível agendar a janela.": "Could not schedule the window.",
+  "Janela cancelada. O que ela já pausou continua pausado.": "Window cancelled. Whatever it already paused stays paused.",
+  "Não foi possível cancelar a janela.": "Could not cancel the window."
 }
