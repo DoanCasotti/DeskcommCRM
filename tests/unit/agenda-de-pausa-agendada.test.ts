@@ -50,9 +50,13 @@ vi.mock("@/lib/env", () => ({
 }));
 vi.mock("@/lib/audit", () => ({ audit: vi.fn(async () => undefined) }));
 vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: vi.fn() }));
+vi.mock("@/lib/channels/central-de-pausa", () => ({
+  sincronizarAvisoDePausa: vi.fn(async () => "aberto"),
+}));
 
 import { audit } from "@/lib/audit";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { sincronizarAvisoDePausa } from "@/lib/channels/central-de-pausa";
 import {
   acaoDaAgenda,
   canalElegivelParaPausa,
@@ -66,6 +70,7 @@ const AUTOR = "99999999-9999-4999-8999-999999999999";
 const AGENDA = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const CANAL_A = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const CANAL_B = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+const AGENDA_2 = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
 
 type Linha = Record<string, unknown>;
 type Filtro = { metodo: string; args: unknown[] };
@@ -296,6 +301,90 @@ describe("channel-pause-scheduler — o cron aplica a janela", () => {
     expect(captura.rpc).toHaveLength(0);
     expect(captura.updates).toHaveLength(0);
     expect(agendas[0]).toMatchObject({ status: "scheduled" });
+  });
+
+  it("pausar e retomar pela janela abre e fecha o aviso da Central (#2389), como a pausa manual", async () => {
+    const agendas = [agenda()];
+    const db = fazerDb({ agendas, canais: [canal(CANAL_A)] });
+    const inicio = new Date("2026-10-10T03:00:00Z");
+
+    await aplicarAgendas(db as never, inicio);
+
+    expect(sincronizarAvisoDePausa).toHaveBeenCalledTimes(1);
+    expect(sincronizarAvisoDePausa).toHaveBeenCalledWith(
+      db,
+      { id: CANAL_A, organization_id: ORG },
+      expect.objectContaining({ agora: inicio, autor: expect.stringContaining("janela") }),
+    );
+
+    vi.mocked(sincronizarAvisoDePausa).mockClear();
+    const dbFim = fazerDb({
+      agendas: [agenda({ status: "running", paused_channel_ids: [CANAL_A] })],
+      canais: [canal(CANAL_A, { disabled: true, disabled_by: "schedule", disabled_schedule_id: AGENDA })],
+    });
+    await aplicarAgendas(dbFim as never, new Date("2026-10-10T05:00:00Z"));
+
+    expect(sincronizarAvisoDePausa).toHaveBeenCalledTimes(1);
+    expect(sincronizarAvisoDePausa).toHaveBeenCalledWith(
+      dbFim,
+      { id: CANAL_A, organization_id: ORG },
+      expect.objectContaining({ agora: new Date("2026-10-10T05:00:00Z") }),
+    );
+  });
+
+  it("janelas sobrepostas: o fim da primeira não religa o canal — a posse passa à que segue aberta", async () => {
+    // A: 03h–05h pausou o canal. B: 04h–06h abriu com ele já pausado (não tomou posse).
+    const agendas = [
+      agenda({ status: "running", paused_channel_ids: [CANAL_A] }),
+      agenda({
+        id: AGENDA_2,
+        status: "running",
+        starts_at: "2026-10-10T04:00:00.000Z",
+        ends_at: "2026-10-10T06:00:00.000Z",
+      }),
+    ];
+    const db = fazerDb({
+      agendas,
+      canais: [canal(CANAL_A, { disabled: true, disabled_by: "schedule", disabled_schedule_id: AGENDA })],
+    });
+
+    const resumo = await aplicarAgendas(db as never, new Date("2026-10-10T05:00:00Z"));
+
+    // Segue pausado, agora em nome de B — é o fim de B que retoma.
+    expect(captura.rpc).toEqual([
+      expect.objectContaining({ p_canal: CANAL_A, p_desativado: true, p_origem: "schedule", p_agenda: AGENDA_2 }),
+    ]);
+    expect(resumo).toMatchObject({ retomadas: 0, transferidas: 1, encerradas: 1 });
+    expect(agendas[0]).toMatchObject({ status: "done" });
+    // Nada mudou no canal: nem aviso da Central, nem linha de retomada na trilha.
+    expect(sincronizarAvisoDePausa).not.toHaveBeenCalled();
+    expect(audit).not.toHaveBeenCalled();
+
+    // E no fim de B o canal volta.
+    captura.rpc = [];
+    const dbFimB = fazerDb({
+      agendas: [agendas[1]!],
+      canais: [canal(CANAL_A, { disabled: true, disabled_by: "schedule", disabled_schedule_id: AGENDA_2 })],
+    });
+    const fimB = await aplicarAgendas(dbFimB as never, new Date("2026-10-10T06:00:00Z"));
+    expect(fimB.retomadas).toBe(1);
+    expect(captura.rpc).toEqual([expect.objectContaining({ p_canal: CANAL_A, p_desativado: false })]);
+  });
+
+  it("janela de OUTRO canal aberta não segura a retomada deste", async () => {
+    const agendas = [
+      agenda({ status: "running", paused_channel_ids: [CANAL_A] }),
+      agenda({ id: AGENDA_2, status: "running", channel_session_id: CANAL_B, ends_at: "2026-10-10T06:00:00.000Z" }),
+    ];
+    const db = fazerDb({
+      agendas,
+      canais: [canal(CANAL_A, { disabled: true, disabled_by: "schedule", disabled_schedule_id: AGENDA })],
+    });
+
+    const resumo = await aplicarAgendas(db as never, new Date("2026-10-10T05:00:00Z"));
+
+    expect(resumo).toMatchObject({ retomadas: 1, transferidas: 0 });
+    expect(captura.rpc).toEqual([expect.objectContaining({ p_canal: CANAL_A, p_desativado: false })]);
   });
 
   it("sem segredo nenhum o cron não roda (fail-closed)", async () => {

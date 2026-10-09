@@ -27,6 +27,18 @@
  * relógio. Ausência de origem (chave anterior) também não elegibiliza: o
  * desconhecido não é retomado às cegas.
  *
+ * Janelas sobrepostas no mesmo canal: a que abre com o canal já pausado não
+ * toma posse dele, então o fim da primeira NÃO o religa enquanto outra janela
+ * aberta o cobrir — passa a posse a ela (`janelaQueHerdaAPausa`), e é o fim
+ * da última que retoma.
+ *
+ * ─── O aviso da Central acompanha (#2389) ───────────────────────────────────
+ *
+ * Pausar e retomar daqui chama `sincronizarAvisoDePausa`, como a pausa manual:
+ * o aviso "canal pausado" abre quando a janela pausa e fecha quando ela
+ * retoma. Na passagem de posse entre janelas nada muda no canal, e o aviso
+ * fica como está.
+ *
  * ─── Mensagem nenhuma se perde durante a pausa (critério 1) ──────────────────
  *
  * Pausar aqui É o `disabled` de hoje: o webhook de entrada do canal continua gravando
@@ -65,8 +77,10 @@ import {
   acaoDaAgenda,
   canalElegivelParaPausa,
   canalElegivelParaRetomada,
+  janelaQueHerdaAPausa,
   type AgendaDePausa,
 } from "@/lib/channels/agenda-de-pausa";
+import { sincronizarAvisoDePausa } from "@/lib/channels/central-de-pausa";
 import { logger } from "@/lib/logger";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { autorizaCron } from "@/lib/auth/cron-auth";
@@ -87,6 +101,8 @@ export type ResumoDaRodada = {
   avaliadas: number;
   pausadas: number;
   retomadas: number;
+  /** Canais que seguem pausados porque outra janela aberta herdou a pausa. */
+  transferidas: number;
   /** Janelas que passaram a `running` (a pausa foi aplicada por inteiro). */
   iniciadas: number;
   encerradas: number;
@@ -104,6 +120,14 @@ type AgendaDaTabela = AgendaDePausa & {
 };
 
 type CanalAlvo = { id: string; metadata: unknown };
+
+/**
+ * Quem a Central nomeia como autor da pausa/retomada programada. O aviso
+ * "canal pausado" (#2389) nasce e morre pela MESMA chave `disabled` que este
+ * cron escreve — se ele não sincronizasse, a pausa da madrugada ficaria
+ * invisível para quem não agendou, e a retomada deixaria o aviso aberto.
+ */
+const AUTOR_DA_JANELA = "a janela de manutenção agendada";
 
 async function canaisDaAgenda(db: SupabaseClient, agenda: AgendaDaTabela): Promise<CanalAlvo[]> {
   let consulta = db
@@ -146,6 +170,7 @@ type Rastro = Parameters<typeof audit>[0];
 async function pausarAgenda(
   db: SupabaseClient,
   agenda: AgendaDaTabela,
+  agora: Date,
   requestId: string,
 ): Promise<{ pausadas: number; falhas: number; ids: string[] }> {
   const canais = await canaisDaAgenda(db, agenda);
@@ -177,6 +202,12 @@ async function pausarAgenda(
     }
     pausadas++;
     ids.push(canal.id);
+    // Best-effort e nunca lança: a pausa já foi gravada pela RPC.
+    await sincronizarAvisoDePausa(
+      db,
+      { id: canal.id, organization_id: agenda.organization_id },
+      { autor: AUTOR_DA_JANELA, agora },
+    );
     // Quem/ quando/ por qual janela: o autor da agenda (quem clicou em Agendar)
     // vem junto em `agendado_por`, e a ação é a MESMA da pausa manual.
     trilha.push({
@@ -208,22 +239,28 @@ async function pausarAgenda(
 async function retomarAgenda(
   db: SupabaseClient,
   agenda: AgendaDaTabela,
+  vivas: readonly AgendaDaTabela[],
+  agora: Date,
   requestId: string,
-): Promise<{ retomadas: number; falhas: number }> {
+): Promise<{ retomadas: number; transferidas: number; falhas: number }> {
   const canais = await canaisDaAgenda(db, agenda);
   const trilha: Rastro[] = [];
   let retomadas = 0;
+  let transferidas = 0;
   let falhas = 0;
 
   for (const canal of canais) {
     // A régua: pausado ESTA janela, e ainda pausado. Manual fica.
     if (!canalElegivelParaRetomada(canal.metadata, agenda.id)) continue;
+    // Outra janela aberta cobre o canal: ele segue pausado e a posse passa a
+    // ela — é o fim DELA que retoma. Mesma escrita, só muda a agenda de origem.
+    const herdeira = janelaQueHerdaAPausa(agenda, canal.id, vivas, agora);
     const { data, error } = await db.rpc("fn_definir_pausa_de_canal", {
       p_org: agenda.organization_id,
       p_canal: canal.id,
-      p_desativado: false,
+      p_desativado: herdeira !== undefined,
       p_origem: "schedule",
-      p_agenda: agenda.id,
+      p_agenda: herdeira?.id ?? agenda.id,
     });
     if (error || data !== 1) {
       falhas++;
@@ -234,7 +271,16 @@ async function retomarAgenda(
       });
       continue;
     }
+    if (herdeira) {
+      transferidas++;
+      continue;
+    }
     retomadas++;
+    await sincronizarAvisoDePausa(
+      db,
+      { id: canal.id, organization_id: agenda.organization_id },
+      { autor: AUTOR_DA_JANELA, agora },
+    );
     trilha.push({
       action: "channel.enabled",
       organizationId: agenda.organization_id,
@@ -256,7 +302,7 @@ async function retomarAgenda(
     for (const rastro of trilha) void audit(rastro);
   }
 
-  return { retomadas, falhas };
+  return { retomadas, transferidas, falhas };
 }
 
 /**
@@ -274,6 +320,7 @@ export async function aplicarAgendas(
     avaliadas: 0,
     pausadas: 0,
     retomadas: 0,
+    transferidas: 0,
     iniciadas: 0,
     encerradas: 0,
     expiradas: 0,
@@ -294,7 +341,8 @@ export async function aplicarAgendas(
     .limit(LIMITE_AGENDAS);
   if (error) throw new Error(`leitura da agenda: ${error.message}`);
 
-  for (const agenda of (data ?? []) as AgendaDaTabela[]) {
+  const vivas = (data ?? []) as AgendaDaTabela[];
+  for (const agenda of vivas) {
     // Suspensa não gasta nem fala: a janela dela é ignorada nesta batida.
     if (paradas.has(agenda.organization_id)) {
       resumo.semMudanca++;
@@ -310,7 +358,7 @@ export async function aplicarAgendas(
     }
 
     if (acao === "pausar") {
-      const { pausadas, falhas, ids } = await pausarAgenda(db, agenda, requestId);
+      const { pausadas, falhas, ids } = await pausarAgenda(db, agenda, agora, requestId);
       resumo.pausadas += pausadas;
       resumo.falhas += falhas;
       // Falhou em algum canal: a linha NÃO vira `running`, a batida seguinte
@@ -325,8 +373,9 @@ export async function aplicarAgendas(
     if (acao === "expirada") {
       // Janela perdida: não pausa para o passado. Só encerra — e antes, recolhe
       // o que tenha ficado pausado numa falha parcial da própria agenda.
-      const { retomadas, falhas } = await retomarAgenda(db, agenda, requestId);
+      const { retomadas, transferidas, falhas } = await retomarAgenda(db, agenda, vivas, agora, requestId);
       resumo.retomadas += retomadas;
+      resumo.transferidas += transferidas;
       resumo.falhas += falhas;
       if (falhas > 0) continue;
       const reivindicou = await marcar(db, agenda, { status: "done", paused_channel_ids: [] }, "scheduled", agora);
@@ -336,8 +385,9 @@ export async function aplicarAgendas(
     }
 
     // acao === "retomar": fim da janela.
-    const { retomadas, falhas } = await retomarAgenda(db, agenda, requestId);
+    const { retomadas, transferidas, falhas } = await retomarAgenda(db, agenda, vivas, agora, requestId);
     resumo.retomadas += retomadas;
+    resumo.transferidas += transferidas;
     resumo.falhas += falhas;
     // Sobrou falha: continua `running` e a batida seguinte retoma o resto.
     if (falhas > 0) continue;

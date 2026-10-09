@@ -101,3 +101,31 @@ export function canalElegivelParaRetomada(metadata: unknown, agendaId: string): 
   if (m.disabled_by !== "schedule") return false;
   return m.disabled_schedule_id === agendaId;
 }
+
+/**
+ * A OUTRA janela aberta agora que também cobre o canal — quem herda a pausa
+ * quando esta termina.
+ *
+ * Sem isto, duas janelas sobrepostas religavam o canal no meio da segunda: a
+ * que começa com o canal já pausado não toma posse dele (`canalElegivelParaPausa`
+ * pula), e o fim da primeira o devolvia ao ar. Com isto, o fim da primeira passa
+ * a posse para a que continua aberta, e é o fim DELA que retoma.
+ *
+ * "Aberta" é viva (`scheduled`/`running`) com `starts_at <= agora < ends_at`:
+ * a agendada que abre no mesmo minuto em que a outra fecha também conta, seja
+ * qual for a ordem em que a batida as lê.
+ */
+export function janelaQueHerdaAPausa<
+  T extends AgendaDePausa & { id: string; organization_id: string; channel_session_id: string | null },
+>(agenda: T, canalId: string, vivas: readonly T[], agora: Date): T | undefined {
+  const t = agora.getTime();
+  return vivas.find(
+    (outra) =>
+      outra.id !== agenda.id &&
+      outra.organization_id === agenda.organization_id &&
+      (outra.channel_session_id === null || outra.channel_session_id === canalId) &&
+      (outra.status === "scheduled" || outra.status === "running") &&
+      instanteDe(outra.starts_at) <= t &&
+      t < instanteDe(outra.ends_at),
+  );
+}
