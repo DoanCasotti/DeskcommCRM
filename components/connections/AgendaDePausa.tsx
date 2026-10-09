@@ -49,10 +49,14 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { apiClient } from "@/lib/api/client";
+import { ApiError } from "@/lib/api/types";
 import { instanteDe } from "@/lib/agenda/fuso";
+import { nomeDoCanal } from "@/lib/channels/estado";
 import { useT } from "@/hooks/i18n/useT";
+import { useTagDeIdioma } from "@/hooks/i18n/useLocaleDeData";
 
-type CanalDaLista = { id: string };
+/** O operador escolhe pelo NOME da conexão — o id é só o valor que desce à API. */
+type CanalDaLista = { id: string; display_name?: string | null; phone_number?: string | null };
 
 type AgendaVisivel = {
   id: string;
@@ -76,6 +80,7 @@ export function paredeParaInstante(valor: string, fuso: string): string | null {
 
 export function AgendaDePausa({ canais }: { canais: CanalDaLista[] }) {
   const t = useT();
+  const tag = useTagDeIdioma();
   const qc = useQueryClient();
   const [aberto, setAberto] = useState(false);
   const [inicio, setInicio] = useState("");
@@ -96,6 +101,14 @@ export function AgendaDePausa({ canais }: { canais: CanalDaLista[] }) {
   const fuso = janelas.data?.fuso ?? "America/Sao_Paulo";
   const agendas = janelas.data?.agendas ?? [];
   const vivas = agendas.filter((a) => a.status === "scheduled" || a.status === "running");
+  // A lista mostra a hora no MESMO fuso em que foi digitada (o da organização),
+  // não no do navegador: senão quem agenda de outro fuso lê outra hora.
+  const quando = new Intl.DateTimeFormat(tag, { dateStyle: "short", timeStyle: "short", timeZone: fuso });
+  const alvoDa = (a: AgendaVisivel): string => {
+    if (a.channel_session_id === null) return t("Para todas as conexões");
+    const canal = canais.find((c) => c.id === a.channel_session_id);
+    return canal ? nomeDoCanal(canal, t) : t("Número sem nome");
+  };
 
   async function agendar(): Promise<void> {
     const starts_at = paredeParaInstante(inicio, fuso);
@@ -121,8 +134,9 @@ export function AgendaDePausa({ canais }: { canais: CanalDaLista[] }) {
       setFim("");
       setEscopo(TODOS);
       await qc.invalidateQueries({ queryKey: ["channel-schedules"] });
-    } catch {
-      toast.error(t("Não foi possível agendar a janela."));
+    } catch (err) {
+      // A recusa do servidor já diz o que fazer ("precisa começar no futuro"…).
+      toast.error(err instanceof ApiError ? t(err.message) : t("Não foi possível agendar a janela."));
     } finally {
       setSalvando(false);
     }
@@ -134,8 +148,8 @@ export function AgendaDePausa({ canais }: { canais: CanalDaLista[] }) {
       await apiClient.delete(`/api/v1/channel-schedules/${id}`);
       toast.success(t("Janela cancelada. O que ela já pausou continua pausado."));
       await qc.invalidateQueries({ queryKey: ["channel-schedules"] });
-    } catch {
-      toast.error(t("Não foi possível cancelar a janela."));
+    } catch (err) {
+      toast.error(err instanceof ApiError ? t(err.message) : t("Não foi possível cancelar a janela."));
     } finally {
       setCancelando(null);
     }
@@ -185,7 +199,7 @@ export function AgendaDePausa({ canais }: { canais: CanalDaLista[] }) {
                 <SelectItem value={TODOS}>{t("Para todas as conexões")}</SelectItem>
                 {canais.map((canal) => (
                   <SelectItem key={canal.id} value={canal.id}>
-                    {canal.id}
+                    {nomeDoCanal(canal, t)}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -200,7 +214,7 @@ export function AgendaDePausa({ canais }: { canais: CanalDaLista[] }) {
               {vivas.map((a) => (
                 <li key={a.id} className="flex items-center justify-between gap-2 text-sm">
                   <span>
-                    {new Date(a.starts_at).toLocaleString()} — {new Date(a.ends_at).toLocaleString()}
+                    {quando.format(new Date(a.starts_at))} — {quando.format(new Date(a.ends_at))} · {alvoDa(a)}
                     {a.status === "running" ? ` · ${t("Em andamento")}` : ""}
                   </span>
                   <Button
