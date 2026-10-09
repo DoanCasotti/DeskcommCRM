@@ -7,8 +7,8 @@
  *  1. sem papel admin não há leitura nem escrita (403 antes do service role);
  *  2. janela no PASSADO é recusada com frase dizendo o que fazer (critério 4) —
  *     e fim antes do início também, sem "validation failed" seco;
- *  3. a criação grava o instante absoluto e a AUTORA na linha (`created_by`);
- *     quem agendou é a resposta do "quem", sem inventar ação de auditoria nova;
+ *  3. a criação grava o instante absoluto e a AUTORA na linha (`created_by`),
+ *     e criar/cancelar entram na trilha de auditoria como toda mutação;
  *  4. cancelar é idempotente: duas vezes não é erro, e a janela que já terminou
  *     recebe 409 dizendo que cancelar o passado não desfaz nada;
  *  5. o GET devolve o fuso LIDO DO BANCO, porque é ele que a tela usa para
@@ -17,6 +17,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 
+import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { requireSupportWrite } from "@/lib/impersonate/support";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -26,6 +27,7 @@ import { DELETE } from "./[id]/route";
 vi.mock("@/lib/auth/require-role", () => ({ requireRole: vi.fn() }));
 vi.mock("@/lib/impersonate/support", () => ({ requireSupportWrite: vi.fn(async () => null) }));
 vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: vi.fn() }));
+vi.mock("@/lib/audit", () => ({ audit: vi.fn(async () => undefined) }));
 
 const ORG = "11111111-1111-4111-8111-111111111111";
 const AUTORA = "99999999-9999-4999-8999-999999999999";
@@ -187,6 +189,15 @@ describe("POST /api/v1/channel-schedules", () => {
     expect(Number.isNaN(Date.parse(String(corpo.data.agenda.starts_at)))).toBe(false);
     // Canal alvo conferido contra a ORGANIZAÇÃO antes de gravar (tenant).
     expect(banco.canal).not.toBeNull();
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "channel.schedule_created",
+        actorUserId: AUTORA,
+        organizationId: ORG,
+        resourceType: "channel_schedule",
+        resourceId: JANELA,
+      }),
+    );
   });
 
   it("canal de outra organização não vira escopo (404)", async () => {
@@ -217,6 +228,14 @@ describe("DELETE /api/v1/channel-schedules/[id]", () => {
     const corpo = (await r.json()) as { data: { mudou: boolean; status: string } };
     expect(corpo.data).toMatchObject({ status: "cancelled", mudou: false });
     expect(banco.gravacoes).toHaveLength(0);
+    // Nada mudou: nada a auditar.
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it("id que não é uuid é 404, sem chegar ao banco", async () => {
+    const r = await DELETE(reqDelete(), { params: Promise.resolve({ id: "nao-e-uuid" }) });
+    expect(r.status).toBe(404);
+    expect(createAdminClient).not.toHaveBeenCalled();
   });
 
   it("cancela janela viva e o filtro de status é a trava da corrida", async () => {
@@ -234,6 +253,15 @@ describe("DELETE /api/v1/channel-schedules/[id]", () => {
     // O claim: o update leva filtro de status, não é escrita às cegas.
     expect(banco.gravacoes[0]?.filtros.some(([m]) => m === "in")).toBe(true);
     expect(banco.agendas[0]?.status).toBe("cancelled");
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "channel.schedule_cancelled",
+        actorUserId: AUTORA,
+        organizationId: ORG,
+        resourceId: JANELA,
+        metadata: { status_anterior: "running" },
+      }),
+    );
   });
 
   it("janela que já terminou recebe 409 dizendo que cancelar não desfaz", async () => {

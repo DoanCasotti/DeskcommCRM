@@ -30,6 +30,7 @@ import type { NextRequest } from "next/server";
 import { z } from "zod";
 
 import { fail, ok } from "@/lib/api/wrappers";
+import { audit } from "@/lib/audit";
 import { requireSupportWrite } from "@/lib/impersonate/support";
 import { requireRole } from "@/lib/auth/require-role";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -145,9 +146,18 @@ export async function POST(req: NextRequest): Promise<Response> {
     return fail("internal_error", "Não foi possível salvar a janela. Verifique se o banco está atualizado.", 500, { requestId });
   }
 
-  // Quem agendou fica NA LINHA (`created_by`): é a resposta do "quem" sem
-  // inventar uma nova ação de auditoria para o painel aprender a desenhar.
-  return ok({ agenda: data as AgendaLinha }, { requestId });
+  // Quem agendou fica NA LINHA (`created_by`) e na trilha, como toda mutação.
+  const agenda = data as AgendaLinha;
+  void audit({
+    action: "channel.schedule_created",
+    actorUserId: auth.user.id,
+    organizationId: auth.org.orgId,
+    resourceType: "channel_schedule",
+    resourceId: agenda.id,
+    requestId,
+    metadata: { starts_at: agenda.starts_at, ends_at: agenda.ends_at, channel_session_id: canal },
+  });
+  return ok({ agenda }, { requestId });
 }
 
 /** Lista as janelas da organização, da mais recente para a mais antiga. */
