@@ -566,7 +566,7 @@ beforeAll(() => {
           values (v_org, v_lote, 2, '{"nome": "RLS invariant"}'::jsonb)
           on conflict (batch_id, row_number) do nothing;
 
-        -- migration 0625 (#2388): a janela de manutencao de conexoes. Vazar a
+        -- migration 0626 (#2388): a janela de manutencao de conexoes. Vazar a
         -- linha entrega ao vizinho os horarios em que o outro vai mexer nas
         -- conexoes dele e o canal alvo da janela — e a retomada programada
         -- passaria a ser do vizinho. Select-then-insert, como as irmas acima.
@@ -741,7 +741,7 @@ export const TABLES = [
   "company_people",
   "import_batches",
   "import_rows",
-  // migration 0625 (#2388) — a janela de manutenção de conexões: horários e
+  // migration 0626 (#2388) — a janela de manutenção de conexões: horários e
   // canal alvo. Leitura org-flat (o dono enxerga as próprias janelas na tela
   // de Conexões); a escrita é do admin e do servidor, e o cron aplica pela
   // RPC. Vazar a linha entrega ao vizinho quando o outro vai mexer nas

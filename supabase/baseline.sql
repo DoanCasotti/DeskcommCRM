@@ -50295,12 +50295,12 @@ notify pgrst, 'reload schema';
 
 
 
--- ---- pausa agendada de conexões com retomada automática (migration 0625) ----
--- Espelho exato da migration 20261009211228_0625_agenda_de_pausa_de_canais.sql.
+-- ---- pausa agendada de conexões com retomada automática (migration 0626) ----
+-- Espelho exato da migration 20261009223404_0626_agenda_de_pausa_de_canais.sql.
 -- Antes da VARREDURA anon, que é o último bloco do arquivo de propósito.
 
 -- manifest: **Pausa AGENDADA de conexões com retomada automática (issue #2388).** Cria `channel_schedules` — a janela de manutenção (início, fim, um canal ou todos, estado `scheduled/running/done/cancelled` e a lista do que ela pausou) — e passa a gravar a ORIGEM da pausa em `channel_sessions.metadata` (`disabled_by`: `manual` × `schedule`, mais `disabled_schedule_id`): sem a origem, a retomada do fim da janela não distingue a pausa MANUAL feita durante a janela e a sobrescreveria (critério 3). A peça de escrita vira `fn_definir_pausa_de_canal(p_org, p_canal, p_desativado, p_origem, p_agenda)` e a RPC da tela `fn_definir_canal_desativado` mantém a MESMA assinatura de três argumentos e delega para ela com origem `manual` — nenhum chamador muda. Quem aplica é o cron `channel-pause-scheduler` (a cada minuto), pela mesma escrita de hoje: só a chave `disabled`, nada de transporte — a mensagem que chega durante a pausa continua sendo gravada e volta à inbox na retomada (lei do #2318). Idempotente; apêndice igual no `baseline.sql`.
--- 0625: agenda de pausa por conexão, com retomada automática e origem da pausa.
+-- 0626: agenda de pausa por conexão, com retomada automática e origem da pausa.
 --
 -- ─── O defeito ──────────────────────────────────────────────────────────────
 --

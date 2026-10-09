@@ -92,7 +92,7 @@ export function canalElegivelParaPausa(metadata: unknown): boolean {
 /**
  * Quem a agenda pode retomar: pausado POR ESTA janela.
  *
- * A ausência de origem (chave de banco anterior à 0625) não elegibiliza: o
+ * A ausência de origem (chave de banco anterior à 0626) não elegibiliza: o
  * desconhecido não é retomado às cegas.
  */
 export function canalElegivelParaRetomada(metadata: unknown, agendaId: string): boolean {
