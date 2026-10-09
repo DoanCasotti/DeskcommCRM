@@ -29,7 +29,7 @@
  *
  * ─── Mensagem nenhuma se perde durante a pausa (critério 1) ──────────────────
  *
- * Pausar aqui É o `disabled` de hoje: a Webhook WAHA continua gravando
+ * Pausar aqui É o `disabled` de hoje: o webhook de entrada do canal continua gravando
  * mensagem de entrada na inbox e ela volta à fila na retomada (a lei do #2318 —
  * "nada do que foi recebido se perde por causa da pausa" — é a mesma). Nesta
  * rota não existe nenhuma chamada de rede, muito menos parar/retomar sessão de
