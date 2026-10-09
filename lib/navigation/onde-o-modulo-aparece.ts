@@ -26,7 +26,13 @@
  */
 import type { ModuloOpcional } from "@/lib/instalacao/modulos";
 
-import { GRUPO_NO_RODAPE, NAV_CATALOG, NAV_GROUPS, type NavMetadata } from "./catalogo";
+import {
+  GRUPO_NO_RODAPE,
+  NAV_CATALOG,
+  NAV_GROUPS,
+  sobeAoMenuLateral,
+  type NavMetadata,
+} from "./catalogo";
 
 export interface PortaDoModulo {
   href: string;
@@ -66,10 +72,25 @@ const GRUPO: ReadonlyMap<string, string> = new Map(
  * módulo não cria porta — e vazio é a resposta honesta, não um palpite: mandar
  * o operador procurar no lugar errado é pior que dizer que não há lugar.
  */
-export function ondeOModuloAparece(modulo: ModuloOpcional): PortaDoModulo[] {
-  return (NAV_CATALOG as readonly NavMetadata[])
-    .filter((d) => d.modulo === modulo)
-    .map((d) => {
+/**
+ * O caminho até QUALQUER porta do catálogo, derivado — nunca escrito à mão.
+ *
+ * Existe porque eu escrevi um à mão e errei: o texto de `login_codex` dizia
+ * "Agente de IA › Credenciais", e `/app/ai/credentials` também é só-no-hub, então o caminho real
+ * tem o passo "Ver tudo em IA". Era o mesmo defeito que esta feature conserta, reproduzido na
+ * prosa, e nenhuma guarda lia aquele campo. Hoje `foraDoMenu` é proibido de conter `›`
+ * (`tests/unit/porta-do-modulo-ligado.test.tsx`) e quem precisa de caminho chama isto.
+ *
+ * `null` quando o `href` não está no catálogo — por exemplo uma tela de `/admin`, que tem
+ * navegação própria (`components/admin/AdminSidebar.tsx`) e não passa por aqui.
+ */
+export function caminhoDaPorta(href: string): PortaDoModulo | null {
+  const d = (NAV_CATALOG as readonly NavMetadata[]).find((x) => x.href === href);
+  return d ? caminhoDe(d) : null;
+}
+
+function caminhoDe(d: NavMetadata): PortaDoModulo {
+  {
       const grupo = NAV_GROUPS.find((g) => g.id === d.group);
       /**
        * ⚠️ O PASSO DO HUB. `sidebar` ausente significa "só no hub"
@@ -84,12 +105,20 @@ export function ondeOModuloAparece(modulo: ModuloOpcional): PortaDoModulo[] {
        * "Configurações › Configurações › Dados externos" inventaria um clique.
        */
       const noRodape = d.group === GRUPO_NO_RODAPE;
-      const precisaDoHub = !d.sidebar && !!grupo?.hub && !noRodape;
+      // LÊ a regra do menu lateral (`sobeAoMenuLateral`), em vez de copiar a condição dela — era
+      // cópia antes, e cópia de regra diverge sem avisar. `false` em `temEscolhaExplicita` porque
+      // esta função não conhece a empresa: para porta de módulo a resposta não muda, e um caso de
+      // teste garante que todo grupo com porta de módulo TEM hub (que é o que torna isso válido).
+      const precisaDoHub = !sobeAoMenuLateral(d, false) && !!grupo?.hub && !noRodape;
       return {
         href: d.href,
         label: d.label,
         grupo: GRUPO.get(d.group) ?? d.group,
         ...(precisaDoHub ? { hub: grupo!.hub!.label } : {}),
       };
-    });
+  }
+}
+
+export function ondeOModuloAparece(modulo: ModuloOpcional): PortaDoModulo[] {
+  return (NAV_CATALOG as readonly NavMetadata[]).filter((d) => d.modulo === modulo).map(caminhoDe);
 }

@@ -21,7 +21,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { NAV_CATALOG, NAV_GROUPS, type NavMetadata } from "@/lib/navigation/catalogo";
-import { ondeOModuloAparece } from "@/lib/navigation/onde-o-modulo-aparece";
+import { caminhoDaPorta, ondeOModuloAparece } from "@/lib/navigation/onde-o-modulo-aparece";
 import { MODULOS_NA_TELA } from "@/app/admin/(protected)/sistema/_form";
 import { combinarInterfaces, destinosDaInterface, permitidos } from "@/lib/navigation/interface";
 import { MODULOS_OPCIONAIS, type ModuloOpcional } from "@/lib/instalacao/modulos";
@@ -332,5 +332,48 @@ describe("a spec de e2e cita o caminho que a fonte produz", () => {
     // "…: CRM › Ver tudo em CRM › Empresas" contém "CRM › Empresas" como substring. A guarda
     // cobriria a classe e deixaria passar justamente o módulo que ela nasceu para vigiar.
     for (const afirmado of afirmados) expect(afirmado).toContain(`: ${esperado}`);
+  });
+});
+
+/**
+ * ⚠️ CAMINHO NÃO SE ESCREVE À MÃO — e este bloco nasceu de eu ter escrito um errado.
+ *
+ * O texto de `login_codex` dizia "libera um painel em Agente de IA › Credenciais". Está errado:
+ * `/app/ai/credentials` não tem `sidebar` no catálogo, então ela também é só-no-hub, e o caminho
+ * real é "Agente de IA › Ver tudo em IA › Credenciais". É EXATAMENTE o defeito que a opção B
+ * conserta, reproduzido por mim num texto livre — e nenhuma guarda lia esse campo.
+ *
+ * A lição não é "corrigir a frase": é que caminho escrito à mão envelhece e ninguém percebe. Então
+ * o caminho passa a ser DERIVADO do catálogo, e o texto livre fica proibido de conter `›`.
+ */
+describe("nenhum caminho de menu é escrito à mão", () => {
+  it("⭐ o painel do login por assinatura declara o caminho DERIVADO, com o passo do hub", () => {
+    const onde = caminhoDaPorta("/app/ai/credentials");
+    expect(onde).not.toBeNull();
+    expect(onde!.grupo).toBe("Agente de IA");
+    expect(onde!.hub).toBe("Ver tudo em IA");
+    expect(onde!.label).toBe("Credenciais");
+  });
+
+  it("⭐ nenhum texto de `foraDoMenu` contém `›` — caminho ali seria escrito à mão", () => {
+    const comCaminhoNaMao = MODULOS_NA_TELA.filter((m) => m.foraDoMenu?.includes("›")).map(
+      (m) => m.modulo,
+    );
+    expect(comCaminhoNaMao).toEqual([]);
+  });
+
+  it("controle: há texto de `foraDoMenu` para medir (senão o caso de cima é vácuo)", () => {
+    expect(MODULOS_NA_TELA.filter((m) => m.foraDoMenu).length).toBeGreaterThan(0);
+  });
+
+  it("⭐ todo grupo com porta de módulo TEM hub — é o que valida reduzir o filtro a `sidebar`", () => {
+    // `sidebarGroups` filtra por `d.sidebar || (!group.hub && settings?.destinos)`. O segundo termo
+    // depende de `settings`, que esta função não recebe — mas ele só vale para grupo SEM hub. Se
+    // um dia uma porta de módulo cair num grupo sem hub, a redução deixa de valer e este caso
+    // avisa, em vez de o caminho passar a mentir em silêncio.
+    const semHub = MODULOS_OPCIONAIS.flatMap((m) =>
+      NAV_CATALOG.filter((d) => (d as { modulo?: string }).modulo === m),
+    ).filter((d) => !NAV_GROUPS.find((g) => g.id === d.group)?.hub);
+    expect(semHub.map((d) => d.href)).toEqual([]);
   });
 });

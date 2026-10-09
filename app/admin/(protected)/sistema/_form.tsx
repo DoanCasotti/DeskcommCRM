@@ -15,7 +15,7 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { useT } from "@/hooks/i18n/useT";
-import { ondeOModuloAparece } from "@/lib/navigation/onde-o-modulo-aparece";
+import { caminhoDaPorta, ondeOModuloAparece } from "@/lib/navigation/onde-o-modulo-aparece";
 import { MENSAGEM_DA_RECUSA_DE_ESCRITA, ehRecusaDeEscrita } from "@/lib/auth/recusa-de-escrita-de-admin";
 import type {
   ChaveDeOrcamentoDaInstalacao,
@@ -264,6 +264,15 @@ export const MODULOS_NA_TELA: ReadonlyArray<{
    * que cruza esta lista com as portas reais do menu.
    */
   foraDoMenu?: string;
+  /**
+   * Quando o módulo não cria porta própria mas LIBERA um painel dentro de uma tela que já existe,
+   * aqui vai o `href` dessa tela — e o caminho é DERIVADO (`caminhoDaPorta`), nunca escrito.
+   *
+   * A primeira versão escrevia o caminho dentro do `foraDoMenu`, e errou: dizia
+   * "Agente de IA › Credenciais" quando `/app/ai/credentials` também é só-no-hub. Caminho à mão
+   * envelhece e ninguém percebe — hoje uma guarda proíbe `›` em `foraDoMenu`.
+   */
+  painelEm?: string;
 }> = [
   {
     modulo: "banco_externo",
@@ -307,7 +316,8 @@ export const MODULOS_NA_TELA: ReadonlyArray<{
     rotulo: "Login do Codex por assinatura",
     descricao:
       "Ligado, cada empresa vê em Credenciais o painel para conectar a própria conta do Codex. Desligado por padrão: sem este interruptor nada aparece para as empresas, e a reserva de chamada continua sendo a chave de API da organização.",
-    foraDoMenu: "Não cria porta no menu do CRM: libera um painel em Agente de IA › Credenciais.",
+    foraDoMenu: "Não cria porta no menu do CRM: ele libera um painel em",
+    painelEm: "/app/ai/credentials",
   },
 ];
 
@@ -327,11 +337,14 @@ function OndeAparece({
   modulo,
   ligado,
   foraDoMenu,
+  painelEm,
 }: {
   modulo: ModuloPorFlag;
   ligado: boolean;
   /** JÁ TRADUZIDO por quem chama — ver o comentário no sítio da chamada. */
   foraDoMenu?: string;
+  /** `href` da tela que hospeda o painel; o caminho até ela é derivado aqui. */
+  painelEm?: string;
 }) {
   const t = useT();
   const portas = ondeOModuloAparece(modulo);
@@ -341,7 +354,23 @@ function OndeAparece({
   // lugar errado. O invariante de `tests/unit/porta-do-modulo-ligado.test.tsx`
   // reprova esse estado na raiz, para nenhum módulo novo chegar assim.
   if (portas.length === 0) {
-    return foraDoMenu ? <p className="text-sm text-muted-foreground">{foraDoMenu}</p> : null;
+    if (!foraDoMenu) return null;
+    const painel = painelEm ? caminhoDaPorta(painelEm) : null;
+    return (
+      <p className="text-sm text-muted-foreground">
+        {foraDoMenu}
+        {painel ? (
+          <>
+            {" "}
+            <span className="font-medium text-foreground">
+              {t(painel.grupo)} › {painel.hub ? <>{t(painel.hub)} › </> : null}
+              {t(painel.label)}
+            </span>
+            .
+          </>
+        ) : null}
+      </p>
+    );
   }
 
   return (
@@ -439,6 +468,7 @@ export function FormularioDeModulos({
                    `t(m.campo)` sobre a linha do módulo — a mesma forma de
                    `t(m.descricao)`, logo acima. O componente recebe texto pronto. */
                 foraDoMenu={m.foraDoMenu ? t(m.foraDoMenu) : undefined}
+                painelEm={m.painelEm}
               />
               {m.modulo === "cobranca" && estado.has("cobranca") && suspensasPorCobranca !== 0 && (
                 <p className="text-sm text-warning-fg">
