@@ -1,5 +1,5 @@
 -- manifest: **O rótulo da seção de LGPD não inventa dado onde a coluna era nula (issue #2656).** A redação por seção declarada de módulo (`modulo_secoes_lgpd`, 0485, gatilho `trg_lgpd_secoes_de_modulo` → `fn_lgpd_redigir_secoes_de_modulo`) gravava o rótulo de anonimizado em TODA linha alcançada pelas colunas de `colunas_rotulo`, inclusive onde a coluna era `NULL` — um campo que nunca foi preenchido passava a dizer `Cliente Anonimizado #N`, e a linha afirmava que havia um texto ali (medido na triagem do #1907: `cancel_reason` preenchido numa comanda finalizada sem cancelamento). O `set` gerado passa a preservar o nulo: `%I = case when %I is null then null else %L end`, o mesmo predicado que `colunas_redigidas` já aplica desde a 0619. Forward-fix: migration NOVA que só reescreve a função (a 0485 e a 0619 continuam intocáveis, já aplicadas em toda instalação) + apêndice igual no `baseline.sql`. Nenhum módulo da `main` declara `colunas_rotulo` não vazio, então não há dado afetado em instalação nenhuma.
--- 0627: o rótulo da seção de LGPD preserva o nulo da coluna.
+-- 0628: o rótulo da seção de LGPD preserva o nulo da coluna.
 --
 -- ─── O defeito ──────────────────────────────────────────────────────────────────────────────
 --
