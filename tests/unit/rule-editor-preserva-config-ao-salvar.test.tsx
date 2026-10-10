@@ -48,18 +48,26 @@ vi.mock("@/hooks/webhooks/useWebhookSources", () => ({
     data: {
       data: [
         { id: "funil-1", name: "Funil de vendas", is_default: true, settings: null },
+        { id: "funil-2", name: "Pós-venda", is_default: false, settings: null },
       ],
     },
   }),
-  usePipelineStages: () => ({
-    data: {
-      data: {
-        stages: [
-          { id: "etapa-2", name: "Proposta" },
-          { id: "etapa-9", name: "Fechamento" },
-        ],
-      },
-    },
+  // As etapas dependem do funil pedido — um dublê que ignorasse o id deixaria
+  // passar a tela listando as etapas de OUTRO funil (#2483).
+  usePipelineStages: (pipelineId: string | null) => ({
+    data: pipelineId
+      ? {
+          data: {
+            stages:
+              pipelineId === "funil-2"
+                ? [{ id: "etapa-20", name: "Onboarding" }]
+                : [
+                    { id: "etapa-2", name: "Proposta" },
+                    { id: "etapa-9", name: "Fechamento" },
+                  ],
+          },
+        }
+      : undefined,
   }),
 }));
 
@@ -211,6 +219,34 @@ describe("a tela desenha o funil e a etapa do gatilho de tempo", () => {
 
     expect(payload.trigger_config.pipeline_id, "limpar o funil não voltou para `null`").toBeNull();
     expect(payload.trigger_config.stage_id, "a etapa devia ser zerada junto com o funil").toBeNull();
+  });
+
+  it("⭐ trocar de funil lista só as etapas do funil novo", async () => {
+    // Uma etapa de outro funil gravada junto com este funil faria o recorte
+    // casar com zero leads, em silêncio. A lista acompanha o funil escolhido.
+    montar(REGRA_DA_ETAPA);
+
+    await escolherNoSelect("Funil", "Pós-venda");
+    fireEvent.click(screen.getByRole("combobox", { name: "Etapa" }));
+    expect(await screen.findByRole("option", { name: "Onboarding" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "Proposta" }), "listou etapa de outro funil").toBeNull();
+    fireEvent.click(screen.getByRole("option", { name: "Onboarding" }));
+
+    const payload = await salvar();
+
+    expect(payload.trigger_config.pipeline_id).toBe("funil-2");
+    expect(payload.trigger_config.stage_id).toBe("etapa-20");
+  });
+
+  it("trocar de funil sem escolher etapa grava a etapa como `null`, nunca a do funil anterior", async () => {
+    montar(REGRA_DA_ETAPA);
+
+    await escolherNoSelect("Funil", "Pós-venda");
+
+    const payload = await salvar();
+
+    expect(payload.trigger_config.pipeline_id).toBe("funil-2");
+    expect(payload.trigger_config.stage_id, "a etapa do funil anterior sobreviveu à troca").toBeNull();
   });
 
   it("'Qualquer etapa' com o funil mantido grava o funil e zera a etapa", async () => {
