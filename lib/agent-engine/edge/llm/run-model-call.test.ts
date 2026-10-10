@@ -137,6 +137,9 @@ function streamDuble() {
     response: Promise.resolve({ id: "resp-1", modelId: "gpt-5.6-luna" }),
     steps: Promise.resolve([]),
     responseMessages: Promise.resolve(FITA_DO_STREAM),
+    toolCalls: Promise.resolve([
+      { type: "tool-call", toolCallId: "call-9", toolName: "propor_mudancas", input: { campo: "valor" } },
+    ]),
   } as never);
 }
 
@@ -190,5 +193,13 @@ describe("o ramo da assinatura (#2657): o modelo responde E o turno fecha", () =
     expect(resultado.result.text).toBe("Estamos abertos das 9h às 18h.");
     expect(resultado.usage).toMatchObject({ inputTokens: 42, outputTokens: 7 });
     expect(resultado.provider).toBe("openai-assinatura");
+  });
+
+  it("devolve toolCalls — quem pede UMA ferramenta (propostas, valor da conversa) lê o campo do topo", async () => {
+    // Sem o campo, `result.toolCalls?.find(...)` devolve null calado: a IA
+    // "não sugeriu nada" na assinatura, embora o modelo tenha chamado a ferramenta.
+    const { resultado } = await rodarPelaAssinatura();
+    const chamada = resultado.result.toolCalls?.find((c) => c.toolName === "propor_mudancas");
+    expect(chamada?.input).toEqual({ campo: "valor" });
   });
 });

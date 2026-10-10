@@ -294,7 +294,7 @@ export interface RunModelCallDeps {
  */
 export type ResultadoDoModeloDoSeam = Pick<
   Awaited<ReturnType<typeof generateText>>,
-  'text' | 'usage' | 'response' | 'responseMessages' | 'steps'
+  'text' | 'usage' | 'response' | 'responseMessages' | 'steps' | 'toolCalls'
 >;
 
 /**
@@ -918,13 +918,16 @@ export async function runModelCall(db: pg.Pool, cfg: LlmEdgeConfig, input: RunMo
       let response: Awaited<typeof streamed.response>;
       let steps: Awaited<typeof streamed.steps>;
       let responseMessages: Awaited<typeof streamed.responseMessages>;
+      let toolCalls: Awaited<typeof streamed.toolCalls>;
       try {
-        [text, usage, response, steps, responseMessages] = await Promise.all([
+        [text, usage, response, steps, responseMessages, toolCalls] = await Promise.all([
           streamed.text,
           streamed.usage,
           streamed.response,
           streamed.steps,
           streamed.responseMessages,
+          // Lido por quem pede UMA ferramenta (propostas, valor da conversa).
+          streamed.toolCalls,
         ]);
       } catch (erroDoSdk) {
         throw erroOriginalDoStream ?? erroDoSdk;
@@ -942,6 +945,7 @@ export async function runModelCall(db: pg.Pool, cfg: LlmEdgeConfig, input: RunMo
         response: { ...response, messages: responseMessages },
         responseMessages,
         steps,
+        toolCalls,
       } satisfies ResultadoDoModeloDoSeam;
       return resultadoDoStream as unknown as Awaited<ReturnType<typeof generateText>>;
     }
