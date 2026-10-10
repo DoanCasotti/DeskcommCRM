@@ -169,7 +169,7 @@ export async function decidirAdiamentoPorJanela(
   for (let volta = 0; volta < MAX_VOLTAS; volta += 1) {
     if (knobs !== null && !janelaDeEnvioAberta(instante, knobs)) {
       antesDaAberturaDoCanal = instante;
-      instante = proximaAberturaDaJanela(instante, knobs, () => 0);
+      instante = proximaAberturaDaJanela(instante, knobs, false, () => 0);
       motivo = "outside_window";
       continue;
     }
