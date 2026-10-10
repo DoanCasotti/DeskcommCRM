@@ -90,12 +90,27 @@ describe("decidirAdiamentoPorJanela", () => {
     });
   });
 
-  it("canal fechado e faixa também → volta a abertura do CANAL (a primeira a abrir)", async () => {
-    // Sábado 22:00 local: o canal reabria domingo 08:00, a faixa só segunda.
-    // O que vale é a régua que mandou adiar, avaliada primeiro.
+  it("canal fechado e faixa também → adia direto para quando as DUAS abrem", async () => {
+    // Sábado 22:00 local: o canal reabre domingo 08:00, mas a faixa só segunda
+    // 08:00. Devolver domingo faria o job reentrar e ser adiado de novo.
     const adiamento = await decidir(entradas(), "2026-10-11T01:00:00Z");
-    expect(adiamento?.reason).toBe("outside_window");
-    expect(adiamento?.until.toISOString()).toBe("2026-10-11T11:00:00.000Z");
+    expect(adiamento).toEqual({
+      until: new Date("2026-10-12T11:00:00Z"),
+      reason: "followup_send_window",
+    });
+  });
+
+  it("sexta 19h → UM adiamento só, até segunda 8h; na reentrada, envia (não adia de novo)", async () => {
+    // Regressão do adiamento duplo: o canal abre sábado 08:00 e a faixa só
+    // segunda. Com as réguas avaliadas uma de cada vez, o job ia a sábado e lá
+    // era adiado DE NOVO com a mesma chave de `action_deferred` — o 23505 é
+    // engolido, a prova de vida não avança e o dead-man mata a inscrição.
+    const adiamento = await decidir(entradas(), "2026-10-09T22:00:00Z");
+    expect(adiamento).toEqual({
+      until: new Date("2026-10-12T11:00:00Z"),
+      reason: "followup_send_window",
+    });
+    expect(await decidir(entradas(), adiamento!.until.toISOString())).toBeNull();
   });
 
   it("canal aberto mas SÁBADO (faixa seg–sex) → adia para segunda, motivo da faixa", async () => {
@@ -117,15 +132,16 @@ describe("decidirAdiamentoPorJanela", () => {
     // Org em São Paulo (21:00Z = 18:00 local, já FORA da faixa 8h–18h), canal
     // com knob de fuso em Nova York (17:00 de lá, ainda DENTRO das 8h–18h de
     // lá). Se a faixa herdasse o fuso do canal, este caso mandaria enviar às
-    // 18h de Brasília — que é exatamente o defeito da issue. A próxima
-    // abertura da faixa é 08:00 local de sexta (2026-10-09) = 11:00Z.
+    // 18h de Brasília — que é exatamente o defeito da issue. A faixa reabre
+    // 08:00 de Brasília de sexta (11:00Z), mas aí são 07:00 em Nova York e o
+    // canal ainda está fechado: as duas só concordam às 08:00 de lá (12:00Z).
     const tabelas = entradas({
       channel_knobs: { ...KNOBS_8_A_18, timezone: "America/New_York" },
     });
     const adiamento = await decidir(tabelas, "2026-10-08T21:00:00Z");
     expect(adiamento).toEqual({
-      until: new Date("2026-10-09T11:00:00Z"),
-      reason: "followup_send_window",
+      until: new Date("2026-10-09T12:00:00Z"),
+      reason: "outside_window",
     });
   });
 

@@ -1,7 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { proximaAberturaDoFollowup } from "@/lib/agent-engine/agent/janela-de-followup";
-import { adiarAteAJanelaAbrir } from "@/lib/automation/janela-do-canal";
+import { janelaDeEnvioAberta, proximaAberturaDaJanela } from "@/lib/agent-engine/pacing/engine";
+import { knobsDoCanal } from "@/lib/automation/janela-do-canal";
 import { fusoUtilizavel } from "@/lib/tempo/fusos";
 
 /**
@@ -34,10 +35,13 @@ import { fusoUtilizavel } from "@/lib/tempo/fusos";
  *
  * Falha ABERTA na faixa: sem agente/versão publicada no enrollment (dado
  * legado) a regra não existe e o envio segue, como
- * `followupPublicadoDoEnrollment` já faz no worker. Falha FECHADA na leitura:
- * erro de banco SOBE (o job volta pra `pending`) — follow-up é contato
- * proativo, e se não dá para saber se o operador autorizou este horário é mais
- * seguro tentar de novo do que mandar fora da faixa.
+ * `followupPublicadoDoEnrollment` já faz no worker. Falha FECHADA na leitura
+ * da faixa (inscrição, agente, versão, fuso da org): erro de banco SOBE (o job
+ * volta pra `pending`) — follow-up é contato proativo, e se não dá para saber
+ * se o operador autorizou este horário é mais seguro tentar de novo do que
+ * mandar fora da faixa. A exceção é a leitura dos knobs do CANAL, que cai nos
+ * padrões do pacing (`knobsDoCanal`, a mesma regra da automação) — e esses
+ * padrões ainda seguram a madrugada.
  */
 export interface AdiamentoPorJanela {
   /** Instante da próxima abertura — vira `run_after` do job e `until` do enrollment. */
@@ -115,14 +119,23 @@ async function followupPublicado(
   return (versao as { followup?: unknown } | null)?.followup ?? null;
 }
 
+/** Teto do laço que compõe as réguas: cada volta pula para uma abertura, então 8 é folga larga. */
+const MAX_VOLTAS = 8;
+
 /**
- * `null` = pode enviar AGORA. Caso contrário, o instante da próxima abertura e
- * qual das duas réguas mandou adiar — nesse caso o envio NÃO pode sair.
+ * `null` = pode enviar AGORA. Caso contrário, o PRIMEIRO instante em que as
+ * DUAS réguas estão abertas ao mesmo tempo, e qual delas fechou por último.
  *
- * A ordem importa para o motivo registrado: o canal é a régua que o operador
- * vê na tela de Proteção de envio e que vale para QUALQUER disparo; a faixa do
- * agente é a permissão MAIS ESTREITA por enrollment. Cada uma é avaliada com a
- * sua própria abertura, então o que volta é a abertura da régua que fechou.
+ * As réguas são COMPOSTAS, não avaliadas uma de cada vez: devolver só a
+ * abertura do canal quando a faixa também está fechada faria o mesmo job ser
+ * adiado DUAS vezes (sexta 19h → sábado 8h pelo canal → segunda 8h pela
+ * faixa). O segundo adiamento grava o `action_deferred` com a mesma chave do
+ * primeiro (`${nó}:${passo}:adiado:${job}`), o 23505 é engolido, a prova de
+ * vida não avança e o dead-man mata a inscrição no fim de semana. Então: pula
+ * de abertura em abertura até as duas concordarem, e o job reentra uma vez só.
+ *
+ * O jitter anti-ban do canal entra UMA vez, e só quando a abertura final é a
+ * do canal (é a abertura dele que o jitter espalha).
  */
 export async function decidirAdiamentoPorJanela(
   admin: SupabaseClient,
@@ -136,24 +149,45 @@ export async function decidirAdiamentoPorJanela(
     entrada.conversationId,
     entrada.contactId,
   );
-  if (sessionId !== null) {
-    // `adiarAteAJanelaAbrir` devolve a ISO da próxima abertura (com o jitter
-    // anti-ban embutido) ou `null` quando a janela está aberta.
-    const abertura = await adiarAteAJanelaAbrir(admin, entrada.organizationId, sessionId, agora);
-    if (abertura !== null) return { until: new Date(abertura), reason: "outside_window" };
-  }
+  const knobs = sessionId === null ? null : await knobsDoCanal(admin, entrada.organizationId, sessionId);
 
   const followup = await followupPublicado(admin, entrada.organizationId, entrada.enrollmentId);
-  if (followup === null) return null;
+  let fuso: string | null = null;
+  if (followup !== null) {
+    const { data: org, error: falhaOrg } = await admin
+      .from("organizations")
+      .select("timezone")
+      .eq("id", entrada.organizationId)
+      .maybeSingle();
+    if (falhaOrg) throw new Error(falhaOrg.message);
+    fuso = fusoUtilizavel((org as { timezone?: string | null } | null)?.timezone);
+  }
 
-  const { data: org } = await admin
-    .from("organizations")
-    .select("timezone")
-    .eq("id", entrada.organizationId)
-    .maybeSingle();
-  const fuso = fusoUtilizavel((org as { timezone?: string | null } | null)?.timezone);
-
-  const proximaAbertura = proximaAberturaDoFollowup(followup, fuso, agora);
-  if (proximaAbertura === null) return null;
-  return { until: proximaAbertura, reason: "followup_send_window" };
+  let instante = agora;
+  let motivo: string | null = null;
+  let antesDaAberturaDoCanal = agora;
+  for (let volta = 0; volta < MAX_VOLTAS; volta += 1) {
+    if (knobs !== null && !janelaDeEnvioAberta(instante, knobs)) {
+      antesDaAberturaDoCanal = instante;
+      instante = proximaAberturaDaJanela(instante, knobs, () => 0);
+      motivo = "outside_window";
+      continue;
+    }
+    const aberturaDaFaixa = fuso === null ? null : proximaAberturaDoFollowup(followup, fuso, instante);
+    if (aberturaDaFaixa !== null) {
+      instante = aberturaDaFaixa;
+      motivo = "followup_send_window";
+      continue;
+    }
+    if (motivo === null) return null;
+    const until =
+      motivo === "outside_window" && knobs !== null
+        ? proximaAberturaDaJanela(antesDaAberturaDoCanal, knobs)
+        : instante;
+    return { until, reason: motivo };
+  }
+  // As réguas não concordaram em MAX_VOLTAS aberturas (configuração disjunta,
+  // ex.: canal 8h–12h e faixa 14h–18h). Segura até a última abertura
+  // alcançada — nunca envia fora delas — e o próximo turno recomeça a conta.
+  return { until: instante, reason: motivo ?? "outside_window" };
 }
