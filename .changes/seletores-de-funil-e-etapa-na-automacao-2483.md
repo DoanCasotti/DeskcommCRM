@@ -1,6 +1,6 @@
 ---
-impacto: nada_mudou
-secao: corrigido
+impacto: capacidade_nova
+secao: adicionado
 titulo: Automações de tempo agora deixam escolher o funil e a etapa pela tela
 ---
 
