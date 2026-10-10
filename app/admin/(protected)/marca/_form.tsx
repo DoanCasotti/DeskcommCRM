@@ -148,7 +148,9 @@ export function FormularioDaMarca({
    * tira tem de marcar o degrau que de fato pinta, não um que não existe.
    */
   const degraus = useMemo(() => {
-    if (!derivada) return null;
+    // Os DOIS têm de ser não-nulos: `derivadaEscura` é `?? derivada`, então a
+    // guarda de cima estreita a variável errada e o TS não infere o par.
+    if (!derivada || !derivadaEscura) return null;
     const preso = (indice: number) => Math.max(0, Math.min(10, indice));
     return {
       // A cor da pessoa só ocupa um degrau quando a escada foi gerada a partir
@@ -174,7 +176,7 @@ export function FormularioDaMarca({
   );
 
   const legenda = useMemo<ItemDaLegenda[]>(() => {
-    if (!derivada || !degraus) return [];
+    if (!derivada || !derivadaEscura || !degraus) return [];
     return [
       {
         rotulo: t("Sua cor"),

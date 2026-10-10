@@ -86,7 +86,7 @@ function blocos(css: string | null): { claro: string; escuro: string } {
 
 /** Os nomes de custom property declarados num bloco, em ordem. */
 function tokens(bloco: string): string[] {
-  return [...bloco.matchAll(/^\s{2}(--[\w-]+):/gm)].map((m) => m[1]);
+  return [...bloco.matchAll(/^\s{2}(--[\w-]+):/gm)].map((m) => m[1] ?? "");
 }
 
 function corDe(camada: CamadaDeMarca) {

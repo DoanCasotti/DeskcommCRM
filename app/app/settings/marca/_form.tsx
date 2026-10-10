@@ -208,7 +208,9 @@ export function FormularioDaMarcaDaOrganizacao({ gravada, instalacao, ambiente, 
    * pontas (`stop()`). A tira tem de marcar o degrau que de fato pinta.
    */
   const degraus = useMemo(() => {
-    if (!derivada) return null;
+    // Os DOIS têm de ser não-nulos: `derivadaEscura` é `?? derivada`, então a
+    // guarda de cima estreita a variável errada e o TS não infere o par.
+    if (!derivada || !derivadaEscura) return null;
     const preso = (indice: number) => Math.max(0, Math.min(10, indice));
     return {
       suaCor: derivada.origemDaRampa === "semente" ? K : null,
@@ -231,7 +233,7 @@ export function FormularioDaMarcaDaOrganizacao({ gravada, instalacao, ambiente, 
   );
 
   const legenda = useMemo<ItemDaLegenda[]>(() => {
-    if (!derivada || !degraus) return [];
+    if (!derivada || !derivadaEscura || !degraus) return [];
     return [
       {
         rotulo: t("Sua cor"),
