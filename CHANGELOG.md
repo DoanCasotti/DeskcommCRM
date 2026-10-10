@@ -16,7 +16,7 @@ Se você roda o DeskcommCRM numa VPS, **leia a seção da versão para a qual es
 
   Contribuição de @webtecnica (#2667), a partir da proposta de @hudson-souza-mkt (#2591).
 
-- **Configurações › Financeiro ganha Editar em contas, formas de pagamento, plano de contas, regras de comissão e lançamentos recorrentes** Sem desativar e recadastrar. Junto, editar uma regra de comissão deixa de dar erro, e editar uma conta deixa de zerar o saldo inicial e a moeda. Lançamentos e comissões já gerados não mudam.
+- **Configurações › Financeiro ganha Editar em contas, formas de pagamento, plano de contas, regras de comissão e lançamentos recorrentes** Sem desativar e recadastrar. Junto, editar uma regra de comissão deixa de dar erro, e editar uma conta deixa de zerar o saldo inicial e de voltar a moeda para BRL. Lançamentos e comissões já gerados não mudam.
 
   Contribuição de @webtecnica (#2661), a partir da issue #2641 de @carloshmlima.
 
