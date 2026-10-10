@@ -373,10 +373,10 @@ check "setup: o passo do setup.sh aparece na tela" grep -qF '===> Gerando segred
 check "setup: o segredo gerado NÃO aparece na tela" falha grep -qF 'segredo_que_nao_pode_aparecer' "$WORK/saida.log"
 check "setup: a saída inteira fica num arquivo" grep -qF 'segredo_que_nao_pode_aparecer' "$LOG_SETUP"
 check "setup: esse arquivo só o dono lê (600)" igual "$(stat -c %a "$LOG_SETUP" 2>/dev/null || stat -f %Lp "$LOG_SETUP")" 600
-# O setup.sh grava os init-scripts do Postgres em volumes/db/. Com o umask 077
-# herdado do terminal (o guia ensina o backup com umask 077), eles nascem 600 de
-# root e o Postgres do contêiner não os lê: o Supabase não sobe, sem mensagem
-# que aponte a causa (medido na vps-teste em 07/10, rodada r1a do PR 4).
+# O setup.sh grava os init-scripts do Postgres em volumes/db/. Com um umask
+# restrito herdado do terminal (077 ou 027, servidor endurecido), eles nascem
+# de root sem leitura para outros, e o Postgres do contêiner não os lê: o
+# Supabase não sobe, sem mensagem que aponte a causa (medido na vps-teste em 07/10, rodada r1a do PR 4).
 UMASK_ARV="$WORK/setup-umask"; montar_arvore "$UMASK_ARV"; rm -f "$UMASK_ARV/.runtime/supabase/.env"
 rodar_em_077() ( umask 077; rodar_instalador "$@" )  # subshell: o 077 não vaza para os outros casos
 check "setup: roda com umask 022 mesmo de um terminal em 077" \

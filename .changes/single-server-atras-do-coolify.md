@@ -14,4 +14,5 @@ Para usar, exporte a porta do banco e a rede do proxy ao rodar o instalador:
 TRAEFIK_ENTRYPOINT=https TRAEFIK_ENTRYPOINT_HTTP=http bash
 hostgator-setup-kit/install-single-server.sh --domain SEU_DOMINIO`. Passo a
 passo medido em docs/saas/coolify.md. Quem instala sem essas variáveis não vê
-mudança nenhuma.
+mudança nenhuma. Construído sobre o #2150 e o #2289 de @webtecnica (issue #2099
+de @brunno-soaress).

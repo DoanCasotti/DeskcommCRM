@@ -119,7 +119,7 @@ if [[ ! -f "$SUPABASE_DIR/.env" ]]; then
   setup_log="$RUNTIME_DIR/supabase-setup.log"
   (umask 077 && : > "$setup_log")
   # umask 022 FIXO: o setup.sh grava os init-scripts do Postgres em volumes/db/, e
-  # com o 077 de quem acabou de fazer um backup eles nasceriam 600 de root — o
+  # com um umask restrito no terminal (077 ou 027) eles nasceriam ilegíveis a outros — o
   # Postgres do contêiner não os lê e o Supabase não sobe, sem mensagem que aponte
   # a causa. Quem protege os segredos é o .runtime 700, criado acima.
   (umask 022 && cd "$ROOT_DIR" && sh "$setup_tmp" -y --skip-deps --ref "$SUPABASE_REF" --project-dir ".runtime/supabase") 2>&1 \
