@@ -192,7 +192,7 @@ export function FormularioDaMarca({
         indice: degraus.escuro,
       },
     ];
-  }, [derivada, degraus, t]);
+  }, [derivada, derivadaEscura, degraus, t]);
 
   function handleSubmit(evento: React.FormEvent) {
     evento.preventDefault();
