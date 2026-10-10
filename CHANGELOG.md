@@ -10,6 +10,10 @@ Se você roda o DeskcommCRM numa VPS, **leia a seção da versão para a qual es
 
 ## [1.79.0] — 2026-10-10
 
+### ⚠️ Requer atenção
+
+- **Só para quem alargou à mão a restrição de origem dos pedidos para gravar Tray, Loja Integrada ou WooCommerce** Troque a sua ponte para gravar a origem `external` (id `<plataforma>:<id>`, plataforma no `payload`) ANTES de rodar `bash update.sh`: depois da atualização, gravar o nome da plataforma é recusado e o pedido novo se perde. Os pedidos antigos são convertidos sozinhos. Quem não mexeu na restrição não faz nada.
+
 ### Adicionado
 
 - **O cliente pode ter um vendedor dono (carteira); o dono é avisado por tarefa quando o cliente escreve numa conversa que está com outro vendedor, e o negócio novo desse cliente nasce com ele** Por enquanto a carteira é definida pela API (gerente ou acima); o cartão na ficha do contato vem depois. Cliente sem carteira segue o rodízio de hoje, e a atualização não põe ninguém em carteira.
