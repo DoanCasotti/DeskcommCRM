@@ -445,6 +445,10 @@ export const NAV_CATALOG = [
     // O balcão continua a um clique: CRM › Ver tudo em CRM › "O dia a dia da
     // venda", e pelo ⌘K digitando "comanda".
     minRole: "viewer",
+    // Módulo de tabela (ADR-0002, #1907): as cinco tabelas da comanda nascem na
+    // instalação do `financeiro` em `/admin/modulos`; sem ele a porta some, como
+    // `/app/honorarios`. O caixa (Configurações › Financeiro) é núcleo e fica.
+    modulo: "financeiro",
   },
   {
     // O catálogo financeiro: contas, formas de pagamento e plano de contas.
@@ -998,8 +1002,10 @@ export const NAV_CATALOG = [
   },
   {
     href: "/app/settings/billing",
-    label: "Billing",
-    description: "Plano e cobrança.",
+    // Spec da cobrança §9: as mensagens de limite e a Central mandam para
+    // "Configurações › Plano e cobrança" — o item precisa ter esse nome.
+    label: "Plano e cobrança",
+    description: "Pagamento, troca de plano e faturas da sua empresa.",
     icon: "Receipt",
     group: "organizacao",
     section: "Sua empresa",

@@ -1391,6 +1391,43 @@ limite (provado em `tests/invariants/cobranca-assentos.test.ts` e em
 bloqueando uma conversa com agente publicado (provado em unit e no Postgres
 real, não pela tela).
 
+## J43 — A primeira cobrança: o dono conecta a Stripe, o cliente assina, atrasa, é suspenso e volta sozinho ao pagar `[P0]` (2026-09-30)
+
+**Origem:** PR 3a da cobrança do revendedor
+(`docs/superpowers/specs/2026-09-29-cobranca-do-revendedor-design.md`, §3.2, §6.1, §7(a)–(f), §8, §9, §12).
+É P0 porque é a primeira impressão de quem instala para vender: se a primeira cobrança não fecha o ciclo, não há produto para revender. Cobre o que a J41 (PR 2) deixou para esta PR: ligar pela tela, pagamento, régua e suspensão automática.
+
+| Caso | Spec | Estado |
+|---|---|---|
+| O dono liga "Cobrança dos seus clientes" em /admin/sistema e acha a porta Cobrança | `tests/e2e/cobranca-revendedor.spec.ts` | CI |
+| Conecta a Stripe em teste: selo MODO DE TESTE, só os 4 últimos da chave na tela, chave cifrada e fora do audit; webhook sem `invoice.created`; portal sem troca de plano | idem | CI |
+| Ajusta a tolerância na aba Régua; cria dois planos e escolhe o do cadastro | idem | CI |
+| O cliente se cadastra e nasce em teste grátis; a faixa leva ao plano; Assinar abre o checkout hospedado; a volta mostra "1ª cobrança agendada" | idem | CI |
+| Os avisos chegam assinados e ficam só como ponteiro (`{id,type}`, org nula, sem cabeçalhos); assinatura errada → 401 | idem | CI |
+| A 1ª cobrança paga vira "Em dia" e marca o checklist; o passo do e-mail fica aberto, apontando /admin/email | idem | CI |
+| Trocar de plano depois do teste: "vale a partir de DD/MM", sem rateio, e o plano vira só na virada paga | idem | CI |
+| Atraso: aviso na Central e faixa com o link de pagamento; aviso final; suspensão só 48 h depois dele | idem | CI |
+| No hub, "Já paguei" sem pagar não reativa; pagar a fatura reativa sozinha, sem rajada, com um item de revisão | idem | CI |
+| O dublê e o adaptador falam a mesma língua (cabeçalhos, idempotência, formas basil, assinatura dos avisos) | `tests/unit/cobranca-duble-fala-a-lingua-do-adaptador.test.ts` | unit |
+| A base de teste só vale em loopback e com o app em loopback | `lib/cobranca/provedores/base-de-teste.test.ts` | unit |
+| O mapa vivo tem o caminho do dinheiro de ponta a ponta | `tests/unit/mapas-de-arquitetura.test.ts` | unit |
+
+**Não coberto pela tela:** a publicação (troca da chave de teste pela de produção, D-7); "Tornar isenta" com assinatura viva no provedor; o aviso de 80% do teto de IA; o e-mail dos avisos (o fresco não tem envio configurado, e o checklist mostra isso); o cancelamento de org redigida. Onde são provados: nos testes unitários das rotas e da régua (`lib/cobranca/regua.test.ts`, `lib/cobranca/estado.test.ts`) e nos invariantes da PR 3a. A suspensão usa datas recuadas no banco, não relógio falso: cron e régua rodam com o `now()` real.
+
+**Evidência** (PNG em `evidence/cobranca-revendedor/`):
+- `evidence/cobranca-revendedor/billing-cobranca-agendada.png`
+- `evidence/cobranca-revendedor/billing-em-dia.png`
+- `evidence/cobranca-revendedor/billing-troca-agendada.png`
+- `evidence/cobranca-revendedor/central-aviso-final.png`
+- `evidence/cobranca-revendedor/central-aviso-venceu.png`
+- `evidence/cobranca-revendedor/checkout-do-duble.png`
+- `evidence/cobranca-revendedor/conexao-modo-de-teste.png`
+- `evidence/cobranca-revendedor/faixa-em-atraso.png`
+- `evidence/cobranca-revendedor/hub-pagar-agora.png`
+- `evidence/cobranca-revendedor/reativada-sem-rajada.png`
+- `evidence/cobranca-revendedor/sistema-cobranca-ligada.png`
+- `evidence/cobranca-revendedor/visao-geral-checklist.png`
+
 ## Jornadas exercitadas (instalação final, virgem)
 
 | Jornada | Resultado |
@@ -3336,3 +3373,45 @@ Spec: `tests/e2e/mapas-em-provedores.spec.ts`.
 | J40.6 | O que o Google diz × o endereço anotado em 8 pedidos confirmados (28/09/2026, numa instalação real) | município 8/8, região 8/8, localidade 7/8 (na zona rural virou o povoado), rua 3/5, bairro 1/8, número interpolado → a cidade é o MUNICÍPIO; bairro e número não saem | **MEDIDO em produção** (fora deste repositório); regra em `tests/unit/mapas-pino-com-endereco.test.ts` |
 | J40.7 | O pino com endereço aproximado, aberto na conversa pela equipe | o cartão do pino mostra «Rua, Cidade, Estado (aprox.)», com o texto inteiro no `title` (o cartão corta com …) e o toque abre as COORDENADAS no mapa | **PASS pela tela** — Evidência: `evidence/triagem-16set-l12/mapas-03-pino-na-conversa.png` |
 | J40.8 | A API do canal intermediado não responde a tempo na ingestão do pino (medido 29/09/2026: timeout duas vezes seguidas) | a mensagem entra com o marcador e pede nova busca (`message.location_retry_requested`); 1 min depois, e a cada 2 min até 15, busca de novo e grava tipo `location` + link (+ endereço aproximado com chave); nunca rebaixa um pino que já tem coordenadas; desiste sem virar incidente | **PASS (unit)** — `tests/unit/pino-reintento.test.ts`, `tests/unit/channel-ingest-zernio.test.ts` |
+
+## J42 — Gestão de tenants pelo admin da plataforma `[P1]` (2026-09-29, recortada em 2026-10-05)
+
+Corrigir o e-mail de acesso de um membro, editar o cadastro e excluir um tenant pela
+tela de `/admin/tenants/<id>` — PR #1967 (@Draven9), recortado: a suspensão é a da
+`main` (J37/`suspensao-administrativa.spec.ts`) e saiu desta jornada. Spec:
+`tests/e2e/admin-gestao-de-tenants.spec.ts` (job e2e, parte 5; cria o próprio tenant
+e o próprio login e se desfaz deles), em instalação sem envio de e-mail configurado.
+
+**Estado da medição: os casos abaixo ainda NÃO rodaram na forma recortada.** A spec foi
+reescrita sem rodar localmente (pedido do dono: máquina sem memória para `next build` +
+`next start`); a primeira medição é a do job `e2e` deste PR. As fotos versionadas
+`evidence/admin-gestao-de-tenants/01-ativo.png`,
+`evidence/admin-gestao-de-tenants/02-email-corrigido.png`,
+`evidence/admin-gestao-de-tenants/04-dados-editados.png`,
+`evidence/admin-gestao-de-tenants/06-confirmacao-da-exclusao.png` e
+`evidence/admin-gestao-de-tenants/07-lista-depois.png` são da versão de 29/09 do PR
+(renomeadas para a numeração nova) e são regravadas na primeira rodada; as da Central
+e da recusa por cobrança só existem depois dela. A transação da exclusão tem prova
+própria em `tests/invariants/gestao-de-tenants.test.ts` e
+`tests/invariants/exclusao-recusa-cobranca.test.ts`.
+
+| # | Caso | Expectativa | Resultado |
+|---|------|-------------|-----------|
+| J42.1 | Tenant ativo | cabeçalho com o nome; o e-mail de login do membro na lista; sem "Excluir tenant", com a instrução "suspenda-o primeiro" | a medir (CI) |
+| J42.2 | Corrigir o e-mail de acesso | a lista mostra o novo; o login com o NOVO entra em `/app`; o ANTIGO é recusado; a troca segue sem envio de e-mail configurado | a medir (CI) |
+| J42.3 | A empresa fica sabendo | a Central (`/app/ai/inbox`) do tenant, vista pelo membro, mostra UM aviso com o nome da pessoa, sem nenhum `@`, e o botão "Abrir a equipe" | a medir (CI) |
+| J42.4 | Editar dados | o nome novo aparece no cabeçalho e está gravado no banco | a medir (CI) |
+| J42.5 | Suspensa por cobrança | sem "Excluir tenant", com a explicação; `POST …/delete` → `409 exclusao_com_cobranca_pendente`; a organização continua no banco | a medir (CI) |
+| J42.6 | Suspensa administrativa pela tela, e excluída | botão travado com identificador errado; com o certo, a organização some do banco, a lápide `organization.deleted` fica e o login que só pertencia a ela é removido | a medir (CI) |
+
+Não provado pela tela: o desligamento externo da exclusão (WhatsApp, voz, loja), que
+agora só acontece depois do commit — o tenant de teste não tem canal conectado; a ordem
+é medida por unidade em `lib/tenants/exclusao.test.ts`. O e-mail ao endereço antigo,
+que sem envio configurado não sai: medido por unidade na rota. O aviso em CADA empresa em
+que o login tem acesso ativo (não só na do path) e o 404 para vínculo revogado — com o
+botão "Alterar e-mail" travado para quem tem o selo "Acesso revogado": medidos por
+unidade na rota (`…/members/[userId]/email/route.test.ts`). A exclusão interrompida depois
+do commit (resposta perdida, processo reiniciado) e retomada pela segunda tentativa a
+partir da lápide, com o 500 que não diz "nada foi apagado": medida por unidade em
+`lib/tenants/exclusao.test.ts` e `…/delete/route.test.ts`, e o inventário da lápide em
+`tests/invariants/gestao-de-tenants.test.ts`.
