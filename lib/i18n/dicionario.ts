@@ -8896,6 +8896,7 @@ export const DICIONARIO: Traducoes = {
   "Nenhum membro ativo.": { es: "No hay miembros activos." },
   "Membro": { es: "Miembro" },
   "Papel de": { es: "Rol de" },
+  Papel: { es: "Rol" },
   "Aceito": { es: "Aceptado" },
   "Revogar acesso": { es: "Revocar acceso" },
   "você": { es: "tú" },
