@@ -14632,6 +14632,7 @@ export const DICIONARIO: Traducoes = {
   "Padrão: varia": { es: "Por defecto: varía" },
   "Desligado por quem administra o servidor": { es: "Desactivado por quien administra el servidor" },
   "Recursos opcionais": { es: "Recursos opcionales" },
+  "Ligado, cada empresa ainda precisa ligar o módulo de proposta comercial nas configurações dela — o caminho aparece abaixo. A IA levanta o que o cliente precisa, monta a proposta pelos modelos da empresa e o PDF sai pelo WhatsApp. Desligado, nenhuma empresa vê a tela, o menu nem as ferramentas do agente.": { es: "Activado, cada empresa todavía necesita activar el módulo de propuesta comercial en su configuración — la ruta aparece abajo. La IA levanta lo que el cliente necesita, arma la propuesta con las plantillas de la empresa y el PDF sale por WhatsApp. Desactivado, ninguna empresa ve la pantalla, el menú ni las herramientas del agente." },
   "Não cria porta no menu do CRM: ele libera um painel em": { es: "No crea entrada en el menú del CRM: habilita un panel en" },
   "Aparece no menu em:": { es: "Aparece en el menú en:" },
   "Ao ligar, aparece no menu em:": { es: "Al activar, aparece en el menú en:" },

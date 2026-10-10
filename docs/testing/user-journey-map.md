@@ -1305,7 +1305,7 @@ Relato do mantenedor: *"os módulos que são ativados aqui, eles não aparecem n
 CRM. Além de estarem em uma área de recursos opcionais, diferentes dos 'módulos'
 mesmo tendo o mesmo objetivo."* O gate de módulo nunca foi o problema — ele
 sempre soltou a porta assim que o módulo entrou na lista. O sintoma vinha de
-outros três lugares, medidos antes de consertar:
+outros lugares — DOIS medidos e um preventivo:
 
 | # | Achado | Como foi medido | Conserto |
 |---|---|---|---|
@@ -1316,12 +1316,12 @@ outros três lugares, medidos antes de consertar:
 
 ### A CAUSA REAL do relato, achada só na revisão (2026-10-08, decisão do dono no doc 124)
 
-Os três achados acima são reais e **nenhum deles era o que o mantenedor tropeçou**. A causa é mais
+Os achados acima são reais (dois medidos, um preventivo) e **nenhum deles era o que o mantenedor tropeçou**. A causa é mais
 simples, e um cético a achou lendo o catálogo:
 
 | # | Achado | Como foi medido | Conserto |
 |---|---|---|---|
-| 23 | 🔴 **As telas de módulo não ficam no menu lateral.** As nove portas com `modulo:`/`capacidade:` têm `sidebar` AUSENTE, e no tipo isso é explícito: `NavMetadata.sidebar` = "Ausente = só no hub". O filtro de `sidebarGroups` é `d.sidebar \|\| (!group.hub && settings?.destinos)` — então elas só aparecem em "Ver tudo em CRM". E o texto que eu havia escrito dizia "CRM › Empresas", **mandando procurar no menu diário** | `grep` de `sidebar:` nas 9 portas devolve "(ausente)" nas 9; o comentário do próprio catálogo diz "SEM sidebar… este trio mora no hub para não reabrir a corrida por pixel" | o texto passa a dizer o caminho COM o passo do hub ("CRM › Ver tudo em CRM › Empresas"), derivado do catálogo |
+| 23 | 🔴 **As telas de módulo não ficam no menu lateral.** Toda porta com `modulo:`/`capacidade:` tem `sidebar` AUSENTE, e no tipo isso é explícito: `NavMetadata.sidebar` = "Ausente = só no hub". O filtro de `sidebarGroups` é `d.sidebar \|\| (!group.hub && settings?.destinos)` — então elas só aparecem em "Ver tudo em CRM". E o texto que eu havia escrito dizia "CRM › Empresas", **mandando procurar no menu diário** | o número muda, então conte na fonte: `grep -cE '^\s+(modulo|capacidade): "' lib/navigation/catalogo.ts` (9 em `a2da47c5f`, 10 na main de 09/out, que ganhou `financeiro`), e nenhuma delas declara `sidebar`; o comentário do próprio catálogo diz "SEM sidebar… este trio mora no hub para não reabrir a corrida por pixel" | o texto passa a dizer o caminho COM o passo do hub ("CRM › Ver tudo em CRM › Empresas"), derivado do catálogo |
 | 23b | 🟠 **Eu reproduzi o mesmo defeito na prosa.** O texto de `login_codex` dizia "Agente de IA › Credenciais", e `/app/ai/credentials` TAMBÉM é só-no-hub — o caminho real tem "Ver tudo em IA". Nenhuma guarda lia aquele campo | o cético mediu o `sidebar` daquela tela; eu confirmei antes de consertar | o caminho virou DERIVADO (`caminhoDaPorta`), e uma guarda proíbe `›` em texto livre de `foraDoMenu` |
 
 **Por que a porta NÃO subiu para o menu lateral:** o menu foi medido em 15 itens com folga 0 a

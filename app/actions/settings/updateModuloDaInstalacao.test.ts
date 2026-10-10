@@ -63,14 +63,16 @@ describe("updateModuloDaInstalacao", () => {
   });
 
   /**
-   * O MENU DO CRM VIVE NO LAYOUT DE `/app`, e é ele que lê `modulosLigados()` para
-   * decidir as portas com `modulo:` (`app/app/layout.tsx` → `Sidebar`, `NavHub`,
-   * `CommandPalette`, `BarraInferior`). Sem revalidar esse layout, quem acabou de
-   * ligar um módulo volta ao CRM e continua vendo o menu de antes — o módulo está
-   * ligado no banco e invisível na tela.
+   * ⚠️ ESTE CASO MEDE A CHAMADA, NÃO O EFEITO — e a distinção é honesta, não acadêmica.
    *
-   * A irmã que também mexe no menu já faz isto e escreve o motivo:
-   * `atualizarInterfaceDaEmpresa` chama `revalidatePath("/app", "layout")`.
+   * O menu do CRM vive no layout de `/app`, que lê `modulosLigados()` para decidir as portas com
+   * `modulo:`. A irmã que também mexe no menu (`atualizarInterfaceDaEmpresa`) já chama
+   * `revalidatePath("/app", "layout")` e escreve o motivo, então a analogia sustenta a linha.
+   *
+   * O que este caso garante é que a chamada EXISTE e não é removida sem alguém notar. Ele NÃO
+   * prova que sem ela o menu fica velho: isso exigiria navegação pelo cliente com o cache do
+   * router em jogo, e o e2e desta frente usa `page.goto`, que é carregamento completo. Ver o
+   * achado 21 do `docs/testing/user-journey-map.md`, marcado PREVENTIVO.
    */
   it("⭐ ligar um módulo revalida o MENU DO CRM, não só a tela de admin", async () => {
     await updateModuloDaInstalacao({ modulo: "banco_externo", ligado: true });

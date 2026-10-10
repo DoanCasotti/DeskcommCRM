@@ -20,7 +20,12 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { NAV_CATALOG, NAV_GROUPS, type NavMetadata } from "@/lib/navigation/catalogo";
+import {
+  NAV_CATALOG,
+  NAV_GROUPS,
+  sobeAoMenuLateral,
+  type NavMetadata,
+} from "@/lib/navigation/catalogo";
 import { caminhoDaPorta, ondeOModuloAparece } from "@/lib/navigation/onde-o-modulo-aparece";
 import { MODULOS_NA_TELA } from "@/app/admin/(protected)/sistema/_form";
 import { combinarInterfaces, destinosDaInterface, permitidos } from "@/lib/navigation/interface";
@@ -375,5 +380,45 @@ describe("nenhum caminho de menu é escrito à mão", () => {
       NAV_CATALOG.filter((d) => (d as { modulo?: string }).modulo === m),
     ).filter((d) => !NAV_GROUPS.find((g) => g.id === d.group)?.hub);
     expect(semHub.map((d) => d.href)).toEqual([]);
+  });
+});
+
+/**
+ * As DUAS FRESTAS que um cético apontou como não-bloqueantes, e que eu preferi fechar: guarda com
+ * fresta é guarda que dá falsa segurança exatamente onde ninguém vai olhar de novo.
+ */
+describe("as frestas das guardas de caminho e da regra do menu", () => {
+  it("⭐ nenhum texto da tela de módulos tem caminho de menu escrito à mão", () => {
+    // A guarda anterior lia só `foraDoMenu`, e a `descricao` de `propostas` traz
+    // "Configurações › Propostas" escrito. Mesmo defeito, outro campo — é a classe que importa.
+    const comCaminho = MODULOS_NA_TELA.filter(
+      (m) => m.descricao.includes("›") || m.foraDoMenu?.includes("›"),
+    ).map((m) => m.modulo);
+    expect(comCaminho).toEqual([]);
+  });
+
+  it("controle: a varredura enxerga os dois campos (senão o caso de cima é vácuo)", () => {
+    expect(MODULOS_NA_TELA.every((m) => typeof m.descricao === "string")).toBe(true);
+    expect(MODULOS_NA_TELA.filter((m) => m.foraDoMenu).length).toBeGreaterThan(0);
+  });
+
+  it("⭐ grupo SEM hub: a porta sobe ao menu quando a empresa escreveu lista à mão", () => {
+    // O termo `(!grupo?.hub && temEscolhaExplicita)` de `sobeAoMenuLateral` não tinha caso: a
+    // sabotagem `return !!d.sidebar` deixava tudo verde. Ele existe porque grupo sem hub não tem
+    // "Ver tudo" para hospedar a porta — ali ela sobe quando a empresa personalizou.
+    const semHub = NAV_CATALOG.find(
+      (d) => !NAV_GROUPS.find((g) => g.id === d.group)?.hub && !(d as { sidebar?: boolean }).sidebar,
+    );
+    expect(semHub).toBeDefined();
+    expect(sobeAoMenuLateral(semHub!, true)).toBe(true);
+    expect(sobeAoMenuLateral(semHub!, false)).toBe(false);
+  });
+
+  it("grupo COM hub ignora a escolha explícita — quem decide é só o `sidebar` (controle)", () => {
+    const comHub = NAV_CATALOG.find(
+      (d) => !!NAV_GROUPS.find((g) => g.id === d.group)?.hub && !(d as { sidebar?: boolean }).sidebar,
+    );
+    expect(comHub).toBeDefined();
+    expect(sobeAoMenuLateral(comHub!, true)).toBe(false);
   });
 });

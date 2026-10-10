@@ -109,9 +109,10 @@ test("dono do servidor vê a porta Recursos opcionais e os três blocos no Admin
 /**
  * A JORNADA QUE O MANTENEDOR RELATOU, DE PONTA A PONTA.
  *
- * O relato: "os módulos que são ativados aqui, eles não aparecem no CRM". Três
- * defeitos distintos produziam esse mesmo sintoma, e nenhum deles era o gate de
- * módulo (esse sempre funcionou):
+ * O relato: "os módulos que são ativados aqui, eles não aparecem no CRM". Daqui saíram DOIS
+ * defeitos medidos e um conserto PREVENTIVO, e nenhum deles era o gate de módulo (esse sempre
+ * funcionou). A CAUSA do relato era outra, achada só numa revisão posterior: as telas de módulo
+ * não ficam no menu do dia a dia, e o texto desta tela mandava procurar lá.
  *
  *   1. a tela do interruptor nunca dizia ONDE o módulo apareceria — o dado
  *      existia (`ondeOModuloAparece`, lido do próprio menu) e só a tela da
@@ -172,9 +173,11 @@ test("liga um módulo, a tela diz onde ele aparece, e a porta está lá no CRM",
     await page.screenshot({ path: evidencia("modulo-ligado-diz-onde.png"), fullPage: true });
   });
 
-  await test.step("⭐ a porta ESTÁ no menu do CRM, sem recarregar à mão", async () => {
-    // O passo que o defeito 2 reprovava: o layout de `/app` servia o menu de antes
-    // porque nada o revalidava. Navegação normal, como o operador faz.
+  await test.step("⭐ a porta ESTÁ no hub do CRM (\"Ver tudo em CRM\")", async () => {
+    // Navegação normal, como o operador faz. ⚠️ Este passo NÃO vigia a revalidação do layout:
+    // `page.goto` é carregamento completo, e o hub lê `modulosLigados()` a cada request — ele
+    // ficaria verde com ou sem o `revalidatePath("/app", "layout")`. O que ele mede é o recorte
+    // por módulo chegando à tela que o texto promete.
     //
     // ⚠️ A MEDIÇÃO É NO HUB, não no menu lateral — e isso é escolha, não desvio.
     //

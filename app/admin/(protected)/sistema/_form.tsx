@@ -293,7 +293,7 @@ export const MODULOS_NA_TELA: ReadonlyArray<{
     id: "modulo-propostas",
     rotulo: "Propostas comerciais",
     descricao:
-      "Ligado, cada empresa pode ligar em Configurações › Propostas o módulo de proposta comercial: a IA levanta o que o cliente precisa, monta a proposta pelos modelos da empresa e o PDF sai pelo WhatsApp. Desligado, nenhuma empresa vê a tela, o menu nem as ferramentas do agente.",
+      "Ligado, cada empresa ainda precisa ligar o módulo de proposta comercial nas configurações dela — o caminho aparece abaixo. A IA levanta o que o cliente precisa, monta a proposta pelos modelos da empresa e o PDF sai pelo WhatsApp. Desligado, nenhuma empresa vê a tela, o menu nem as ferramentas do agente.",
   },
   {
     modulo: "crm_b2b",
