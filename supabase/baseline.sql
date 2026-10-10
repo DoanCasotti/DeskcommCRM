@@ -52820,4 +52820,4 @@ alter table public.platform_branding
   );
 
 comment on column public.platform_branding.accent_dark_hex is
-  'Segunda semente da marca (#2482), so para o tema ESCURO: o bloco [data-theme=dark] deriva dela pela mesma derivarMarca. NULL = os dois temas derivam de accent_hex, como sempre. Lida/escrita so server-side (service_role).';
+  'Segunda semente da marca (#2482), só para o tema ESCURO: o bloco [data-theme=dark] deriva dela pela mesma derivarMarca, com os mesmos pisos de contraste. NULL = os dois temas derivam de accent_hex, como sempre. --color-brand continua sendo accent_hex (e-mail e logo nao tem tema). Lida/escrita so server-side (service_role), como o resto da tabela.';
