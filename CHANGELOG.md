@@ -12,235 +12,163 @@ Se você roda o DeskcommCRM numa VPS, **leia a seção da versão para a qual es
 
 ### Adicionado
 
-- **O cliente pode ter um vendedor dono (carteira); o dono é avisado por tarefa quando o cliente escreve numa conversa que está com outro vendedor, e o negócio novo desse cliente nasce com ele** Um gerente ou administrador pode pôr um cliente na carteira de um vendedor, e os negócios abertos sem responsável desse cliente passam para o dono. A partir daí, o negócio novo desse cliente que chegar sem responsável nasce com o vendedor dono, e o dono recebe uma tarefa interna quando o cliente escreve numa conversa que já está com outro vendedor (uma tarefa por cliente enquanto ela estiver aberta; o cliente não recebe mensagem nenhuma). A primeira mensagem de uma conversa nova, que ainda não tem responsável, e as mensagens enviadas pelo vendedor não geram aviso. Vendedor que saiu da equipe ou passou a só leitura deixa de contar como dono, e excluir o login dele devolve os clientes ao fluxo normal. Por enquanto a carteira é definida pela API (`PATCH /api/v1/contacts/{id}/carteira`, gerente ou acima); o cartão na ficha do contato e a faixa no chat vêm depois (#2591). Nada muda para quem não usa: cliente sem carteira segue o rodízio de hoje, e a atualização não põe ninguém em carteira nenhuma. Nada precisa ser feito ao atualizar.
+- **O cliente pode ter um vendedor dono (carteira); o dono é avisado por tarefa quando o cliente escreve numa conversa que está com outro vendedor, e o negócio novo desse cliente nasce com ele** Por enquanto a carteira é definida pela API (gerente ou acima); o cartão na ficha do contato vem depois. Cliente sem carteira segue o rodízio de hoje, e a atualização não põe ninguém em carteira.
 
-  Proposta e desenho de @hudson-souza-mkt (#2591), implementação de @webtecnica (#2667).
+  Contribuição de @webtecnica (#2667), a partir da proposta de @hudson-souza-mkt (#2591).
 
-- **Configurações › Financeiro ganha Editar em contas, formas de pagamento, plano de contas, regras de comissão e lançamentos recorrentes** Configurações › Financeiro: contas, formas de pagamento, plano de contas, regras de comissão e lançamentos recorrentes ganham Editar, sem desativar e recadastrar — contribuição de @webtecnica (#2661, Closes #2641).
+- **Configurações › Financeiro ganha Editar em contas, formas de pagamento, plano de contas, regras de comissão e lançamentos recorrentes** Sem desativar e recadastrar. Junto, editar uma regra de comissão deixa de dar erro, e editar uma conta deixa de zerar o saldo inicial e a moeda. Lançamentos e comissões já gerados não mudam.
 
-  Junto, dois defeitos da edição pela API: editar uma regra de comissão respondia erro 500, e editar uma conta zerava o saldo inicial e voltava a moeda para BRL quando esses campos não vinham no pedido. Editar não reescreve lançamentos nem comissões já gerados. Nada precisa ser feito ao atualizar.
+  Contribuição de @webtecnica (#2661), a partir da issue #2641 de @carloshmlima.
 
-- **Você pode cobrar as empresas que atende pelo Asaas, com Pix e boleto todo mês** A cobrança dos seus clientes ganha um segundo provedor de pagamento: o Asaas. Com ele, a empresa que você atende recebe a cobrança todo mês (ou todo ano) e paga por Pix, boleto ou cartão, sem precisar cadastrar cartão — a Stripe no Brasil não oferece Pix. O pagamento por Pix ou boleto é feito a cada cobrança, não é débito automático. É opcional: quem não usa a cobrança não vê diferença nenhuma.
+- **Você pode cobrar as empresas que atende pelo Asaas, com Pix e boleto todo mês** Opcional: em Admin › Cobrança › Conexão, escolha Asaas e cole a chave de API. Pix e boleto são pagos a cada cobrança (não é débito automático); atraso, suspensão e reativação funcionam como na Stripe. Assinaturas existentes ficam no provedor em que nasceram. Nada muda para quem não usa a cobrança.
 
-  Para usar, vá em Admin › Cobrança › Conexão, escolha Asaas e cole a chave de API da sua conta do Asaas. A tela explica em uma frase para que serve cada provedor e mostra se a chave é de teste (sandbox) ou de produção; da chave, só os quatro últimos caracteres ficam à vista. O aviso de pagamento é cadastrado sozinho na sua conta do Asaas. Se a sua conta não permitir, a tela mostra o passo a passo para cadastrá-lo no painel do Asaas, com um código de segurança que aparece uma vez só.
-
-  Na hora de assinar, a empresa informa o CPF ou o CNPJ de quem paga, já preenchido com o CNPJ do cadastro dela. O número é conferido antes de ir ao Asaas e não fica guardado no sistema. Avisos de atraso, tolerância, suspensão e reativação automática funcionam como na Stripe.
-
-  As assinaturas novas usam um provedor só, o que você escolher; as que já existem continuam no provedor em que nasceram, e a tela não deixa trocar de provedor enquanto houver empresas pagando no outro. Nenhuma configuração ou ação é necessária para atualizar.
-
-- **A marca própria ganha uma cor opcional para o tema escuro, ao lado da cor principal, como o logo já tinha** Em Marca (instalação) e em Configurações › Marca (organização) há um campo novo, opcional: "Cor da marca no tema escuro". Vazio, nada muda: os dois temas continuam derivando da cor principal, exatamente como antes. Preenchido, o tema escuro deriva dessa segunda cor pelos mesmos pisos de contraste, e o tema claro, os e-mails e o logo seguem na cor principal. Uma cor escura inválida nunca derruba a principal: o tema escuro volta a derivar dela. Uma cor escura neutra (cinza, preto ou branco) deixa o tema escuro com a cor padrão do sistema, e a tela avisa. A lista "O que o sistema ajustou" fala de cada cor só no tema que ela pinta. Nada precisa ser feito ao atualizar: o `update.sh` cria a coluna nova.
+- **A marca própria ganha uma cor opcional para o tema escuro, ao lado da cor principal, como o logo já tinha** Em Marca e em Configurações › Marca, o campo "Cor da marca no tema escuro". Vazio, nada muda; preenchido, só o tema escuro usa essa cor (e-mails e tema claro seguem na principal).
 
   Contribuição de @webtecnica (#2682), a partir da issue #2482 de @TOSTES-LAB.
 
-- **O administrador da plataforma edita o cadastro, corrige o e-mail de acesso e exclui um tenant pela tela** Na tela de tenants do painel de administração, o administrador da plataforma agora edita os dados cadastrais do tenant (os mesmos de Configurações › Empresa) e corrige o e-mail de acesso de cada pessoa que ainda tem acesso ao tenant. É o conserto de quem se cadastrou com o endereço errado: o novo e-mail passa a valer no login e na recuperação de senha, e um e-mail que já pertence a outro login é recusado. A troca não acontece em silêncio: a Central de avisos de cada empresa em que a pessoa tem acesso recebe um aviso com o nome dela e a data, sem nenhum endereço, e o endereço antigo recebe um e-mail avisando da troca quando há envio de e-mail configurado. Também é possível excluir um tenant de vez. A exclusão só vale para tenant suspenso pelo administrador, nunca para o suspenso por falta de pagamento — nem quando essa suspensão foi trocada depois por uma do administrador —, nem para o que ainda tem assinatura ativa no provedor de cobrança (a tela pede para cancelar a assinatura antes), e pede o motivo e o identificador digitado. Ela remove os arquivos e os logins que só pertenciam àquele tenant, desconecta o WhatsApp só depois que o banco confirmou a exclusão — e, se a exclusão for interrompida depois dessa confirmação, repetir o pedido com o mesmo identificador retoma a limpeza — e guarda na auditoria o registro da exclusão e o resumo dos pedidos LGPD atendidos. As linhas de auditoria antigas da empresa continuam guardadas, mas deixam de apontar para ela: o registro da exclusão diz quantas eram, de quando a quando e quem eram os membros. Editar, excluir e trocar e-mail exigem acesso completo à plataforma e a verificação em duas etapas de quem a tem cadastrada. Nada precisa ser feito ao atualizar. Contribuição de @Draven9 (#1967).
+- **O administrador da plataforma edita o cadastro, corrige o e-mail de acesso e exclui um tenant pela tela** A troca de e-mail avisa a Central da empresa e o endereço antigo. A exclusão só vale para tenant suspenso pelo administrador (nunca por falta de pagamento) e sem assinatura ativa, pede motivo e confirmação, e fica na auditoria. Exige acesso completo à plataforma e a verificação em duas etapas de quem a tem.
 
-- **O cartão de documento do Inbox mostra o nome original do arquivo, e não só a extensão** Quando um cliente mandava uma planilha ou um PDF, o cartão do documento no Inbox
-  mostrava só a extensão (`XLSX`, `PDF`), porque o nome que o cliente deu ao arquivo
-  não era guardado. Agora a entrada das mensagens guarda esse nome nas duas formas de
-  conectar o WhatsApp (a conexão por QR code e a API oficial), e o cartão passa a
-  mostrá-lo. O nome é limpo de caracteres invisíveis e limitado em tamanho; nome
-  comprido é encurtado na tela e aparece inteiro ao passar o mouse. Vale para os
-  documentos que chegarem depois da atualização: os que já estão no Inbox continuam
-  mostrando a extensão. Nada precisa ser feito ao atualizar. Contribuição de
-  @webtecnica (#2619), a partir da issue de @gleisaum (#2613).
+  Contribuição de @Draven9 (#1967, entrou pelo #2625).
 
-- **Conexões ganha Agendar pausa — a janela de manutenção pausa e retoma sozinha** Quem precisa desligar um número por alguns minutos (manutenção, troca de roteador, janela de silêncio) só tinha a pausa manual imediata: a conexão ficava desligada até alguém lembrar de religar, e ninguém sabia quem pausou nem por quê. Agora a Central de Conexões tem Agendar pausa: um diálogo marca início e fim no horário local da organização, escolhe uma conexão ou todas, e a pausa e a retomada acontecem sozinhas no horário marcado. A mensagem que chega durante a janela continua sendo gravada e volta à fila quando a conexão volta. Quando a janela pausa, a Central de avisos abre o aviso de canal pausado, e ele fecha sozinho na retomada, como na pausa manual. Janelas agendadas podem ser listadas e canceladas; o que o operador pausou com a mão não é religado pelo relógio, e duas janelas que se sobrepõem no mesmo canal só o religam no fim da última. Ainda não dá para editar uma janela (cancele e agende de novo), e uma falha do agendador aparece no log do servidor, não na Central. Nada precisa ser feito ao atualizar — a tela nova aparece sozinha em Conexões.
+- **O cartão de documento do Inbox mostra o nome original do arquivo, e não só a extensão** Vale para documentos recebidos depois da atualização; os antigos seguem mostrando a extensão.
 
-  Contribuição de @webtecnica (issue #2388).
+  Contribuição de @webtecnica (#2619), a partir da issue #2613 de @gleisaum.
 
-- **Pedidos de plataforma sem integração nativa (Tray, Loja Integrada, WooCommerce) entram por uma origem genérica** Quem vende pelo site numa plataforma sem conector próprio no CRM — Tray, Loja Integrada, WooCommerce — já podia gravar pedidos em `orders` por uma ponte própria, mas só se a origem fosse `nuvemshop`, `vtex` ou `shopify`: qualquer outra recebia recusa do banco, e a saída era alterar a restrição na instalação, com o risco de uma atualização futura parar no meio quando a lista mudasse.
+- **Conexões ganha Agendar pausa — a janela de manutenção pausa e retoma sozinha** Escolha início, fim e uma conexão ou todas; a mensagem que chega durante a janela é guardada e volta à fila na retomada. Janelas podem ser listadas e canceladas; ainda não dá para editar uma.
 
-  Agora existe uma origem genérica, `external`, para quem chega por integração própria, com o nome da plataforma no `payload` do pedido. A mesma entrada serve qualquer loja sem precisar de migration nova a cada caso, os três conectores nativos continuam exatamente como estavam, e a guarda não caiu: valor fora do vocabulário continua sendo recusado.
+  Contribuição de @webtecnica (#2673, issue #2388), construído sobre o #2318 de @paulolimajr77.
 
-  Para usar: grave o pedido com `external_provider = 'external'` e a plataforma em `payload` (por exemplo `{"platform": "tray"}`). Como a chave única do pedido é organização + origem + `external_id`, namespaceie o id vindo da plataforma (por exemplo `tray:10231`) para dois pedidos de plataformas diferentes não disputarem a mesma linha.
+- **Pedidos de plataforma sem integração nativa (Tray, Loja Integrada, WooCommerce) entram por uma origem genérica** Grave o pedido com a origem `external`, o id como `<plataforma>:<id>` e a plataforma no `payload`. Os três conectores nativos não mudam. **Se você alargou a restrição de origem à mão, os pedidos antigos são convertidos sozinhos, mas troque a sua ponte para gravar `external` antes de atualizar: depois, gravar o nome da plataforma é recusado e o pedido novo se perde.**
 
-  Se a sua instalação já tinha alargado a restrição à mão para gravar outra origem (por exemplo `tray`), a atualização converte esses pedidos sozinha: viram `external`, com a plataforma no `payload` e o id prefixado (`tray:10231`), que é o mesmo formato acima. **Isso não muda a sua ponte: troque-a para gravar `external`, com o id `<plataforma>:<id>` (por exemplo `tray:10231`) e a plataforma no `payload`, ANTES de atualizar ou junto.** Depois da atualização, gravar o nome da plataforma (por exemplo `tray`) volta a ser recusado pelo banco — é a guarda fazendo o trabalho dela —, e uma ponte que não foi trocada passa a perder todo pedido novo. Trocada, ela encontra os pedidos antigos já convertidos no lugar.
+  Contribuição de @webtecnica (#2670), a partir da issue #2442 de @valterhjr.
 
-  Contribuição de @webtecnica (#2670).
+- **Automações de tempo agora deixam escolher o funil e a etapa pela tela** "N dias sem mensagem" e "N dias na mesma etapa" ganham os seletores, e salvar pela tela não apaga mais o recorte.
 
-- **Automações de tempo agora deixam escolher o funil e a etapa pela tela** As automações "N dias sem mensagem" e "N dias na mesma etapa" aceitam, desde que nasceram, um recorte de funil (e a segunda, também de etapa) — mas a tela de automações não desenhava nenhum dos dois: quem precisava do recorte só conseguia configurá-lo pela API, e a tela salvava por cima. Agora o bloco QUANDO desses gatilhos tem os seletores de funil (nos dois) e de etapa (no de etapa parada), com "Todos os funis" e "Qualquer etapa" para voltar a valer para tudo. Abrir uma regra com recorte mostra o recorte que está gravado. Nada muda para quem não usa esse recorte.
+  Contribuição de @Tong-bit-art (#2685), a partir da issue #2483 de @aleflores35.
 
-  Contribuição de @Tong-bit-art (#2685), a partir da issue #2483.
+- **Instalação com o banco na própria VPS passa a funcionar atrás do proxy do Coolify** Passo a passo medido em `docs/saas/coolify.md`. Quem instala sem as variáveis novas não vê mudança.
 
-- **Instalação com o banco na própria VPS passa a funcionar atrás do proxy do Coolify** Quem usa Coolify (ou outro painel cujo proxy roda em rede Docker própria) agora
-  pode instalar o CRM com o Supabase na mesma VPS. Antes, o banco tentava usar a
-  porta 8000, que é a do painel do Coolify, e a instalação parava; e o proxy do
-  painel não alcançava as APIs do banco.
-
-  Para usar, exporte a porta do banco e a rede do proxy ao rodar o instalador:
-  `API_GW_HTTP_PORT=8001 REVERSE_PROXY=traefik TRAEFIK_NETWORK=coolify
-  TRAEFIK_ENTRYPOINT=https TRAEFIK_ENTRYPOINT_HTTP=http bash
-  hostgator-setup-kit/install-single-server.sh --domain SEU_DOMINIO`. Passo a
-  passo medido em docs/saas/coolify.md. Quem instala sem essas variáveis não vê
-  mudança nenhuma. Construído sobre o #2150 e o #2289 de @webtecnica (issue #2099
-  de @brunno-soaress).
+  Construído sobre o #2150 e o #2289 de @webtecnica, a partir da issue #2099 de @brunno-soaress.
 
 ### Alterado
 
-- **Passar a conversa para uma pessoa por assunto jurídico vira uma chave por agente** Em quase todo nicho, escrever "procon", "advogado" ou "processo judicial" é sinal de reclamação grave e o sistema entrega a conversa para uma pessoa. Para um escritório de advocacia é o vocabulário normal do cliente (#2097) — quase todo lead caía em passagem e o agente não concluía a qualificação.
+- **Passar a conversa para uma pessoa por assunto jurídico vira uma chave por agente** Para um escritório de advocacia, "processo" e "advogado" são o vocabulário normal do cliente. No cartão "Passar para uma pessoa", um interruptor novo (padrão ligado, só admin muda) desliga essa passagem; o pedido explícito de pessoa e as palavras de passagem seguem valendo.
 
-  A escolha passou a morar NA VERSÃO DO AGENTE: a coluna `ai_agent_versions.handoff_legal_enabled` (booleano, padrão ligado; `add column if not exists` + `comment on column`, e `fn_ai_agent_version_content_immutable` recriada com a coluna nova para a versão publicada continuar imutável). Desligada, só muda a descrição da ferramenta `request_human_handoff`: ela deixa de mandar passar em "questão jurídica" e passa a dizer que assunto jurídico é o trabalho normal daquele atendimento e não é, sozinho, motivo de passagem. O pedido explícito de pessoa (`detectHumanHandoffRequest`) e as palavras de passagem (`handoff_keywords`) continuam sempre ligados, e os demais caminhos para humano — irritação percebida pelo Jev, pedido de não receber mais mensagens, limite de gasto com IA e caso escalado pela equipe — não mudam.
+  Contribuição de @webtecnica (#2156), a partir da issue #2097 de @melgacoadv.
 
-  Na tela, o cartão "Passar para uma pessoa" ganha um segundo interruptor embaixo do "Deixar o agente chamar uma pessoa...", desabilitado quando o de cima está desligado. Só admin muda, porque toda escrita de versão já exige admin. A publicação que altera o valor emite `ai_agent.legal_handoff_changed` à parte do `ai_agent.published`, com `version_id`, `previous_version_id` e `enabled` — na primeira publicação, sem versão anterior, a referência é o padrão (ligado) e `previous_version_id` sai `null`. A chave também ganha linha em Recursos opcionais, como `passagem_por_assunto_juridico`.
+- **A tela de erro fatal passa a aparecer em espanhol para quem usa o navegador em espanhol, e os textos em espanhol passam a tratar por "tú"** Em português nada muda.
 
-  Contribuição de @webtecnica (#2156).
+  Contribuição de @JowaniOrantes (#2632).
 
-- **A tela de erro fatal passa a aparecer em espanhol para quem usa o navegador em espanhol, e os textos em espanhol passam a tratar por "tú"** A tela que aparece quando o sistema inteiro falha ficava sempre em português. Agora ela segue o idioma do navegador (es-MX, es-419 e outras variantes regionais viram espanhol) e mostra um seletor ES/PT. Para quem usa em português, os textos não mudam. Os textos em espanhol misturavam "usted" com "tú" e alguns termos da Espanha ("móvil", "vídeo"). Passam a usar "tú" e "celular"/"video". Nada precisa ser feito ao atualizar. Contribuição de @JowaniOrantes (#2632).
+- **Comandas vira módulo — toda instalação anterior a esta versão continua com Comandas ligada; instalação nova liga em Administração › Módulos** Nada a fazer ao atualizar: os dados ficam como estão. O caixa (contas, lançamentos, Faturamento) continua com ou sem o módulo.
 
-- **Comandas vira módulo — toda instalação anterior a esta versão continua com Comandas ligada; instalação nova liga em Administração › Módulos** As comandas (itens do atendimento, forma de pagamento, comissões e fidelidade) passam a ser um módulo opcional, como Honorários. Toda instalação anterior a esta versão continua com Comandas ligada e com os dados como estão: nada precisa ser feito ao atualizar. Numa instalação nova, quem administra liga o módulo em Administração › Módulos; até lá, o menu de Comandas, as regras de comissão em Configurações › Financeiro e a opção "Abrir comanda ao ganhar um negócio" no funil não aparecem, e uma instalação que não usa comanda deixa de carregar essas tabelas. O caixa (contas, formas de pagamento, plano de contas, lançamentos e o relatório de Faturamento) continua no sistema com ou sem o módulo. Ao anonimizar um contato, as comandas dele continuam sendo tratadas como antes: a observação é apagada e os motivos de cancelamento e de estorno que estavam preenchidos passam a "[redigido]"; valor, status e datas ficam. Contribuição de @webtecnica (#1907).
+  Contribuição de @webtecnica (#1907).
 
 ### Corrigido
 
-- **Follow-up de texto fixo respeita a janela de disparo do canal e a faixa do agente** O follow-up de texto fixo agora respeita a janela de disparo do canal e a faixa de horário do agente antes de enviar. Fora delas o envio não sai mais: o job volta para `pending` no primeiro instante em que as duas estão abertas, com `action_deferred` gravado no enrollment e o mesmo motivo que o caminho do worker já registrava (`outside_window` / `followup_send_window`). Dentro da janela nada muda — fluxos que já disparavam no horário certo seguem disparando.
+- **Follow-up de texto fixo respeita a janela de disparo do canal e a faixa do agente** Fora delas, o envio espera a próxima abertura em vez de sair de madrugada.
 
-  Contribuição de @webtecnica (#2677, issue #2658).
+  Contribuição de @webtecnica (#2677), a partir da issue #2658 de @paulolimajr77.
 
-- **Com a assinatura do ChatGPT conectada, a lista de modelos passa a ser buscada no serviço do Codex, e não mais num endereço que recusava o token** Com a credencial "OpenAI pela assinatura" conectada, a lista de modelos da conta era buscada num endereço que recusa o token da assinatura: a lista nunca era gravada e o "Publicar" do agente respondia `model_not_found`. Agora a lista é buscada no mesmo serviço que o Codex usa. Se a busca falhar, o seletor de modelo do agente mostra o motivo e diz que a conta continua conectada; sem conta conectada, ele pede para conectar em IA › Credenciais. A conversa em si **não mudou**: ela segue indo ao endereço que, pela medição da issue, recusa o token da assinatura e cai na credencial de reserva (#2602, ponto 1, em aberto). Ter a lista de modelos não quer dizer que a assinatura já responde ao cliente. Nada precisa ser feito ao atualizar. Se a lista não vier na sua conta, declare `CODEX_CLIENT_VERSION` no `.env` com um valor de `client_version` (ex.: `0.160.1`). Contribuição de @webtecnica (#2622), a partir da issue #2602 de @GabrielBottan.
+- **Com a assinatura do ChatGPT conectada, a lista de modelos passa a ser buscada no serviço do Codex, e não mais num endereço que recusava o token** Se a busca falhar, o seletor mostra o motivo. A conversa em si ainda cai na credencial de reserva (#2602, em aberto). Se a lista não vier, declare `CODEX_CLIENT_VERSION` no `.env` (ex.: `0.160.1`).
 
-- **Conexão com o banco que falha no meio de uma operação deixa de ser reaproveitada** Quando uma consulta do motor de atendimento passava do tempo limite no meio de uma operação em várias etapas (pegar um job da fila, concluir um job, enviar uma mensagem, disparar um agendamento, preparar o roteiro padrão ou responder um caso), a conexão com o banco podia voltar para o grupo de conexões com a operação antiga ainda aberta e, se o desfazer também passasse do tempo, a próxima tarefa que recebesse essa conexão podia rodar dentro da operação de quem tinha falhado. Agora a conexão que falha é descartada, e uma nova é aberta para a próxima tarefa. Quem não falhou segue como antes. Nada precisa ser feito ao atualizar.
+  Contribuição de @webtecnica (#2622), a partir da issue #2602 de @GabrielBottan, construído sobre o #2456 de @omayklourenco.
 
-  Contribuição de @webtecnica (#2621, fecha #2506).
+- **Conexão com o banco que falha no meio de uma operação deixa de ser reaproveitada** No motor de atendimento, a próxima tarefa podia herdar a operação de quem falhou; agora a conexão que falha é descartada.
 
-- **A resposta de quem clica num botão do modelo agora aparece na conversa** Quando o contato tocava num botão de um modelo (por exemplo "Algumas" ou "Não tenho interesse"), a resposta não entrava no CRM: a conversa seguia como se o cliente nunca tivesse escrito e a IA não via a resposta. Agora o toque entra como uma mensagem de texto com o nome do botão, e o mesmo vale para respostas de botão e de lista. Não há nada a configurar. Crédito: @ViktorHugodev.
+  Contribuição de @webtecnica (#2621, issue #2506), sobre o tempo limite trazido pelo #2501 de @rafaelbatistazz.
 
-- **Comentários e mensagens do kit passam a dizer o que o Compose mede, sem mudança na atualização** Quem opera e quem mexe no kit lia comentários e mensagens que descreviam o
-  `docker compose up -d` de um jeito que a medição contraria: com `image:` e
-  `build:` lado a lado no mesmo serviço, o Compose constrói em QUALQUER falha de
-  pull — tag inexistente, registro fora por DNS, arquitetura diferente da das
-  imagens publicadas —, não só na última. Os comentários do `update.sh`, do
-  `install.sh` e do `_common.sh` e a mensagem de pull que falhou passam a dizer
-  o que a máquina faz: worker, scheduler e agente de voz continuam com imagem
-  publicada e construção local lado a lado (é o escape barato deles), e o `app`
-  continua SEM `build:` no compose de produção, de propósito — é a falta da
-  imagem dele que faz o `up -d` falhar e entrega a decisão ao portão que recusa
-  construir quando o registro não responde. Os testes de packaging passam a
-  prender os dois lados dessa régua. Nada muda na instalação que já funciona:
-  mesma imagem puxada, mesma recuperação, mesma versão no final.
+- **A resposta de quem clica num botão do modelo agora aparece na conversa** O toque (e respostas de botão e de lista) entra como texto com o nome do botão, e a IA passa a vê-lo.
 
-- **Conexão que falha no meio de uma transação deixa de voltar para o grupo de conexões** Quando uma consulta estourava o tempo limite no meio de uma transação aberta à mão em rotinas do prospecção (o cadeado de sessão, a sessão do agente, o bate-papo de montagem e a montagem em si), na resposta de um caso obsoleto, na avaliação de saúde de um número, na troca de membros de um roteador ou na leitura de um banco externo, a conexão voltava para o grupo de conexões sem erro — com a operação antiga possivelmente ainda aberta ou, no cadeado de sessão, com o `pg_advisory_unlock` pendente — e a próxima tarefa que recebesse essa conexão rodava dentro da operação de quem falhou. Agora a conexão que falhou é descartada (o pg-pool a encerra ao receber o erro) e uma nova é aberta para a próxima tarefa. Quem não falhou segue como antes, com o mesmo `release()` sem argumento. Nada precisa ser feito ao atualizar.
+  Contribuição de @ViktorHugodev (#2688).
 
-  Contribuição de @webtecnica (fecha #2624).
+- **Comentários e mensagens do kit passam a dizer o que o Compose mede, sem mudança na atualização** Só texto e testes do kit; a instalação que funciona segue igual.
 
-- **Na tela de marca, o contraste do modo escuro passa a medir a cor do tema escuro** Com a cor da marca no tema escuro preenchida, o cartão "O texto em cima dos botões" em Administração › Marca mostrava, na linha "No modo escuro", o contraste da cor principal, e não o do botão que o tema escuro de fato pinta. Com `#1C261D` + `#D9AC62`, por exemplo, a tela dizia 6,7:1 e o botão pintado tem 11,4:1. Agora o número é o do botão que aparece na tela. As cores pintadas não mudam.
+  Contribuição de @webtecnica (#2517), a partir da issue #1060 de @AleksisDorsey.
+
+- **Conexão que falha no meio de uma transação deixa de voltar para o grupo de conexões** Nas rotinas da prospecção, nos casos obsoletos, na saúde do número, nos roteadores e na leitura de banco externo, a próxima tarefa podia herdar uma operação ou uma trava presa de quem falhou; agora a conexão que falha é descartada.
+
+  Contribuição de @webtecnica (#2652, issue #2624).
+
+- **Na tela de marca, o contraste do modo escuro passa a medir a cor do tema escuro** O número agora é o do botão que aparece na tela; as cores não mudam.
 
   Achado na conferência pela tela do #2682 (@webtecnica).
 
-- **Em Portugal, a dica da tela Marca manda conferir a "Denominação social" e fala de RGPD** A tela Configurações → Marca tem uma dica que manda conferir o nome legal da empresa no relatório de dados entregue ao titular. No Brasil ela fala de "Razão social" e de LGPD; em Portugal, o campo se chama "Denominação social" e a lei é o RGPD — e a dica, escrita em duro, apontava para um campo com outro nome para quem opera em Portugal. Agora ela monta o nome do campo e o da lei a partir do país da organização. No Brasil o texto não muda.
+- **Em Portugal, a dica da tela Marca manda conferir a "Denominação social" e fala de RGPD** No Brasil o texto não muda.
 
-  Contribuição de @Tong-bit-art (#2646), a partir da issue #2503.
+  Contribuição de @Tong-bit-art (#2646, issue #2503), construído sobre o #2502 de @webtecnica.
 
-- **Etapa da Meta com evento que o canal não repassa vira pendência com motivo visível** Uma regra de etapa da Meta escolhida com um evento fora do vocabulário do
-  canal (`QualifiedLead` e `ViewContent` estão na lista da tela e fora de
-  `ChannelConversionInput`) não tinha caminho quando a organização só tem o
-  canal intermediado, e a pendência saía como `sem_conexao` — com o texto
-  "Nenhuma conta de anúncios conectada… Preencha o formulário acima", mandando
-  a pessoa preencher uma conexão direta que aquela instalação nunca vai ter.
-  Agora a pendência grava o motivo `evento_fora_do_canal`, que diz o que fazer
-  (escolher, para a etapa, um evento que o canal repassa — Lead enviado, Início
-  de compra, Adicionou ao carrinho — ou configurar a conexão direta da Meta), e
-  o detalhe nomeia o evento que ficou de fora. Compra e
-  etapas da lista do canal seguem como antes; nada é renomeado no fio, porque
-  reportar à Meta um nome que não aconteceu seria pior que não reportar.
+- **Etapa da Meta com evento que o canal não repassa vira pendência com motivo visível** A pendência diz o que fazer (escolher um evento que o canal repassa, ou conectar a Meta direto), em vez de pedir uma conexão que a instalação não tem.
 
-  Contribuição de @webtecnica (#2660, issue #2457).
+  Contribuição de @webtecnica (#2660, issue #2457), construído sobre o #2455 de @jmpo.
 
-- **Excluir um tenant confere a assinatura com o provedor de cobrança na hora, e recusa se o provedor não responder** A exclusão de tenant pelo painel de administração passa a consultar o provedor de cobrança no momento da exclusão, em vez de confiar na última leitura gravada. Uma assinatura que voltou a ficar ativa depois dessa leitura agora impede a exclusão, e uma que já foi cancelada no provedor deixa de impedir. Se o provedor não responder, a exclusão é recusada e nada é apagado: basta tentar de novo, ou conferir a conexão em Cobrança. Nada precisa ser feito ao atualizar. Contribuição de @webtecnica (#2650), a partir da issue #2626.
+- **Excluir um tenant confere a assinatura com o provedor de cobrança na hora, e recusa se o provedor não responder** Nada é apagado nesse caso; basta tentar de novo.
 
-- **O fio da conversa volta a rolar até o fim quando o cartão de passagem chega antes das mensagens** Quem abria uma conversa recém-passada para humano às vezes via o cabeçalho do
-  cartão "Por que a IA passou para você", mas o convite "Assumir e responder"
-  ficava montado, clicável e FORA da janela: o gesto que resolve o atendimento
-  existia e ninguém o via. O defeito era intermitente: pela leitura do código,
-  dependia da ordem de chegada das duas consultas do fio. Quando as passagens
-  resolviam antes das mensagens, o esqueleto de carregamento ainda estava na tela,
-  o fio de verdade ainda não existia, e a rotina de ancoragem marcava a abertura
-  como concluída sobre um destino inexistente. Quando as mensagens chegavam, a
-  rotina acreditava que alguém estava lendo o histórico e devolvia sem rolar.
-  Agora a abertura só se encerra com o fio de verdade montado, então a conversa
-  passa a ancorar no fim, junto do convite, também quando o cartão chega antes
-  das mensagens.
-  Nada precisa ser feito ao atualizar. Contribuição de @webtecnica (#2664, issue #2515).
+  Contribuição de @webtecnica (#2650, issue #2626).
 
-- **Quem pula o passo do funil no onboarding já sai com três etapas do quadro ligadas ao assistente** Toda empresa nova nasce com o quadro "Pedidos", e as etapas dele não estavam ligadas aos passos do assistente. Quem passava pelo passo "funil" do onboarding recebia um quadro já ligado; quem clicava em "Pular por enquanto" terminava a instalação com o assistente sem mover card nenhum, e o aviso disso só aparecia na página do agente. Agora, ao pular, as três etapas do quadro semeado que têm passo equivalente ficam ligadas, pelo mesmo critério do pacote "Loja": Aguardando pagamento (negociando), Pago (ganho) e Cancelado (perdido). Na etapa de perda, o assistente não move o card sozinho: ele abre um aviso no inbox pedindo que alguém mova e informe o motivo. Etapas que alguém já ligou à mão não são tocadas. Empresas que já tinham pulado o passo continuam como estão; para ligá-las, use Configurações › Funis. Nada a fazer na atualização.
+- **O fio da conversa volta a rolar até o fim quando o cartão de passagem chega antes das mensagens** O "Assumir e responder" volta a ficar à vista ao abrir a conversa.
+
+  Contribuição de @webtecnica (#2664, issue #2515).
+
+- **Quem pula o passo do funil no onboarding já sai com três etapas do quadro ligadas ao assistente** Aguardando pagamento, Pago e Cancelado, como no pacote "Loja". Empresas que já pularam ficam como estão; ligue em Configurações › Funis.
 
   Contribuição de @webtecnica (#2663), a partir da issue #2451 de @TOSTES-LAB.
 
-- **O lembrete de compromisso não é mais dado como enviado quando o canal não pode entregá-lo** Nos canais com janela de 24 horas (como o Instagram), uma mensagem livre só é entregue se o cliente escreveu nas últimas 24 horas. O lembrete de agenda escolhia o primeiro canal conectado, marcava o aviso como enviado e só depois mandava; fora da janela, a entrega era recusada e o compromisso ficava como avisado sem ter sido. Agora o lembrete só usa um canal que pode entregar naquele momento: se o primeiro não pode, ele tenta o próximo canal conectado; se nenhum pode, o aviso não é marcado como enviado, o motivo fica registrado no log do agendador e a próxima rodada tenta de novo — quando o cliente escrever, o lembrete sai. Em canais sem janela de 24 horas nada muda. Nada precisa ser feito ao atualizar. Contribuição de @webtecnica (issue #2595).
+- **O lembrete de compromisso não é mais dado como enviado quando o canal não pode entregá-lo** Fora da janela de 24h (ex.: Instagram) ele tenta outro canal; se nenhum pode, tenta de novo na próxima rodada.
 
-- **O arquivo de dados que o titular recebe ao pedir acesso é montado em partes e usa cerca de um terço da memória de antes** O arquivo de dados (`data.json`) do pedido de acesso do titular era montado inteiro
-  na memória. Num processo de medição na VPS de testes, com 100 mil mensagens, esse
-  trecho usava 612 MB, acima dos 512 MB do worker, e passou a usar 198 MB. Agora ele é
-  escrito em partes, direto no envio. O conteúdo do arquivo é exatamente o mesmo, byte
-  a byte, no Brasil e fora dele. Se a leitura das mensagens falhar no meio, o arquivo
-  passa a listar as mensagens em `secoes_no_limite`, que é o aviso de que pode haver
-  mais registros do que os entregues. Antes, o arquivo saía incompleto sem aviso. A
-  lista de mensagens ainda é lida inteira antes do envio; com volumes bem maiores a
-  memória volta a crescer, e isso segue na issue #2576. Nada precisa ser feito ao
-  atualizar. Contribuição de @webtecnica (#2651), a partir da issue #2576.
+  Contribuição de @webtecnica (#2620), a partir da issue #2595 de @kristhianlumai-lgtm.
 
-- **A tela de Equipe mostra os papéis no idioma da interface** O convite, a lista de membros e a lista de convites pendentes mostravam o código interno do papel (`viewer`, `agent`, `manager`, `admin`) e o título "Role". Agora mostram Somente leitura, Atendente, Gerente e Administrador, com a tradução em espanhol, os mesmos nomes que o onboarding e a tela de segurança já usavam. O valor gravado não muda.
+- **O arquivo de dados que o titular recebe ao pedir acesso é montado em partes e usa cerca de um terço da memória de antes** O conteúdo é o mesmo; se a leitura falhar no meio, o arquivo passa a avisar que pode estar incompleto.
 
-  Contribuição de @carloshmlima.
+  Contribuição de @webtecnica (#2651, issue #2576).
 
-- **Poda de retenção interrompida no meio leva as contagens dos lotes que já passaram** Quando uma poda de retenção falha no meio dos lotes (o banco cai no quarto de vinte, por exemplo), os lotes anteriores já foram apagados — mas o relatório e a auditoria registravam zero para aquela tabela, como se nada tivesse sido apagado. No expurgo da auditoria isso significava apagar linhas e contá-las como zero na própria trilha. Agora a contagem dos lotes que passaram aparece no relatório, na auditoria e na resposta do cron, que também passa a devolver o relatório completo quando alguma poda falha. As mensagens de falha perdem o nome repetido e voltam a ser cortadas em 300 caracteres.
+- **A tela de Equipe mostra os papéis no idioma da interface** Somente leitura, Atendente, Gerente e Administrador no lugar do código interno.
 
-  Contribuição de @Tong-bit-art (#2653), a partir da issue #2508 e das sugestões do #2645.
+  Contribuição de @carloshmlima (#2689).
 
-- **Uma poda de retenção que falha não pula mais a anonimização do dia nem some com as contagens das outras podas** O cron diário de retenção poda dezesseis tabelas em sequência e, no fim, retoma as anonimizações de LGPD que ficaram pela metade (o prazo legal é de quinze dias). Se qualquer poda falhasse — uma função ausente num clone, um grant que não veio na atualização —, as podas seguintes não rodavam, a retomada de anonimização daquele dia era pulada e a auditoria registrava só "falhou", sem as contagens do que já tinha sido apagado. Agora cada poda falha sozinha e é nomeada no relatório e na auditoria, junto com as contagens das podas que funcionaram, e a retomada de anonimização roda de qualquer jeito. O cron continua terminando com erro quando alguma poda falha, agora dizendo quais.
+- **Poda de retenção interrompida no meio leva as contagens dos lotes que já passaram** O relatório e a auditoria deixam de registrar zero para o que já foi apagado.
 
-  Contribuição de @Tong-bit-art (#2645), a partir da issue #2508.
+  Contribuição de @Tong-bit-art (#2653, issue #2508).
 
-- **Ligar um recurso opcional passa a dizer onde ele aparece** Quem administra a instalação ligava um recurso opcional em **Recursos opcionais** e ficava sem saber onde ele tinha ido. Agora cada linha diz o caminho completo, antes e depois de ligar — por exemplo "CRM › Ver tudo em CRM › Empresas" ou "Configurações › Dados externos". O caminho inclui o passo do **Ver tudo**, e esse detalhe é o conserto: essas telas não ficam no menu do dia a dia, e o texto antigo dizia só "CRM › Empresas", mandando procurar onde elas não estão. O caminho segue o catálogo do menu, e não uma lista escrita à parte.
+- **Uma poda de retenção que falha não pula mais a anonimização do dia nem some com as contagens das outras podas** Cada poda falha sozinha e é nomeada no relatório; a retomada da LGPD roda de qualquer jeito.
 
-  E os dois recursos que **não** criam entrada no menu (a cobrança dos seus clientes e o login do Codex por assinatura) passam a dizer isso com todas as letras, em vez de deixar quem ligou procurando o que não existe.
+  Contribuição de @Tong-bit-art (#2645, issue #2508).
 
-  Uma correção acompanha:
+- **Ligar um recurso opcional passa a dizer onde ele aparece** Cada linha de Recursos opcionais mostra o caminho completo, e os que não criam menu dizem isso. Empresa com o menu enxuto passa a ver a entrada do recurso ligado.
 
-  - **Empresa com o menu enxuto passa a ver a entrada do recurso ligado.** Quem escolheu a opção de menu simplificado não via entrada nenhuma de recurso opcional, mesmo com o recurso ligado — a lista do menu enxuto é do próprio produto e foi escrita antes de existirem recursos opcionais, então ela não podia ser lida como "esta empresa decidiu esconder". Quem escolheu as áreas **uma por uma** continua mandando: a área que essa pessoa desmarcou segue escondida.
+- **Encontre ofertas com palavras acentuadas antes de revisar a resposta** A revisão de promessas reconhece matrícula, grátis e demonstração.
 
-  Nada muda para quem não liga recurso opcional nenhum.
+  Contribuição de @vitorlacerdadigital (#2629).
 
-- **Encontre ofertas com palavras acentuadas antes de revisar a resposta** A busca complementar da revisão de promessas reconhece matrícula, grátis e demonstração e mantém o limite de cinco trechos. O acervo recebe um índice para reduzir o custo da consulta; as definições de compromisso e os exemplos de slogans continuam presentes quando há evidências. Crédito: @vitorlacerdadigital.
+- **O revisor considera o contexto e pedidos de transferência não viram promessas** Oferecer transferência não conta como promessa; promessas reais na mesma mensagem seguem barradas.
 
-- **O revisor considera o contexto e pedidos de transferência não viram promessas** A revisão de ofertas recebe um recorte limitado da conversa e suas evidências, para conferir condições já informadas pelo cliente. Restrições comerciais continuam valendo, sem confundir benefício geral com garantia individual. Uma pergunta oferecendo transferência não afirma que ela foi executada; promessas independentes na mesma mensagem continuam protegidas. Sem trocar modelo ou publicar agentes. Crédito: @vitorlacerdadigital.
+  Contribuição de @vitorlacerdadigital (#2629).
 
-- **Ofertas aprovadas continuam explícitas nas respostas do agente** A revisão de promessas preserva políticas e condições de produtos entre consultas e recupera trechos pertinentes da base ativa antes de avaliar a resposta. A instrução distingue um convite a uma oferta aprovada de uma promessa sem autorização, evitando a retirada indevida da gratuidade. Ofertas ampliadas, reservas sem confirmação e garantias individuais sem respaldo continuam sujeitas a veto. Não requer nova configuração ou cópia de preços para a base. Crédito: @vitorlacerdadigital.
+- **Ofertas aprovadas continuam explícitas nas respostas do agente** O revisor deixa de retirar a gratuidade aprovada na base; promessa sem respaldo segue vetada. Nada a configurar.
 
-- **Identificar bloqueios de conteúdo do provedor no teste do agente** A prévia e as execuções identificam o bloqueio de conteúdo devolvido pelo provedor, mesmo quando a resposta HTTP é bem-sucedida e não contém uma candidata. A mensagem distingue essa falha de saldo, credencial e veto de promessas, sem expor o corpo recebido ou mudar a proteção do provedor. O revisor preserva acolhimento e argumentos comerciais, concentrando o veto em compromissos concretos sem autorização. Crédito: @vitorlacerdadigital.
+  Contribuição de @vitorlacerdadigital (#2629).
 
-- **Os dois prazos do arquivo de webhooks ganham o teto de 36500 dias** Um `WEBHOOK_LOG_BODY_RETENTION_DAYS=9999999` no `.env` virava um corte em
-  `-025353-09-14` no DELETE da poda do arquivo de webhooks — uma data que ia ao
-  PostgREST como corte da poda — e um número ainda maior (`1e9`) lançava
-  `RangeError: Invalid time value` na montagem da data, derrubando a rodada do
-  cron `webhook-log-retention`. Os dois prazos do arquivo de webhooks
-  (`WEBHOOK_LOG_BODY_RETENTION_DAYS` e `WEBHOOK_LOG_ROW_RETENTION_DAYS`) eram os
-  últimos sem teto: os demais já passavam pelo teto de 36500 dias (100 anos) da
-  política de retenção. Agora esses dois também: um valor acima do teto é
-  trocado pelo teto e o boot avisa no log que o número escrito não foi usado,
-  enquanto um valor dentro do intervalo passa intacto. Nada precisa ser feito ao
-  atualizar. Contribuição de @webtecnica (#2623, issue #2612).
+- **Identificar bloqueios de conteúdo do provedor no teste do agente** A prévia diz quando o provedor bloqueou o conteúdo, separado de saldo, credencial e veto de promessas.
 
-- **A anonimização por seção de módulo não grava mais o rótulo onde o campo estava vazio** O modo `colunas_rotulo` da anonimização por seção de módulo passa a preservar o nulo, como `colunas_redigidas` já fazia: um campo que nunca foi preenchido continua vazio depois da anonimização, em vez de passar a dizer `Cliente Anonimizado #N`. Nenhum módulo oficial usa `colunas_rotulo` hoje, então nenhum dado existente muda.
+  Contribuição de @vitorlacerdadigital (#2629).
+
+- **Os dois prazos do arquivo de webhooks ganham o teto de 36500 dias** Um valor exagerado no `.env` não derruba mais a poda: é trocado pelo teto, com aviso no log.
+
+  Contribuição de @webtecnica (#2623, issue #2612).
+
+- **A anonimização por seção de módulo não grava mais o rótulo onde o campo estava vazio** Nenhum módulo oficial usa esse modo hoje; nenhum dado existente muda.
 
   Contribuição de @webtecnica (#2683, issue #2656).
 
-- **Instalação com o banco na própria VPS deixa de mostrar as chaves do banco na tela** O instalador oficial do Supabase escreve na tela cada chave que gera, entre
-  elas a chave mestra do banco e a senha do Postgres. Quem instalava com o banco
-  na própria VPS via essas chaves no terminal, e elas ficavam no histórico de
-  quem gravava a sessão ou mandava um print pedindo ajuda.
+- **Instalação com o banco na própria VPS deixa de mostrar as chaves do banco na tela** A saída completa fica em `.runtime/supabase-setup.log`, só para o root. Instalações existentes não mudam.
 
-  Agora a tela mostra só os passos da instalação. A saída completa fica em
-  `.runtime/supabase-setup.log`, que só o root lê. Instalações que já existem não
-  mudam, porque esse passo só roda na primeira instalação.
+- **Instalação com o banco na própria VPS não falha mais quando o terminal está com permissões restritas** O instalador fixa as permissões de que o banco precisa.
 
-- **Instalação com o banco na própria VPS não falha mais quando o terminal está com permissões restritas** Quando o terminal estava com permissões restritas (`umask 077` ou `027`, comum
-  em servidor endurecido), o instalador com o banco na própria VPS herdava essa
-  configuração. Nesse caso o banco não subia, e nenhuma mensagem apontava a causa.
-  O instalador agora fixa as permissões de que o banco precisa, venha o terminal
-  como vier. Quem já tem o sistema instalado não é afetado.
+- **Templates oficiais do WhatsApp com parâmetros nomeados (parameter_format NAMED) voltam a ser enviados pelo Inbox e pela API sem o erro meta_100** Sem reconfigurar nada.
 
-- **Templates oficiais do WhatsApp com parâmetros nomeados (parameter_format NAMED) voltam a ser enviados pelo Inbox e pela API sem o erro meta_100** O envio de template lia o espelho de definições da Meta sem o campo parameter_format e derivava o contrato como POSITIONAL. Um template aprovado com parâmetros nomeados saía sem parameter_name em cada parâmetro textual, e a Meta recusava com meta_100: Parameter name is missing or empty — tanto no Inbox quanto pelo endpoint REST de mensagens, que passam pelo mesmo caminho de envio. Agora o formato declarado pela Meta acompanha a definição até a montagem do payload: parâmetros nomeados saem com o nome aprovado, e templates posicionais continuam exatamente como antes. Nada precisa ser feito ao atualizar; se você enviava templates nomeados que falhavam com meta_100, eles voltam a funcionar sem reconfiguração (issue 2659). Contribuição de @webtecnica (#2678).
+  Contribuição de @webtecnica (#2678), a partir da issue #2659 de @gleisaum.
 
-- **O agente pela assinatura fecha o turno — a fita da resposta chega ao fechamento** Na empresa de IA "OpenAI pela assinatura (ChatGPT)", o modelo respondia e a chamada era cobrada em Execuções, mas o turno quebrava logo depois: a tela do Testar mostrava só a frase genérica sobre modelo e credencial, e o log do app registrava `e is not iterable`. O ramo da assinatura usa o streaming do SIWC e monta o resultado da chamada à mão; faltava nele o campo `responseMessages`, que é a fita (resposta e ações de ferramenta) que o motor reenvia na chamada de fechamento do turno. Sem esse campo a fita chegava vazia e o fechamento morria antes de escrever o checkpoint. Agora a fita sai do streaming junto com o texto e o consumo, o compilador cobra cada campo que o motor lê no caminho da assinatura, e o turno fecha como em qualquer outro provedor — prévia do agente e WhatsApp. O mesmo objeto também não trazia as chamadas de ferramenta, e por isso as sugestões que pedem uma ferramenta só (assistente de propostas, "preencher com a conversa", importação de modelo de proposta e valor da conversa) não funcionavam pela assinatura (o assistente dizia que não tinha entendido a instrução); agora funcionam. Nada precisa ser feito ao atualizar.
+- **O agente pela assinatura fecha o turno — a fita da resposta chega ao fechamento** Com "OpenAI pela assinatura (ChatGPT)", o turno quebrava depois da resposta; agora fecha na prévia e no WhatsApp, e as sugestões com ferramenta (propostas, "preencher com a conversa") passam a funcionar.
 
   Contribuição de @webtecnica (#2675), a partir da issue #2657 de @GabrielBottan.
 
