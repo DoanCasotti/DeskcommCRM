@@ -5337,6 +5337,9 @@ export const DICIONARIO: Traducoes = {
   "Deixe em branco para voltar à cor padrão do sistema.": {
     es: "Déjalo en blanco para volver al color predeterminado del sistema.",
   },
+  "Cor da marca no tema escuro (opcional)": { es: "Color de la marca en el tema oscuro (opcional)" },
+  "Cor da sua marca no tema escuro (opcional)": { es: "Color de tu marca en el tema oscuro (opcional)" },
+  "Deixe em branco para os dois modos usarem a cor acima.": { es: "Déjalo en blanco para que ambos modos usen el color de arriba." },
   "A partir da sua cor o sistema monta esta escala e escolhe, dentro dela, o tom que vai nos botões:": {
     es: "A partir de tu color el sistema arma esta escala y elige, dentro de ella, el tono que va en los botones:",
   },
