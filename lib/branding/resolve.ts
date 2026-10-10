@@ -48,7 +48,9 @@ export type CodigoDaResolucao =
   | "algoritmo_desconhecido"
   | "papel_desconhecido"
   | "papel_nao_pinta"
-  | "derivacao_falhou";
+  | "derivacao_falhou"
+  /** A cor do TEMA ESCURO (#2482) é neutra: o escuro pinta com a escala do produto. */
+  | "cor_escura_acromatica";
 
 /**
  * Mesma disciplina do `Motivo` de `contraste.ts`: emite FORMA, nunca
@@ -219,6 +221,19 @@ function derivarComCache(semente: string, regua: Regua): Marca {
  * Os motivos da derivação saem COM OS DA PRINCIPAL na mesma lista: a tela de
  * marca mostra o que o sistema ajustou, e com duas sementes ela tem de mostrar
  * as duas — é o critério 2 da issue ("com o motivo mostrado na tela").
+ *
+ * ── Só os motivos do ESCURO ─────────────────────────────────────────────────
+ *
+ * `derivarMarca` deriva os DOIS temas, mas esta semente só pinta o escuro. Os
+ * motivos do claro dela descrevem um bloco que ela nunca pinta — e, medido com
+ * `#1c261d` + `#d9ac62`, o `semantica_deslocada` do claro do âmbar fazia a
+ * tela avisar "parecida com erro", cor que nada no produto chegou a usar.
+ *
+ * Semente neutra é o mesmo caso por outro lado: o escuro pinta com a escala do
+ * PRODUTO, e os ajustes medidos ali são a paleta do produto contra ela mesma
+ * (ver `suaCorPinta` em `linguagem.ts`). Sai um motivo só, com código próprio:
+ * o `marca_acromatica` diz "a sua fica reservada ao logo", e isso é falso para
+ * a cor principal, que segue pintando o claro.
  */
 function derivarCorEscura(
   cru: unknown,
@@ -282,7 +297,18 @@ function derivarCorEscura(
   const semente = normalizarHex(envelope.semente_hex);
   try {
     const derivada = derivarComCache(semente, regua);
+    if (derivada.origemDaRampa === "produto") {
+      motivos.push({
+        codigo: "cor_escura_acromatica",
+        origem,
+        tema: "escuro",
+        alvo: "--color-accent",
+        detalhe: "a cor do tema escuro é neutra; o tema escuro pinta com a escala do produto",
+      });
+      return { semente, derivada };
+    }
     for (const m of derivada.motivos) {
+      if (m.tema !== "escuro") continue;
       motivos.push({ codigo: m.codigo, origem, tema: m.tema, alvo: m.alvo, detalhe: m.detalhe });
     }
     return { semente, derivada };
@@ -388,16 +414,21 @@ function resolverCor(
 
   try {
     const derivada = derivarComCache(semente, regua);
-    for (const m of derivada.motivos) {
-      motivos.push({ codigo: m.codigo, origem, tema: m.tema, alvo: m.alvo, detalhe: m.detalhe });
-    }
     // A segunda semente SÓ entra depois de a principal ter pintado: sem accent
     // principal não existe bloco escuro para ela pendurar, e uma camada que
     // declara só a cor do escuro não tem o que a pintar.
+    const motivosDoEscuro: MotivoDaMarca[] = [];
     const corEscura =
       cruEscura === undefined || cruEscura === null
         ? undefined
-        : derivarCorEscura(cruEscura, origem, regua, motivos);
+        : derivarCorEscura(cruEscura, origem, regua, motivosDoEscuro);
+    for (const m of derivada.motivos) {
+      // Com a segunda semente, o escuro deixa de derivar desta: os ajustes que
+      // a principal faria no escuro descrevem um bloco que ela não pinta mais.
+      if (corEscura && m.tema === "escuro") continue;
+      motivos.push({ codigo: m.codigo, origem, tema: m.tema, alvo: m.alvo, detalhe: m.detalhe });
+    }
+    motivos.push(...motivosDoEscuro);
     return {
       cor: { semente, papel, derivada, ...(corEscura ? { corEscura } : {}) },
       motivos,

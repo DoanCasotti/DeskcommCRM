@@ -29,6 +29,7 @@
 import { describe, expect, it } from "vitest";
 
 import { derivarMarca } from "@/lib/branding/contraste";
+import { avisosDaMarca } from "@/lib/branding/linguagem";
 import {
   cssDaMarca,
   ESCOPO_DA_INSTALACAO,
@@ -145,6 +146,59 @@ describe("cor da marca no tema escuro (#2482)", () => {
     const semSegunda = corDe(casoSemSegunda());
     expect(semSegunda?.corEscura ?? null).toBeNull();
   });
+});
+
+/**
+ * "O que o sistema ajustou" com as DUAS cores — o critério 2 da issue pela
+ * lista de motivos, que é o que a tela traduz, e não pelo CSS.
+ *
+ * Cada semente só fala do tema que pinta: a segunda não diz nada do claro, e a
+ * principal deixa de falar do escuro. Sem o filtro, `#1c261d` + `#d9ac62`
+ * avisava "parecida com erro e sucesso" (o erro vinha do claro da âmbar, que
+ * nunca pinta; o sucesso, do escuro do verde, que deixou de pintar), e
+ * `#7a5cd6` + `#333333` dizia que a cor PRINCIPAL "fica reservada ao logo".
+ *
+ * A distância vai nula de propósito: ela só decide a frase do `accent_deslocado`,
+ * e o que este bloco vigia é QUAIS motivos entram, não como cada um é dito.
+ */
+describe("o que o sistema ajustou, com as duas cores (#2482)", () => {
+  const sigla = (camada: CamadaDeMarca) =>
+    resolverMarca([camada], REGUA_DO_PRODUTO).motivos.map((m) => `${m.codigo}|${m.tema}|${m.alvo}`);
+  const textos = (camada: CamadaDeMarca) =>
+    avisosDaMarca(resolverMarca([camada], REGUA_DO_PRODUTO).motivos, { claro: 0, escuro: 0 })
+      .map((a) => a.texto)
+      .join("\n");
+
+  for (const caso of CASOS) {
+    describe(caso.rotulo, () => {
+      it("verde + âmbar: só o escuro da âmbar fala, e nenhum alerta de erro ou sucesso sobra", () => {
+        const camada = caso.camada({ accent_hex: SEMENTE_CLARA, accent_dark_hex: SEMENTE_ESCURA });
+        expect(sigla(camada)).toEqual(["accent_deslocado|escuro|--color-accent"]);
+        expect(textos(camada)).not.toMatch(/erro|sucesso/);
+      });
+
+      it("roxo + cinza: o aviso de cor neutra é do MODO ESCURO, nunca da cor principal", () => {
+        const camada = caso.camada({ accent_hex: "#7a5cd6", accent_dark_hex: "#333333" });
+        expect(sigla(camada)).toEqual([
+          "accent_deslocado|claro|--color-accent",
+          "cor_escura_acromatica|escuro|--color-accent",
+        ]);
+        const texto = textos(camada);
+        expect(texto).toContain("A cor do modo escuro é um tom neutro");
+        expect(texto).not.toContain("reservada ao logo");
+        expect(texto).not.toMatch(/atenção|erro|sucesso/);
+      });
+
+      it("controle: sem a segunda cor, os motivos são os da principal sozinha", () => {
+        // Se o filtro alcançasse o caso de uma cor só, o verde perderia os
+        // avisos do escuro que ele de fato pinta.
+        expect(sigla(caso.camada({ accent_hex: SEMENTE_CLARA, accent_dark_hex: null }))).toEqual([
+          "accent_deslocado|escuro|--color-accent",
+          "redundancia_nao_cromatica_necessaria|escuro|success",
+        ]);
+      });
+    });
+  }
 });
 
 /** Camada legada (só `accent_hex`) — o formato de TODA linha gravada até hoje. */

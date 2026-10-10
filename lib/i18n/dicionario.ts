@@ -5424,6 +5424,9 @@ export const DICIONARIO: Traducoes = {
   "Sua cor é um tom neutro (cinza, preto ou branco), e uma cor assim não destaca nada na tela. Os botões seguem com a cor padrão do sistema, e a sua fica reservada ao logo.": {
     es: "Tu color es un tono neutro (gris, negro o blanco), y un color así no resalta nada en la pantalla. Los botones siguen con el color predeterminado del sistema, y el tuyo queda reservado al logo.",
   },
+  "A cor do modo escuro é um tom neutro (cinza, preto ou branco), e uma cor assim não destaca nada na tela. No modo escuro, os botões seguem com a cor padrão do sistema.": {
+    es: "El color del modo oscuro es un tono neutro (gris, negro o blanco), y un color así no resalta nada en la pantalla. En el modo oscuro, los botones siguen con el color predeterminado del sistema.",
+  },
   "Não existe tom desta cor que deixe todos os elementos legíveis. Alguns detalhes — como o contorno que marca o campo em foco — ficam difíceis de enxergar.": {
     es: "Ningún tono de este color deja todos los elementos legibles. Algunos detalles, como el contorno que marca el campo enfocado, quedan difíciles de ver.",
   },

@@ -1985,6 +1985,7 @@
   "A cor está guardada só como identidade: ela aparece no logo, mas não pinta os botões.": "该颜色仅作为标识保存：它显示在 Logo 中，但不会为按钮着色。",
   "O cálculo dos tons a partir dessa cor não terminou.": "基于该颜色的色调计算尚未完成。",
   "Sua cor é um tom neutro (cinza, preto ou branco), e uma cor assim não destaca nada na tela. Os botões seguem com a cor padrão do sistema, e a sua fica reservada ao logo.": "你的颜色是中性色（灰色、黑色或白色），这种颜色在界面上无法突出任何内容。按钮继续使用系统默认颜色，你的颜色仅保留用于 Logo。",
+  "A cor do modo escuro é um tom neutro (cinza, preto ou branco), e uma cor assim não destaca nada na tela. No modo escuro, os botões seguem com a cor padrão do sistema.": "深色模式的颜色是中性色调（灰色、黑色或白色），这样的颜色在屏幕上无法突出任何内容。在深色模式下，按钮继续使用系统默认颜色。",
   "Não existe tom desta cor que deixe todos os elementos legíveis. Alguns detalhes — como o contorno que marca o campo em foco — ficam difíceis de enxergar.": "此颜色没有能让所有元素都清晰可读的色调。某些细节 — 如标记聚焦字段的轮廓 — 会难以看清。",
   "A verificação de segurança barrou o resultado antes de ele chegar à tela, e a marca não foi aplicada.": "安全检查在结果到达界面前将其拦截，品牌未生效。",
   "O sistema recusou a cor gravada por um motivo que esta versão não sabe explicar.": "系统拒绝了保存的颜色，此版本无法解释原因。",
