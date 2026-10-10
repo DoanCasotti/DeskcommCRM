@@ -444,6 +444,7 @@ export function FormularioDaMarca({
         fallbackEm={fallbackEm}
         fallbackMotivo={fallbackMotivo}
         derivada={derivada}
+        derivadaEscura={derivadaEscura}
         avisos={avisos}
         seriaAplicada={serializacao.css !== null}
       />
