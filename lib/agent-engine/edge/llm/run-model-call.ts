@@ -21,6 +21,9 @@ import type pg from 'pg';
 import { z } from 'zod';
 
 import { PROVEDOR_POR_ASSINATURA } from '@/lib/ai/pontos/provedores';
+import { chamarComRetryUnicoEm401 } from '@/lib/ai/pontos/renovacao-da-assinatura';
+import { renovarAssinaturaNoTurno } from '@/lib/ai/credenciais/login-codex';
+import { createAdminClient } from '@/lib/supabase/admin';
 import { PONTO_POR_ID } from '@/lib/ai/pontos/registro';
 // O par (provedor, modelo) é a mesma régua em TODOS os caminhos de execução:
 // este seam, a resolução dos pontos, a mídia, o embedding e o runtime do agente
@@ -1000,6 +1003,78 @@ export async function runModelCall(db: pg.Pool, cfg: LlmEdgeConfig, input: RunMo
   };
 
   /**
+   * O 401 DO TURNO RENOVE ANTES DE CAIR (#3371, fatia 4).
+   *
+   * `chamarComRetryUnicoEm401` existia em `lib/ai/pontos/renovacao-da-assinatura.ts`
+   * e **não tinha chamador de produção** — só os testes dele. Consequência medida
+   * em produção (cliente Obralivre): o access_token vencia, todo turno recebia
+   * `401 · Provided authentication token is expired`, a chamada caía na política
+   * de reserva e o cliente ficou ~26 h sem resposta, com cota sobrando.
+   *
+   * Agora, no caminho REAL do provedor de assinatura: um 401 → renova UMA vez pelo
+   * mesmo caminho do botão de revalidar (`renovarAssinaturaNoTurno`, com a trava
+   * de banco) → tenta UMA vez. Segundo 401 é devolvido como está e cai na política
+   * de reserva que já existe — nada de laço aqui: o único lugar onde este seam
+   * insiste é o degrau econômico do classificador, que é outro assunto.
+   *
+   * `recusaDaRenovacao` guarda o PORQUÊ da recusa (fatia 3): é ele que vira o
+   * aviso único na Central (fatia 2) quando a conta precisa ser reconectada.
+   */
+  let recusaDaRenovacao: string | null = null;
+  const chamarComRenovacaoNo401 = async (
+    cfgUsada: OrgLlmConfig,
+    fabrica: typeof factory,
+  ): Promise<Awaited<ReturnType<typeof generateText>>> => {
+    const { corpo, tentativas } = await chamarComRetryUnicoEm401({
+      tentar: async () => {
+        try {
+          return {
+            status: 200,
+            corpo: { ok: true as const, resultado: await chamarCom(cfgUsada, fabrica) },
+          };
+        } catch (erro) {
+          // O status do provedor, e não uma classe de erro: é o 401 que decide.
+          return { status: normalizarErro(erro).http_status ?? 0, corpo: { ok: false as const, erro } };
+        }
+      },
+      renovarApos401: async () => {
+        const r = await renovarAssinaturaNoTurno({
+          admin: createAdminClient(),
+          orgId: input.tenantId,
+        });
+        if (r.ok) {
+          deps.log?.warn('llm: a assinatura respondeu 401 — login renovado no meio do turno', {
+            organization_id: input.tenantId,
+            purpose,
+            provider: cfgUsada.provider,
+            model,
+          });
+          return;
+        }
+        recusaDaRenovacao = r.motivoDetalhe ? `${r.motivo}:${r.motivoDetalhe}` : r.motivo;
+        deps.log?.error('llm: a assinatura respondeu 401 e a renovação foi RECUSADA', {
+          organization_id: input.tenantId,
+          purpose,
+          provider: cfgUsada.provider,
+          model,
+          motivo: recusaDaRenovacao,
+        });
+      },
+    });
+    if (corpo.ok) {
+      if (tentativas > 1) {
+        deps.log?.warn('llm: a chamada seguiu depois de renovar o login da assinatura', {
+          organization_id: input.tenantId,
+          purpose,
+          tentativas,
+        });
+      }
+      return corpo.resultado;
+    }
+    throw corpo.erro;
+  };
+
+  /**
    * A QUEDA DA ASSINATURA (#1639, item 3) — a metade que faltava da política.
    *
    * `decidirQuedaDoProvedor` já existe e é pura; o que faltava era respondê-lo:
@@ -1043,7 +1118,10 @@ export async function runModelCall(db: pg.Pool, cfg: LlmEdgeConfig, input: RunMo
     // `system` aceita SystemModelMessage (com providerOptions de cache) — igual
     // em v6 e v7 (smoke prova que o cacheControl continua virando cache_control).
     try {
-      result = await chamarCom(config, factory);
+      result =
+        config.provider === PROVEDOR_POR_ASSINATURA
+          ? await chamarComRenovacaoNo401(config, factory)
+          : await chamarCom(config, factory);
     } catch (falhaDaAssinatura) {
       const reserva = await reservaParaAFalha(falhaDaAssinatura);
       if (reserva === null) throw falhaDaAssinatura;

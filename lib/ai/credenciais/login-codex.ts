@@ -355,6 +355,41 @@ export async function renovarComTravaDeBanco(p: {
 }
 
 /**
+ * RENOVA AGORA, PORQUE O PROVEDOR ACABOU DE RECUSAR O TOKEN (#3371, fatia 4).
+ *
+ * É o caminho do 401 DENTRO do turno: o `401 · Provided authentication token is
+ * expired` que o cliente Obralivre recebeu em 107 turnos seguidos. A renovação
+ * proativa (`lerLoginCodexRenovandoSeProxima`, acima) só olha a janela de
+ * vencimento — quando o token venceu por outro motivo, ou quando a janela passou
+ * sem ninguém chamar, ela não tem o que fazer, e a chamada caía na política de
+ * reserva sem NUNCA tentar renovar.
+ *
+ * Usa a MESMA trava de banco da renovação automática e do botão de revalidar:
+ * um POST por janela, em qualquer processo. `userId: null` porque quem pediu foi
+ * o turno, não uma pessoa — a auditoria não inventa autor.
+ */
+export async function renovarAssinaturaNoTurno(p: {
+  admin: Admin;
+  orgId: string;
+}): Promise<ResultadoDaRenovacao> {
+  const linha = await linhaDoLogin(p.admin, p.orgId);
+  if (linha === null) return { ok: false, motivo: "nao_encontrada" };
+  return renovarComTravaDeBanco({
+    admin: p.admin,
+    orgId: p.orgId,
+    credentialId: linha.id,
+    userId: null,
+    renovar: (atuais) => {
+      if (!atuais.client_id) throw new Error("credencial_siwc_sem_client_id");
+      return renovarPorRefreshToken({
+        refreshToken: atuais.refresh_token,
+        clientId: atuais.client_id,
+      });
+    },
+  });
+}
+
+/**
  * LÊ o par da empresa e, quando a janela de renovação abriu, RENOVA antes de
  * devolver — é este que o caminho do agente chama (#1639, parte 2).
  *
