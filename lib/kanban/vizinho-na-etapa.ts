@@ -1,5 +1,6 @@
 import type { Lead } from "@/lib/types/leads";
 import { midpoint } from "./fractional-indexing";
+import { compararNaEtapa } from "./entrada-na-etapa";
 
 /** O que a conta precisa de um card: identidade e posição na etapa. */
 type CardNaEtapa = Pick<Lead, "id" | "position_in_stage">;
@@ -38,7 +39,7 @@ export function proximoNaEtapaInteira<C extends CardNaEtapa>(
   if (!etapaInteira) return abaixoVisivel;
   const todos = etapaInteira
     .filter((l) => l.id !== arrastadoId)
-    .sort((a, b) => a.position_in_stage - b.position_in_stage);
+    .sort(compararNaEtapa);
   if (!acima) return todos[0] ?? null;
   const i = todos.findIndex((l) => l.id === acima.id);
   if (i < 0) return abaixoVisivel;

@@ -15,6 +15,7 @@ import { useAtRiskLeads } from "@/hooks/leads/useAtRiskLeads";
 import { useReactivations } from "@/hooks/leads/useReactivations";
 import { midpoint } from "@/lib/kanban/fractional-indexing";
 import { posicaoNoFimDaEtapa, proximoNaEtapaInteira } from "@/lib/kanban/vizinho-na-etapa";
+import { compararNaEtapa } from "@/lib/kanban/entrada-na-etapa";
 import { decideMotivoDaPerda } from "@/lib/leads/motivo-da-perda";
 import type { Lead } from "@/lib/types/leads";
 import type { BoardData, Pipeline, Stage } from "@/lib/kanban/types";
@@ -59,9 +60,12 @@ function groupLeadsByStage(stages: Stage[], leads: Lead[]): Map<string, Lead[]> 
     const bucket = map.get(lead.stage_id);
     if (bucket) bucket.push(lead);
   }
-  // Already ordered by position_in_stage at fetch time, but be defensive.
+  // A rota já devolve `position_in_stage, id` — este sort repete a MESMA régua
+  // (com o desempate por `id`) para a tela não depender da ordem de chegada:
+  // sem o desempate, dois cards empatados trocavam de lugar a cada render
+  // (#3461).
   for (const list of map.values()) {
-    list.sort((a, b) => a.position_in_stage - b.position_in_stage);
+    list.sort(compararNaEtapa);
   }
   return map;
 }

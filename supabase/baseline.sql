@@ -53824,6 +53824,17 @@ grant execute on function public.fn_meet_delivery_settle(uuid,uuid,text,timestam
 -- dois caminhos respondendo diferente para o mesmo card é o defeito da #917 com
 -- outro nome. Os dois ramos deixam a coluna fora da lista de quem preserva.
 --
+-- ─── O piso saiu do FIM e foi para o TOPO (9022, issue #3461) ───────────────
+--
+-- O corpo abaixo é o da 0674 com UMA mudança de conta: a posição do lote no
+-- destino era `max + 1000` por card (o lote encostava ABAIXO do último) e agora
+-- é `min − 1000` por card (encosta ACIMA do primeiro), mantendo entre si a
+-- ordem em que os cards estavam no quadro. É o caminho do painel do Inbox
+-- (`CRMSidePanel` → ação "move" em `POST /api/v1/leads/bulk` → esta função), e
+-- era por causa deste piso que a conversa transferida do Inbox aparecia no fim
+-- da coluna. A régua nova é a mesma do TypeScript (`lib/kanban/entrada-na-etapa.ts`)
+-- e a mesma que a resposta rápida usa desde a 0729.
+--
 -- ─── Os chamadores (medido, não presumido) ──────────────────────────────────
 --
 -- O único chamador de `fn_mover_leads_em_lote` é a rota `POST /api/v1/leads/bulk`
@@ -53860,18 +53871,30 @@ language plpgsql
 set search_path = public
 as $$
 declare
-  v_piso numeric;
+  v_min numeric;
+  v_total int;
   -- Motivo em branco é ausência de motivo, nunca um motivo de uma letra.
   v_motivo text := nullif(btrim(coalesce(p_lost_reason, '')), '');
   v_coluna_motivo text := '';
   v_filtro_novos text := '';
   v_filtro_preservados text := 'false';
 begin
-  -- `coalesce(..., 0)` cobre a etapa vazia; o DEFAULT da coluna é 1000, então
-  -- o primeiro card de um lote para uma etapa vazia cai em 1000, como um card
-  -- criado à mão.
-  select coalesce(max(l.position_in_stage), 0)
-    into v_piso
+  -- Quantos cards o lote tem DE VERDADE, pelo MESMO predicado do `alvo` da
+  -- escrita (9022): contar por `array_length(p_lead_ids)` somaria id de outra
+  -- organização, que o `alvo` descarta, e a posição do primeiro card sairia de
+  -- uma conta que inclui card que não vai ser movido.
+  select count(*)
+    into v_total
+    from public.crm_leads l
+   where l.organization_id = p_organization_id
+     and l.id = any(p_lead_ids);
+
+  -- Onde o lote ENCOSTA (9022, issue #3461): o primeiro card da etapa de
+  -- destino, sem contar os que já estão no lote. `null` é a etapa vazia, e aí o
+  -- `coalesce` da escrita devolve o miolo de sempre (1000, 2000, …), como um
+  -- card criado à mão.
+  select min(l.position_in_stage)
+    into v_min
     from public.crm_leads l
    where l.organization_id = p_organization_id
      and l.stage_id = p_stage_id
@@ -53903,7 +53926,10 @@ begin
   novos as (
     update public.crm_leads l
        set stage_id          = $3,
-           position_in_stage = $5 + (a.ordem * 1000),
+           -- O TOPO da etapa (9022): o lote encosta ACIMA do primeiro card e
+           -- mantém entre si a ordem de origem. $5 é esse primeiro card, $6 o
+           -- tamanho do lote; etapa vazia cai no `coalesce`.
+           position_in_stage = coalesce($5 - (($6 - a.ordem + 1) * 1000), a.ordem * 1000),
            updated_at        = now()%s
       from alvo a
      where l.id = a.id
@@ -53913,7 +53939,7 @@ begin
   preservados as (
     update public.crm_leads l
        set stage_id          = $3,
-           position_in_stage = $5 + (a.ordem * 1000),
+           position_in_stage = coalesce($5 - (($6 - a.ordem + 1) * 1000), a.ordem * 1000),
            updated_at        = now()
       from alvo a
      where l.id = a.id
@@ -53925,12 +53951,12 @@ begin
   union all
   select p.id, p.from_stage_id, p.pipeline_id from preservados p
   $f$, v_coluna_motivo, v_filtro_novos, v_filtro_preservados)
-  using p_organization_id, p_lead_ids, p_stage_id, v_motivo, v_piso;
+  using p_organization_id, p_lead_ids, p_stage_id, v_motivo, v_min, v_total;
 end;
 $$;
 
 comment on function public.fn_mover_leads_em_lote(uuid, uuid[], uuid, text) is
-  'Move um lote de leads para uma etapa dando a cada um posição DISTINTA (piso da etapa de destino + 1000 por card, na ordem em que estavam no quadro). Existe porque gravar a mesma position_in_stage em N linhas quebra o midpoint() do arrasto seguinte (prev === next → NaN) e deixa a ordem do quadro indefinida. `p_lost_reason` (0263, issue #917) grava o motivo da perda na MESMA escrita quando a etapa de destino é de perda — sem ele a CHECK crm_leads_lost_reason_required recusava o lote inteiro com 23514; a coluna só entra na escrita quando há motivo, para não revalidar o valor que já estava na linha. #2887: a coluna só entra na escrita de quem NÃO estava perdido (`status is distinct from ''lost''`) — o negócio que já estava perdido é movido por um segundo ramo sem a coluna, e preserva o motivo dele; reescrever o valor que já estava na linha dispararia trg_validate_lost_reason_required e derrubaria o lote inteiro de um card cujo motivo saiu do vocabulário do funil. Devolve uma linha por card movido, com a etapa de ORIGEM, para o handler emitir a atividade de timeline de cada um.';
+  'Move um lote de leads para uma etapa dando a cada um posição DISTINTA no TOPO da coluna de destino (issue #3461): o lote encosta acima do primeiro card (`min - 1000` por card, na ordem em que estava no quadro) e não mais abaixo do último (`max + 1000`), que era o motivo de a conversa transferida do Inbox aparecer no fim. Etapa vazia continua nascendo em 1000, 2000, … Existe porque gravar a mesma position_in_stage em N linhas quebra o midpoint() do arrasto seguinte (prev === next → NaN) e deixa a ordem do quadro indefinida. `p_lost_reason` (0263, issue #917) grava o motivo da perda na MESMA escrita quando a etapa de destino é de perda — sem ele a CHECK crm_leads_lost_reason_required recusava o lote inteiro com 23514; a coluna só entra na escrita quando há motivo, para não revalidar o valor que já estava na linha. #2887: a coluna só entra na escrita de quem NÃO estava perdido (`status is distinct from ''lost''`) — o negócio que já estava perdido é movido por um segundo ramo sem a coluna, e preserva o motivo dele; reescrever o valor que já estava na linha dispararia trg_validate_lost_reason_required e derrubaria o lote inteiro de um card cujo motivo saiu do vocabulário do funil. Devolve uma linha por card movido, com a etapa de ORIGEM, para o handler emitir a atividade de timeline de cada um.';
 
 revoke all     on function public.fn_mover_leads_em_lote(uuid, uuid[], uuid, text) from public;
 revoke execute on function public.fn_mover_leads_em_lote(uuid, uuid[], uuid, text) from anon;
