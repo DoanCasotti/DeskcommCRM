@@ -203,7 +203,9 @@ import {
   nomesDasFerramentas,
   runBeforeSend,
   tipoDeEnvio,
+  type GateContext,
 } from '../guardrails/before-send';
+import { instantesDoResultado, marcouComSucesso } from '../guardrails/horario-da-agenda';
 import { isStatusSendable } from '../../channels/meta/template-binding';
 import { capabilitiesOf } from '@/lib/channels/capabilities';
 import { renderTemplateBody } from '@/lib/channels/meta/render-template';
@@ -3468,6 +3470,44 @@ async function executarTurnoDoAgente(
   // as tools do modelo rodam em passos anteriores do mesmo loop, o valor já está certo
   // quando o modelo decide mandar a resposta.
   let agendaToolCalledThisTurn = false;
+  // Arma o `horarioDaAgendaGate`: não basta a tool ter RODADO, o texto precisa citar o que
+  // ela DEVOLVEU. Colhido no mesmo wrapper das tools MCP; lido no momento do envio.
+  const horariosLivresDoTurno = new Set<string>();
+  const marcadosNesteTurno = new Set<string>();
+  let marcouNesteTurno = false;
+  let fusoDaAgenda: string | null = null;
+  let horarioVetoCount = 0;
+  // Compromissos que o contato JÁ tem: lembrar a consulta dele não é horário inventado.
+  // Uma leitura por turno, iniciada já; falha de leitura = lista vazia (o gate fica mais
+  // rígido, nunca mais frouxo).
+  let compromissosDoContato: string[] = [];
+  const leituraDosCompromissos: Promise<void> = leadId
+    ? pool
+        .query<{ starts_at: Date; time_zone: string | null }>(
+          `select starts_at, time_zone from public.calendar_appointments
+            where organization_id = $1 and contact_id = $2 and status <> 'cancelled'
+              and starts_at > now() - interval '1 day'
+            order by starts_at limit 50`,
+          [tenantId, leadId],
+        )
+        .then((r) => {
+          compromissosDoContato = r.rows.map((x) => new Date(x.starts_at).toISOString());
+          fusoDaAgenda ??= r.rows.find((x) => x.time_zone)?.time_zone ?? null;
+        })
+        .catch((err: unknown) => {
+          runLog.warn('compromissos do contato não lidos (gate de horário fica mais rígido)', {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        })
+    : Promise.resolve();
+  const horariosDaAgenda = (): NonNullable<GateContext['horariosDaAgenda']> => ({
+    ativo: agentConfig !== null && temFerramentaDeAgenda(agentConfig.toolIds),
+    fuso: fusoDaAgenda ?? 'America/Sao_Paulo',
+    livres: [...horariosLivresDoTurno],
+    doContato: [...compromissosDoContato, ...marcadosNesteTurno],
+    marcouNesteTurno,
+    vetosAnteriores: horarioVetoCount,
+  });
   // Lido pelo `casePromiseGate` (#1873): true só depois de `schedule_followup` AGENDAR com
   // sucesso neste turno. Libera apenas a promessa de retorno do próprio assistente.
   let followupAgendadoNesteTurno = false;
@@ -4083,6 +4123,7 @@ async function executarTurnoDoAgente(
               ferramentas: agentConfig === null ? [] : ferramentasDeAgendaDoAgente(agentConfig.toolIds),
               toolCalledThisTurn: agendaToolCalledThisTurn,
             },
+            horariosDaAgenda: (await leituraDosCompromissos, horariosDaAgenda()),
             followup: {
               disponivel: rawTools.schedule_followup !== undefined,
               agendadoNesteTurno: followupAgendadoNesteTurno,
@@ -4215,6 +4256,12 @@ async function executarTurnoDoAgente(
             },
           };
           let chain = await runBeforeSend(beforeSendArgs);
+          if (
+            chain.status === 'vetoed' &&
+            (chain.code === 'horario_sem_fonte' || chain.code === 'agenda_confirmou_sem_marcar')
+          ) {
+            horarioVetoCount += 1;
+          }
           if (chain.status === 'vetoed' && chain.code === 'case_promise_without_case') {
             // Wave 4 — fail-safe da invariante sagrada: o lead NUNCA recebe promessa-de-
             // humano sem caso aberto. 1ª vez no turno: erro-de-ensino (o modelo re-tenta —
@@ -4976,7 +5023,23 @@ async function executarTurnoDoAgente(
                 ...mcpTool,
                 execute: (async (...args: Parameters<typeof executeOriginal>) => {
                   agendaToolCalledThisTurn = true;
-                  return executeOriginal(...args);
+                  const resultado = await executeOriginal(...args);
+                  // Colheita para o `horarioDaAgendaGate`. Nunca derruba a tool: o pior
+                  // caso de uma colheita falha é o gate vetar e o modelo buscar de novo.
+                  try {
+                    const fuso = (resultado as { fuso_da_regra?: unknown } | null)?.fuso_da_regra;
+                    if (typeof fuso === 'string' && fuso) fusoDaAgenda = fuso;
+                    const instantes = instantesDoResultado(resultado);
+                    if (name === 'crm_find_free_slots') {
+                      for (const i of instantes) horariosLivresDoTurno.add(i);
+                    } else if (marcouComSucesso(resultado)) {
+                      marcouNesteTurno = true;
+                      for (const i of instantes) marcadosNesteTurno.add(i);
+                    }
+                  } catch {
+                    // embalagem inesperada: nada colhido
+                  }
+                  return resultado;
                 }) as typeof mcpTool.execute,
               };
             } else {
@@ -5058,6 +5121,7 @@ async function executarTurnoDoAgente(
                 ferramentas: previewContext.agenda?.ferramentas ?? [],
                 toolCalledThisTurn: agendaToolCalledThisTurn,
               },
+              horariosDaAgenda: horariosDaAgenda(),
             }),
             // #2490 — a MESMA `prepararFotosDoProduto` do caminho de produção,
             // com a MESMA cópia por service role e a MESMA query no catálogo:

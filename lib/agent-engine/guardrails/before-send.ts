@@ -84,6 +84,7 @@ import { renderVetoDeAfirmacao, type ConferenciaDeFato } from './factual-claim';
 // segundo caminho de envio que não passa pelo gate de elegibilidade, e é ele que
 // barra o texto FIXO do worker e o modelo aprovado.
 import { sqlContatoInterno } from '@/lib/contacts/tags-internas';
+import { avaliarHorarios, type HorariosDaAgenda } from './horario-da-agenda';
 
 /** O que os gates enxergam — carregado UMA vez sob o lock, por tentativa de envio. */
 export interface GateContext {
@@ -309,6 +310,11 @@ export interface GateContext {
    * site, que é quem monta as tools).
    */
   agenda?: { active: boolean; ferramentas: readonly string[]; toolCalledThisTurn: boolean };
+  /**
+   * Arma o `horarioDaAgendaGate`: o que as tools de agenda DEVOLVERAM neste turno (não só
+   * se foram chamadas). Ausente = no-op. Ver `horario-da-agenda.ts`.
+   */
+  horariosDaAgenda?: HorariosDaAgenda;
   /**
    * Retorno marcado pelo próprio assistente, para o `casePromiseGate` (#1873). Ausente =
    * nenhum alívio: o gate exige caso como sempre, e o veto não cita follow-up.
@@ -824,6 +830,20 @@ export const agendaStallGate: Gate = {
 };
 
 /**
+ * Gate de HORÁRIO SEM FONTE — todo dia+horário escrito ao cliente veio da agenda neste
+ * turno, e "está agendada" só sai depois de a marcação gravar. Regra pura em
+ * `horario-da-agenda.ts`; aqui só a ligação com a cadeia. Logo depois do `agendaStallGate`
+ * e antes do `disclosureGate`, pelo mesmo motivo: precisa ver o texto do MODELO.
+ */
+export const horarioDaAgendaGate: Gate = {
+  name: 'horario_da_agenda',
+  evaluate: (ctx) => {
+    const v = avaliarHorarios(ctx.body, ctx.now, ctx.horariosDaAgenda);
+    return v.pass ? { pass: true } : { pass: false, code: v.code, reason: v.reason };
+  },
+};
+
+/**
  * Gate de disclosure (F4-05; blueprint 5.7) — garante que a PRIMEIRA mensagem outbound a um
  * lead novo se apresenta como assistente virtual (template versionado por org). Decisão de
  * produto que blinda hoje (CDC) e amanhã (PL 2338), não exigência da Meta. Sem template
@@ -1054,6 +1074,7 @@ export const BEFORE_SEND_GATES: readonly Gate[] = [
   clinicalClaimGate,
   commercialRestrictionGate,
   agendaStallGate,
+  horarioDaAgendaGate,
   disclosureGate,
 ];
 
@@ -1205,6 +1226,8 @@ export interface RunBeforeSendArgs {
    * no-op (retrocompatível com todo caller que não conhece agenda, ex.: `followup-turn.ts`).
    */
   agenda?: GateContext['agenda'];
+  /** Ver `GateContext.horariosDaAgenda`. Ausente = gate no-op. */
+  horariosDaAgenda?: GateContext['horariosDaAgenda'];
   /** Ver `GateContext.followup`. Ausente = o `casePromiseGate` não alivia nada. */
   followup?: GateContext['followup'];
   /**
@@ -1541,6 +1564,7 @@ export async function runBeforeSend(args: RunBeforeSendArgs): Promise<BeforeSend
       clinicalClaimEnforced: args.enforceClinicalClaim ?? false,
       commercialRestrictionEnforced: restricaoComercial,
       ...(args.agenda !== undefined ? { agenda: args.agenda } : {}),
+      ...(args.horariosDaAgenda !== undefined ? { horariosDaAgenda: args.horariosDaAgenda } : {}),
       ...(args.followup !== undefined ? { followup: args.followup } : {}),
     };
 
