@@ -1185,6 +1185,29 @@ export const NAV_CATALOG = [
     // existe onde quem administra o servidor o ligou, em `/admin/sistema`.
     modulo: "banco_externo",
   },
+  {
+    // A porta da ajuda dentro do produto (issue #3567, fatia F1). Fica por
+    // ÚLTIMO, e isso é a decisão e não a sobra: é o que se procura quando o
+    // resto não respondeu.
+    //
+    // `sidebar: true` porque o grupo `organizacao` é o RODAPÉ FIXO do menu: o
+    // `Sidebar` não desenha os itens deste grupo como lista (ele os hospeda no
+    // hub de Configurações) — o rodapé mostra o hub e o `VersionFooter`. É o
+    // `Sidebar` que lê este item pelo `href` para pôr "Ajuda" embaixo de
+    // Configurações, sem uma segunda lista para manter em sincronia.
+    //
+    // `section` própria porque as três vizinhas do grupo são "Sua conta",
+    // "Dados e acesso" e "Sua empresa" — nenhuma delas é ajuda, e chamar de
+    // configuração o que é socorro seria mentir na única tela em que a pessoa
+    // já está perdida.
+    href: "/app/ajuda",
+    label: "Ajuda",
+    description: "O caminho para cada tarefa, e onde ir quando algo não sai como esperado.",
+    icon: "BookOpen",
+    group: "organizacao",
+    section: "Ajuda",
+    sidebar: true,
+  },
 ] as const satisfies readonly NavMetadata[];
 
 export type NavDestinationId = (typeof NAV_CATALOG)[number]["href"];

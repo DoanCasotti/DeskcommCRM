@@ -3,7 +3,7 @@ import Link from "next/link";
 import { useT } from "@/hooks/i18n/useT";
 import { usePathname } from "next/navigation";
 import { useEffect, useState, useTransition } from "react";
-import { ArrowRight, CaretDoubleLeft, CaretDoubleRight, CaretDown, Gear } from "@/lib/ui/icons";
+import { ArrowRight, BookOpen, CaretDoubleLeft, CaretDoubleRight, CaretDown, Gear } from "@/lib/ui/icons";
 import { cn } from "@/lib/utils";
 import { toggleSidebar } from "@/app/actions/shell/toggleSidebar";
 import { useAuth } from "@/hooks/auth/AuthProvider";
@@ -61,7 +61,17 @@ export function SidebarContent({
   // Configurações sai da área que rola e vai para o rodapé fixo: medido em
   // 1280x768, ele caía fora da dobra mesmo em telas de 1080px.
   const grupos = todos.filter((g) => g.group.id !== GRUPO_NO_RODAPE);
-  const rodape = todos.find((g) => g.group.id === GRUPO_NO_RODAPE)?.group.hub;
+  const grupoDoRodape = todos.find((g) => g.group.id === GRUPO_NO_RODAPE);
+  const rodape = grupoDoRodape?.group.hub;
+  /**
+   * "Ajuda" é o ÚLTIMO item do rodapé fixo (issue #3567), e chega por `href` em
+   * vez de uma segunda lista escrita aqui: a entrada vive no `NAV_CATALOG` com
+   * `sidebar: true`, então atravessa o mesmo filtro de papel, de módulo e de
+   * área personalizada que todo o resto do menu. Escrever `<Link>Ajuda</Link>`
+   * à mão faria o link sobreviver a uma empresa que tirou a tela das áreas
+   * dela — e a pessoa cairia num 403 saindo do socorro.
+   */
+  const ajuda = grupoDoRodape?.items.find((d) => d.href === "/app/ajuda");
 
   /**
    * Grupo fechado é preferência POR NAVEGADOR, não por conta: começa vazio (tudo
@@ -411,6 +421,28 @@ export function SidebarContent({
           >
             <Gear size={18} aria-hidden />
             {!collapsed && <span className="truncate">{t(rodape.label)}</span>}
+          </Link>
+        )}
+        {ajuda && (
+          // Último link do rodapé, como pedido na issue #3567: é o que se
+          // procura quando o resto não respondeu. Mesmas classes do link de
+          // Configurações acima — rodapé com dois pesos diferentes lê-se como
+          // dois assuntos diferentes.
+          <Link
+            href={ajuda.href}
+            title={collapsed ? t(ajuda.label) : undefined}
+            aria-current={pathname.startsWith(ajuda.href) ? "page" : undefined}
+            onClick={onNavigate}
+            className={cn(
+              "mb-1 flex items-center gap-3 rounded-md px-3 py-1 text-sm transition-colors",
+              pathname.startsWith(ajuda.href)
+                ? "bg-accent text-accent-foreground"
+                : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
+              collapsed && "justify-center px-2",
+            )}
+          >
+            <BookOpen size={18} aria-hidden />
+            {!collapsed && <span className="truncate">{t(ajuda.label)}</span>}
           </Link>
         )}
         <VersionFooter collapsed={collapsed} onNavigate={onNavigate} />
