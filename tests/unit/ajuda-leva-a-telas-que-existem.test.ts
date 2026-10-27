@@ -44,15 +44,21 @@ const todosOsTextos = BLOCOS_DE_AJUDA.flatMap((bloco) => [
 
 describe("a ajuda dentro do produto", () => {
   it("tem porta no catálogo, no rodapé do menu e por último", () => {
-    const indice = NAV_CATALOG.findIndex((d) => d.href === "/app/ajuda");
-    expect(indice, "o item /app/ajuda não existe em NAV_CATALOG").toBeGreaterThan(-1);
+    // `NAV_CATALOG` é `as const`: cada membro tem um tipo literal próprio, então
+    // `sidebar` NÃO existe na união inteira. Acessar `item.sidebar` direto
+    // reprova no typecheck do CI (TS2339) — o narrowing por `in` é o que
+    // transforma "propriedade opcional em alguns membros" em leitura legal.
+    const item = NAV_CATALOG.find((d) => d.href === "/app/ajuda");
+    if (!item) throw new Error("o item /app/ajuda não existe em NAV_CATALOG");
 
-    const item = NAV_CATALOG[indice];
     expect(item.group, "Ajuda tem de viver no rodapé fixo").toBe(GRUPO_NO_RODAPE);
-    expect(item.sidebar, "sem `sidebar: true` o rodapé não a desenha").toBe(true);
-    expect(indice, "Ajuda é o ÚLTIMO item: é o que se procura quando o resto falhou").toBe(
-      NAV_CATALOG.length - 1,
+    expect("sidebar" in item && item.sidebar, "sem `sidebar: true` o rodapé não a desenha").toBe(
+      true,
     );
+    expect(
+      NAV_CATALOG.indexOf(item),
+      "Ajuda é o ÚLTIMO item: é o que se procura quando o resto falhou",
+    ).toBe(NAV_CATALOG.length - 1);
   });
 
   it("toda tela apontada pelo hub existe no disco", () => {
