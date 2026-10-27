@@ -32,7 +32,12 @@ import { byteaToBuffer, decryptKey } from "@/lib/crypto/aes_gcm";
 import { guardarCredencialDoLogin, rotacionarCredencial } from "@/lib/ai/credenciais/guardar";
 import { moduloLigado } from "@/lib/instalacao/modulos";
 import { PROVEDOR_POR_ASSINATURA } from "@/lib/ai/pontos/provedores";
-import { renovacaoProxima, renovarSeProxima } from "@/lib/ai/pontos/renovacao-da-assinatura";
+import {
+  detalheDaRecusaDeRenovacao,
+  renovacaoProxima,
+  renovarSeProxima,
+} from "@/lib/ai/pontos/renovacao-da-assinatura";
+import { logger } from "@/lib/logger";
 import { renovarPorRefreshToken, type TokensDoCodex } from "@/lib/ai/pontos/pkce-da-assinatura";
 import type { createAdminClient } from "@/lib/supabase/admin";
 
@@ -182,8 +187,19 @@ export async function desconectarLoginCodex(p: {
 
 export type ResultadoDaRenovacao =
   | { ok: true; tokens: TokensDoCodex }
-  /** `em_curso` = OUTRO processo está renovando agora; `nao_encontrada`, a linha sumiu. */
-  | { ok: false; motivo: "em_curso" | "nao_encontrada" | "falha" | "modulo_desligado" };
+  /**
+   * `em_curso` = OUTRO processo está renovando agora; `nao_encontrada`, a linha sumiu.
+   *
+   * `motivoDetalhe` (#3371, fatia 3) é o PORQUÊ da recusa — `refresh_token_revoked`,
+   * `invalid_grant`, `token_expired`, `fetch_failed`, `timeout`, `recusado` ou
+   * `desconhecido`. Antes ele não existia e ~500 tentativas em 26 h produziram um
+   * único `falha` sem explicação, na tela e no log.
+   */
+  | {
+      ok: false;
+      motivo: "em_curso" | "nao_encontrada" | "falha" | "modulo_desligado";
+      motivoDetalhe?: string;
+    };
 
 /**
  * A TRAVA CONTRA RENOVAÇÃO SIMULTÂNEA — NO BANCO, não em memória.
@@ -272,17 +288,36 @@ export async function renovarComTravaDeBanco(p: {
           : {}),
       token_type: renovados.token_type ?? (typeof json.token_type === "string" ? json.token_type : "Bearer"),
     };
-  } catch {
-    // A renovação falhou: devolve o relógio de aprovação ao valor lido, para
-    // que a próxima tentativa não espere 30 s por uma trava que ninguém segura.
-    if (atualizadoEm) {
-      await p.admin
-        .from("ai_provider_credentials")
-        .update({ updated_at: atualizadoEm })
-        .eq("id", p.credentialId)
-        .eq("organization_id", p.orgId);
-    }
-    return { ok: false, motivo: "falha" };
+  } catch (erro) {
+    // A renovação falhou — e o MOTIVO fica registrado (#3371, fatia 3).
+    //
+    // Antes este `catch` era mudo e devolvia `falha` para tudo: refresh
+    // revogado, `invalid_grant`, DNS fora do ar e timeout ficavam idênticos. No
+    // incidente do cliente Obralivre a renovação tentou ~500 vezes em ~26 h e
+    // não sobrou UMA linha dizendo por quê — a tela mostrava `validation_error`
+    // vazio e o log, nada.
+    const motivoDetalhe = detalheDaRecusaDeRenovacao(erro);
+    // Devolve o relógio de aprovação ao valor lido, para que a próxima
+    // tentativa não espere 30 s por uma trava que ninguém segura — e grava o
+    // motivo no MESMO update, porque `validation_error` é o campo que a tela de
+    // Credenciais mostra a quem vai reconectar a conta.
+    await p.admin
+      .from("ai_provider_credentials")
+      .update({
+        ...(atualizadoEm ? { updated_at: atualizadoEm } : {}),
+        validation_error: `renovacao_recusada:${motivoDetalhe}`,
+      })
+      .eq("id", p.credentialId)
+      .eq("organization_id", p.orgId);
+    // Só o rótulo: a mensagem do provedor pode carregar o refresh_token
+    // recusado, e log não é lugar de segredo. Nada de access_token, nada de
+    // cabeçalho de autorização.
+    logger.warn("[assinatura] renovação recusada — o motivo fica registrado", {
+      organization_id: p.orgId,
+      credential_id: p.credentialId,
+      motivo: motivoDetalhe,
+    });
+    return { ok: false, motivo: "falha", motivoDetalhe };
   }
 
   const gravado = await rotacionarCredencial({
@@ -295,7 +330,12 @@ export async function renovarComTravaDeBanco(p: {
     label: ROTULO_DO_LOGIN_CODEX,
     manterModelos: true,
   });
-  if (!gravado.ok) return { ok: false, motivo: "falha" };
+  if (!gravado.ok) {
+    // A troca com o provedor deu certo e a gravação não: o motivo tem nome
+    // próprio, senão este caso (credencial que não aceita o par novo) ficaria
+    // indistinguível de "a OpenAI recusou o token".
+    return { ok: false, motivo: "falha", motivoDetalhe: "credential_nao_gravada" };
+  }
 
   return { ok: true, tokens: renovados };
 }
@@ -334,6 +374,10 @@ export async function lerLoginCodexRenovandoSeProxima(p: {
   if (linha === null) return tokens;
 
   let renovados: TokensDoCodex | null = null;
+  // O motivo da recusa atravessa o `throw` para chegar ao log deste nível: o
+  // caminho automático não tem quem leia o retorno, e um `catch` sem motivo era
+  // exatamente o silêncio do incidente (#3371, fatia 3).
+  let motivoDaRecusa: string | null = null;
   try {
     await renovarSeProxima({
       expiraEm: tokens.expires_at,
@@ -349,15 +393,26 @@ export async function lerLoginCodexRenovandoSeProxima(p: {
             return renovarPorRefreshToken({ refreshToken: atuais.refresh_token, clientId: atuais.client_id });
           },
         });
-        if (!r.ok) throw new Error(`renovacao_automática_recusada: ${r.motivo}`);
+        if (!r.ok) {
+          motivoDaRecusa = r.motivoDetalhe ? `${r.motivo}:${r.motivoDetalhe}` : r.motivo;
+          throw new Error(`renovacao_automática_recusada: ${motivoDaRecusa}`);
+        }
         renovados = r.tokens;
         return r.tokens;
       },
     });
-  } catch {
+  } catch (erro) {
     // Renovação recusada, em curso noutro processo ou módulo desligado no meio
     // do caminho. O token que já temos segue em uso; a queda, se for o caso,
     // acontece na política da reserva e não aqui.
+    //
+    // O MOTIVO vai para o log (#3371, fatia 3): este `catch` é o último ponto
+    // em que a recusa ainda tem nome. `organizacao` + rótulo bastam para o
+    // plantão saber se reconecta a conta (revogado) ou espera (rede).
+    logger.warn("[assinatura] a renovação automática não renovou — o token atual segue em uso", {
+      organization_id: p.orgId,
+      motivo: motivoDaRecusa ?? detalheDaRecusaDeRenovacao(erro),
+    });
   }
   return renovados ?? tokens;
 }

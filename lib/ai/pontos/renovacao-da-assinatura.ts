@@ -43,6 +43,61 @@ export function renovacaoProxima(expiraEm: number | null, agora: number = Date.n
   return expiraEm - agora <= JANELA_DE_RENOVACAO_MS;
 }
 
+/**
+ * POR QUE a renovação foi recusada — o vocabulário que a credencial passa a
+ * guardar (#3371, fatia 3).
+ *
+ * A recusa era MUDA: `catch { return { ok: false, motivo: "falha" } }` devolvia
+ * o mesmo `falha` para refresh revogado, para `invalid_grant`, para DNS fora do
+ * ar e para timeout. Em produção (cliente Obralivre) a renovação tentou ~500
+ * vezes em ~26 h e NENHUM registro dizia o motivo — quem abriu o chamado sabia
+ * que o token estava vencido e nada mais.
+ *
+ * O detalhe é um RÓTULO, nunca o texto do provedor: a mensagem de erro de uma
+ * chamada de token pode carregar o `refresh_token` recusado, e este valor é
+ * gravado em `ai_provider_credentials.validation_error`, que a tela mostra.
+ */
+export type MotivoDaRecusaDeRenovacao =
+  | "refresh_token_revoked"
+  | "invalid_grant"
+  | "token_expired"
+  | "fetch_failed"
+  | "timeout"
+  | "recusado"
+  | "desconhecido";
+
+/** Sinais, em ordem de prioridade — os primeiros são mais específicos. */
+const SINAIS_DA_RECUSA: ReadonlyArray<{ motivo: MotivoDaRecusaDeRenovacao; sinal: RegExp }> = [
+  { motivo: "timeout", sinal: /timeout|timed out|aborted|abort/ },
+  { motivo: "fetch_failed", sinal: /fetch failed|econnrefused|econnreset|enotfound|network|socket/ },
+  { motivo: "refresh_token_revoked", sinal: /revoked|revog/ },
+  { motivo: "invalid_grant", sinal: /invalid_grant/ },
+  { motivo: "token_expired", sinal: /expir|vencid/ },
+];
+
+/**
+ * Traduz o erro da renovação no rótulo do motivo. Puro e sem rede: é a única
+ * parte desta decisão que precisa de casos, e ela é testada sem banco.
+ *
+ * O `motivo` do `ErroDeToken` vem primeiro quando já é específico
+ * (`refresh_token_revoked`), porque a classificação dele lê o CORPO do provedor
+ * e é mais confiável que o texto da exceção.
+ */
+export function detalheDaRecusaDeRenovacao(erro: unknown): MotivoDaRecusaDeRenovacao {
+  const motivoDoToken = (erro as { motivo?: unknown } | null)?.motivo;
+  if (motivoDoToken === "refresh_token_revoked") return "refresh_token_revoked";
+  const nome = (erro as { name?: unknown } | null)?.name;
+  const texto = `${typeof nome === "string" ? nome : ""} ${
+    erro instanceof Error ? erro.message : String(erro)
+  }`.toLowerCase();
+  for (const { motivo, sinal } of SINAIS_DA_RECUSA) {
+    if (sinal.test(texto)) return motivo;
+  }
+  if (motivoDoToken === "recusado") return "recusado";
+  if (motivoDoToken === "rede") return "fetch_failed";
+  return "desconhecido";
+}
+
 /** Renova só se a janela abriu. Devolve `true` quando renovou. */
 export async function renovarSeProxima(entrada: {
   expiraEm: number | null;
