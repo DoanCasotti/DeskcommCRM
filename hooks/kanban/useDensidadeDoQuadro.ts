@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 /** Onde a escolha mora. Constante exportada para o teste não repetir o literal. */
-export const CHAVE_DA_DENSIDADE = "deskcomm:quadro:densidade";
+export const CHAVE_DA_DENSIDADE = "quadro:densidade";
 
 export type DensidadeDoQuadro = "confortavel" | "compacta";
 
