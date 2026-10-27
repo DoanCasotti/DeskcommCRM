@@ -211,7 +211,7 @@ async function turnoAutomatico(
   const [claimed] = await queue.claimJobs(pool, { workerId: "pedido", maxConcurrency: 1 });
   expect(claimed?.id).toBe(job.id);
   const handler = createInboundTurnHandler({
-    ...(deps(prompts) as never),
+    ...deps(prompts),
     channel: () =>
       ({
         channel: "captura",
