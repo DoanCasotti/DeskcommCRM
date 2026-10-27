@@ -44,6 +44,55 @@ export function renovacaoProxima(expiraEm: number | null, agora: number = Date.n
 }
 
 /**
+ * A ROTAÇÃO É UMA POR JANELA — E A JANELA É DO TOKEN NOVO (#3371, fatia 5).
+ *
+ * `renovacaoProxima` responde "este token vence nos próximos 8 dias?", e o
+ * access_token da assinatura vive BEM menos que isso. Consequência medida em
+ * produção: logo depois de rotacionar, o token novo — recém-gravado — já estava
+ * "próximo de vencer" pela régua antiga, e TODO turno rotacionava de novo. Foram
+ * ~500 POSTs de refresh em ~26 h, dois deles com 35 s de intervalo, até a OpenAI
+ * passar a recusar todos.
+ *
+ * O marco gravado na rotação é o fim da janela daquele par: a última fatia da
+ * vida do token (`FRACAO_DA_VIDA_PARA_RENOVAR`), com piso de um minuto. Vida de
+ * 1 h → rotaciona nos últimos 6 min; vida de 30 dias → nos últimos 3 dias. A
+ * trava de 30 s do banco continua onde está: ela impede dois POSTs SIMULTÂNEOS,
+ * e o que muda aqui é a CONDIÇÃO DE NECESSIDADE, que passa a olhar o token novo.
+ */
+export const FRACAO_DA_VIDA_PARA_RENOVAR = 0.1;
+
+/**
+ * Quando este par pode ser rotacionado de novo. `null` quando o provedor não
+ * disse quando vence — e aí quem decide é `renovacaoProxima`, como antes.
+ */
+export function proximaRenovacaoEm(
+  expiraEm: number | null,
+  agora: number = Date.now(),
+): number | null {
+  if (expiraEm === null) return null;
+  const vida = expiraEm - agora;
+  // Já vencido (ou vencendo agora): não há fatia final a esperar.
+  if (vida <= 0) return agora;
+  return Math.trunc(expiraEm - Math.max(vida * FRACAO_DA_VIDA_PARA_RENOVAR, 60_000));
+}
+
+/**
+ * Está na hora de rotacionar ESTE par? Duas condições, e as duas precisam valer:
+ * o token está dentro da janela de renovação E o marco da rotação anterior já
+ * passou. Um par sem marco (gravado antes desta fatia) responde pela régua
+ * antiga uma única vez — a rotação seguinte já grava o marco.
+ */
+export function precisaRenovar(
+  tokens: { expires_at: number | null; proxima_renovacao_em?: number | null },
+  agora: number = Date.now(),
+): boolean {
+  if (!renovacaoProxima(tokens.expires_at, agora)) return false;
+  const janela = tokens.proxima_renovacao_em;
+  if (typeof janela === "number") return agora >= janela;
+  return true;
+}
+
+/**
  * POR QUE a renovação foi recusada — o vocabulário que a credencial passa a
  * guardar (#3371, fatia 3).
  *

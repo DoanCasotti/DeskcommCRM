@@ -34,7 +34,8 @@ import { moduloLigado } from "@/lib/instalacao/modulos";
 import { PROVEDOR_POR_ASSINATURA } from "@/lib/ai/pontos/provedores";
 import {
   detalheDaRecusaDeRenovacao,
-  renovacaoProxima,
+  precisaRenovar,
+  proximaRenovacaoEm,
   renovarSeProxima,
 } from "@/lib/ai/pontos/renovacao-da-assinatura";
 import { logger } from "@/lib/logger";
@@ -162,6 +163,11 @@ export async function lerLoginCodex(p: {
       ...(typeof json.ext_agent_host_id === "string" ? { ext_agent_host_id: json.ext_agent_host_id } : {}),
       ...(typeof json.token_type === "string" ? { token_type: json.token_type } : {}),
       expires_at: typeof json.expires_at === "number" ? json.expires_at : null,
+      // O marco da última rotação (#3371, fatia 5). Vem do JSON gravado, e sem
+      // ele a decisão de renovar volta à régua de 8 dias — uma vez só.
+      ...(typeof json.proxima_renovacao_em === "number"
+        ? { proxima_renovacao_em: json.proxima_renovacao_em }
+        : {}),
     };
   } catch {
     return null;
@@ -288,6 +294,14 @@ export async function renovarComTravaDeBanco(p: {
           : {}),
       token_type: renovados.token_type ?? (typeof json.token_type === "string" ? json.token_type : "Bearer"),
     };
+    // O `expires_at` do token NOVO e o marco que fecha a janela desta rotação
+    // (#3371, fatia 5). É o que impede o turno seguinte de rotacionar outra vez
+    // com o par que este POST acabou de receber — e o que faz a condição de
+    // necessidade olhar o token novo, não o que foi lido antes da trava.
+    renovados = {
+      ...renovados,
+      proxima_renovacao_em: proximaRenovacaoEm(renovados.expires_at),
+    };
   } catch (erro) {
     // A renovação falhou — e o MOTIVO fica registrado (#3371, fatia 3).
     //
@@ -368,7 +382,11 @@ export async function lerLoginCodexRenovandoSeProxima(p: {
 }): Promise<TokensDoCodex | null> {
   const tokens = await lerLoginCodex(p);
   if (tokens === null) return null;
-  if (!renovacaoProxima(tokens.expires_at, p.agora)) return tokens;
+  // `precisaRenovar` e não `renovacaoProxima`: a janela de 8 dias é maior que a
+  // vida do access_token, então a régua antiga respondia "renove" em TODO turno
+  // logo depois de rotacionar (#3371, fatia 5 — ~500 POSTs em ~26 h). O marco
+  // gravado na rotação é quem fecha a janela daquele par.
+  if (!precisaRenovar(tokens, p.agora)) return tokens;
 
   const linha = await linhaDoLogin(p.admin, p.orgId);
   if (linha === null) return tokens;
