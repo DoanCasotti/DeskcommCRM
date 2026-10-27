@@ -17643,6 +17643,15 @@ export const DICIONARIO: Traducoes = {
   "A fila do rodízio desta automação está vazia. Abra a automação e escolha quem entra no rodízio.": { es: "La fila de la rotación de esta automatización está vacía. Abre la automatización y elige quién entra en la rotación." },
   "A automação foi alterada e não tem mais o rodízio que disparou esta ação. Nada foi atribuído.": { es: "La automatización fue modificada y ya no tiene la rotación que disparó esta acción. No se asignó nada." },
   "O lead deste evento não foi encontrado nesta organização, então ninguém foi atribuído.": { es: "El lead de este evento no se encontró en esta organización, así que no se asignó a nadie." },
+  // #3514 — a passagem SDR → Closer na ação assign_owner (as duas caixas e as
+  // duas frases de falha parcial). Desligadas por padrão: o texto diz o que
+  // acontece SEM elas para quem só quer o negócio.
+  "Passar também o contato (carteira)": { es: "Pasar también el contacto (cartera)" },
+  "O cliente passa a ser deste atendente, no lugar do dono atual. Desligado, o cliente fica com quem está — o comportamento de sempre.": { es: "El cliente pasa a ser de este asesor, en lugar del dueño actual. Desactivado, el cliente queda con quien está — el comportamiento de siempre." },
+  "Passar também as conversas abertas do contato": { es: "Pasar también las conversaciones abiertas del contacto" },
+  "As conversas abertas que hoje estão com outra pessoa vão para este atendente, como no botão Transferir. Conversa encerrada e conversa sem dono não são tocadas.": { es: "Las conversaciones abiertas que hoy están con otra persona pasan a este asesor, como en el botón Transferir. La conversación cerrada y la conversación sin dueño no se tocan." },
+  "O negócio passou para a pessoa escolhida, mas a carteira do cliente não: ela continua com o dono anterior. O detalhe técnico abaixo diz o motivo; a ficha do contato mostra quem é o dono agora.": { es: "El negocio pasó a la persona elegida, pero la cartera del cliente no: sigue con el dueño anterior. El detalle técnico de abajo dice el motivo; la ficha del contacto muestra quién es el dueño ahora." },
+  "O negócio passou para a pessoa escolhida, mas uma ou mais conversas abertas do cliente não foram transferidas e seguem com o dono anterior. O detalhe técnico abaixo diz quais.": { es: "El negocio pasó a la persona elegida, pero una o más conversaciones abiertas del cliente no se transfirieron y siguen con el dueño anterior. El detalle técnico de abajo dice cuáles." },
   "Vez de {nome}, posição {posicao} da fila do rodízio.": { es: "Turno de {nome}, posición {posicao} de la fila de la rotación." },
   // #3006 — "usar como exemplo para a IA": a conversa marcada vira material do
   // agente (opt-in de LGPD). O selo fica curto de propósito: ele divide a faixa

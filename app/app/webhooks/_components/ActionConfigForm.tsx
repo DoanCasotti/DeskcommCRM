@@ -37,7 +37,18 @@ import { CaretDown, CaretUp, Pause, Play, X } from "@/lib/ui/icons";
  * a posição na `fila` é a ordem. Mesma forma do `configDoAtribuirSchema` da API.
  */
 export type ConfigDoAtribuir =
-  | { modo?: "fixo"; user_id: string }
+  | {
+      modo?: "fixo";
+      user_id: string;
+      /**
+       * #3514 — a passagem SDR → Closer. O negócio muda de dono sempre; estas
+       * duas caixas decidem se o CLIENTE vai junto. Desligadas por padrão, e
+       * `undefined` (não `false`) é o que está gravado nas regras de antes: o
+       * payload antigo continua idêntico.
+       */
+      contato?: boolean;
+      conversas?: boolean;
+    }
   | { modo: "rodizio"; fila: Array<{ user_id: string; pausado: boolean }> };
 
 export type ActionItem =
@@ -667,7 +678,7 @@ function AssignOwnerForm({ config, onChange }: FormProps<ConfigDoAtribuir>) {
         />
         <div className="space-y-1">
           <Label>{t("Atendente")}</Label>
-          <Select value={config.user_id} onValueChange={(v) => onChange({ user_id: v })}>
+          <Select value={config.user_id} onValueChange={(v) => onChange({ ...config, user_id: v })}>
             <SelectTrigger>
               <SelectValue placeholder={t("Escolha o atendente")} />
             </SelectTrigger>
@@ -679,6 +690,39 @@ function AssignOwnerForm({ config, onChange }: FormProps<ConfigDoAtribuir>) {
               ))}
             </SelectContent>
           </Select>
+        </div>
+        {/* #3514 — a passagem SDR → Closer. OPT-IN, e o texto diz o que NÃO
+            muda quando a caixa está desligada: quem já tem automação no ar não
+            pode passar a mover conversa por causa de uma tela nova. */}
+        <div className="flex items-center justify-between gap-3 rounded-md border p-3">
+          <div className="space-y-0.5">
+            <Label htmlFor="atribuir-passar-contato">{t("Passar também o contato (carteira)")}</Label>
+            <p className="text-xs text-muted-foreground">
+              {t(
+                "O cliente passa a ser deste atendente, no lugar do dono atual. Desligado, o cliente fica com quem está — o comportamento de sempre.",
+              )}
+            </p>
+          </div>
+          <Switch
+            id="atribuir-passar-contato"
+            checked={config.contato === true}
+            onCheckedChange={(v) => onChange({ ...config, contato: v ? true : undefined })}
+          />
+        </div>
+        <div className="flex items-center justify-between gap-3 rounded-md border p-3">
+          <div className="space-y-0.5">
+            <Label htmlFor="atribuir-passar-conversas">{t("Passar também as conversas abertas do contato")}</Label>
+            <p className="text-xs text-muted-foreground">
+              {t(
+                "As conversas abertas que hoje estão com outra pessoa vão para este atendente, como no botão Transferir. Conversa encerrada e conversa sem dono não são tocadas.",
+              )}
+            </p>
+          </div>
+          <Switch
+            id="atribuir-passar-conversas"
+            checked={config.conversas === true}
+            onCheckedChange={(v) => onChange({ ...config, conversas: v ? true : undefined })}
+          />
         </div>
       </div>
     );

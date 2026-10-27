@@ -15022,7 +15022,9 @@ export type Database = {
       };
       fn_definir_carteira_do_cliente: {
         Args: {
-          p_actor: string;
+          // Nulo = o SISTEMA (#3514): só com `p_origem: "automacao"`, que a
+          // função exige e recusa a quem chega com ator.
+          p_actor: string | null;
           p_contact: string;
           p_dono: string;
           p_org: string;

@@ -50560,7 +50560,7 @@ alter table public.contacts
 alter table public.contacts
   add constraint contacts_carteira_origem_vocabulario
   check (carteira_origem is null
-         or carteira_origem in ('manual', 'importacao', 'atribuicao_automatica'));
+         or carteira_origem in ('manual', 'importacao', 'atribuicao_automatica', 'automacao'));
 
 alter table public.contacts
   drop constraint if exists contacts_carteira_trio_coerente;
@@ -50638,27 +50638,40 @@ declare
   v_contato_org uuid;
   v_origem text := coalesce(p_origem, 'manual');
 begin
+  if v_origem not in ('manual', 'importacao', 'atribuicao_automatica', 'automacao') then
+    raise exception 'carteira_origem_invalida' using errcode = '22023';
+  end if;
   if v_ator is null then
-    raise exception 'carteira_sem_ator' using errcode = '42501';
+    -- #3514: sem ator humano, quem grava é o SISTEMA — e só ele. A automação
+    -- não tem sessão; o que a identifica é a origem `automacao`, que a função
+    -- recusa a quem chega com ator (senão a origem do sistema virava um rótulo
+    -- que qualquer manager escolhia para esconder o próprio ato).
+    if v_origem <> 'automacao' then
+      raise exception 'carteira_sem_ator' using errcode = '42501';
+    end if;
   end if;
   if p_org is null or p_contact is null then
     raise exception 'carteira_parametro_invalido' using errcode = '22023';
   end if;
-  if v_origem not in ('manual', 'importacao', 'atribuicao_automatica') then
-    raise exception 'carteira_origem_invalida' using errcode = '22023';
-  end if;
 
-  -- Quem muda: manager+ da MESMA organização (e membro aceito, não revogado).
-  select uo.role into v_papel
-    from public.user_organizations uo
-   where uo.user_id = v_ator
-     and uo.organization_id = p_org
-     and uo.accepted_at is not null
-     and uo.revoked_at is null;
-  if v_papel is null or v_papel not in ('manager', 'admin') then
-    raise exception 'carteira_permissao_negada'
-      using errcode = '42501',
-            detail = 'Só manager e admin definem a carteira do cliente.';
+  if v_ator is not null then
+    -- Quem muda: manager+ da MESMA organização (e membro aceito, não revogado).
+    select uo.role into v_papel
+      from public.user_organizations uo
+     where uo.user_id = v_ator
+       and uo.organization_id = p_org
+       and uo.accepted_at is not null
+       and uo.revoked_at is null;
+    if v_papel is null or v_papel not in ('manager', 'admin') then
+      raise exception 'carteira_permissao_negada'
+        using errcode = '42501',
+              detail = 'Só manager e admin definem a carteira do cliente.';
+    end if;
+    if v_origem = 'automacao' then
+      raise exception 'carteira_origem_invalida'
+        using errcode = '22023',
+              detail = 'A origem automacao é do servidor, sem ator: quem chama com ator grava manual ou atribuicao_automatica.';
+    end if;
   end if;
 
   select c.organization_id into v_contato_org
