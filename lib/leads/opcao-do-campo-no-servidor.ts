@@ -35,10 +35,9 @@ import {
 import { defsDoPadraoDoFunil } from "@/lib/leads/padrao-do-campo";
 
 /**
- * A frase da recusa. Curta e sem o valor dentro de propósito: ela passa pelo
- * `traduzir` por CHAVE, e o que nomeia o campo e o valor que não casou são os
- * `details.recusas` — que é o que a tool MCP devolve ao modelo e o que a tela
- * usa para marcar o campo.
+ * A frase da recusa. O campo e o valor que não casaram vão colados nela em
+ * `erroForaDaLista`: a frase é a chave traduzível, e o dado do tenant não é —
+ * mas quem escreve por tool recebe só a mensagem (ver o comentário lá).
  */
 export const MENSAGEM_DE_FORA_DA_LISTA =
   "O valor não é uma das opções cadastradas neste campo.";
@@ -49,12 +48,18 @@ export function erroForaDaLista(
   requestId: string,
   idioma: Idioma = "pt-BR",
 ): ApiError {
+  // A frase é a chave traduzível; o CAMPO e o VALOR vão colados nela porque
+  // quem escreve por tool (o agente de IA) recebe só a mensagem — `details` não
+  // atravessa o servidor MCP (`lib/mcp/server.ts` devolve `err.message`). Sem
+  // isto o modelo leria "o valor não é uma opção" sem saber de que campo.
+  const primeira = recusas[0];
+  const onde = primeira ? ` Campo "${primeira.campo}", valor "${primeira.valor}".` : "";
   return new ApiError(
     422,
     "custom_field_value_not_in_list",
     { recusas },
     requestId,
-    traduzir(MENSAGEM_DE_FORA_DA_LISTA, idioma),
+    `${traduzir(MENSAGEM_DE_FORA_DA_LISTA, idioma)}${onde}`,
   );
 }
 

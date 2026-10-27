@@ -278,7 +278,11 @@ describe("API REST (POST /api/v1/leads) — a opção casa e grava o `value`", (
     expect(erro.details).toEqual({
       recusas: [{ campo: "estado", motivo: "fora_da_lista", valor: "Bahia" }],
     });
-    expect(erro.message).toBe(MENSAGEM_DE_FORA_DA_LISTA);
+    // A frase traduzível MAIS o campo e o valor: é só a mensagem que o agente
+    // de IA recebe (o servidor MCP devolve `err.message`, não `details`).
+    expect(erro.message).toContain(MENSAGEM_DE_FORA_DA_LISTA);
+    expect(erro.message).toContain('"estado"');
+    expect(erro.message).toContain('"Bahia"');
     expect(inserts, "nada foi gravado torto").toHaveLength(0);
   });
 
@@ -294,7 +298,7 @@ describe("API REST (POST /api/v1/leads) — a opção casa e grava o `value`", (
     );
 
     expect(DICIONARIO[MENSAGEM_DE_FORA_DA_LISTA]?.es).toBeTruthy();
-    expect(erro.message).toBe(DICIONARIO[MENSAGEM_DE_FORA_DA_LISTA]?.es);
+    expect(erro.message).toContain(DICIONARIO[MENSAGEM_DE_FORA_DA_LISTA]!.es);
   });
 
   it("CONTROLE: campo `select` SEM opções cadastradas segue gravando como veio", async () => {
