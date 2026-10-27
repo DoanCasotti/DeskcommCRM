@@ -281,6 +281,10 @@ async function execute(ctx: ActionCtx, config: Record<string, unknown>): Promise
     if (conversas.falhas.length > 0) {
       falhouConversas = true;
       detalhe.erro_conversas = conversas.falhas[0];
+      // A tela mostra `detalhe.erro` (lib: ActivityTab/detalheTecnicoDe) e a
+      // frase acima promete "o detalhe técnico abaixo diz quais". A carteira
+      // tem prioridade porque veio primeiro; sem ela, a conversa ocupa o lugar.
+      if (detalhe.erro === undefined) detalhe.erro = conversas.falhas[0];
     }
   }
 

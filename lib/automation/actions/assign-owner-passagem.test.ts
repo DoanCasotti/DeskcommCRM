@@ -299,6 +299,31 @@ describe("assign_owner — a passagem SDR → Closer (#3514)", () => {
       user_id: NOVO_DONO,
       conversas: { movidas: 0, falhas: 1 },
       erro_conversas: `${CONVERSA_DO_SDR}: conversation_outside_visibility_scope`,
+      // Sem falha de carteira, a conversa ocupa o lugar que a tela lê — a frase
+      // "o detalhe técnico abaixo diz quais" não pode prometer o que não há.
+      erro: `${CONVERSA_DO_SDR}: conversation_outside_visibility_scope`,
+    });
+  });
+
+  it("quando as duas pernas falham, a mensagem da carteira fica no detalhe e a da conversa ao lado", async () => {
+    const banco = bancoFalso({
+      conversas: [{ id: CONVERSA_DO_SDR, assigned_to_user_id: SDR }],
+      conversasQueFalham: [CONVERSA_DO_SDR],
+      erroDaCarteira: "carteira_dono_invalido",
+    });
+    const r = await getAction("assign_owner")!.execute(ctx(banco.admin), {
+      ...soONegocio,
+      contato: true,
+      conversas: true,
+    });
+
+    expect(r.error).toBe("carteira_nao_passou");
+    expect(r.detail).toEqual({
+      user_id: NOVO_DONO,
+      carteira: "falhou",
+      erro: "carteira_dono_invalido",
+      conversas: { movidas: 0, falhas: 1 },
+      erro_conversas: `${CONVERSA_DO_SDR}: conversation_outside_visibility_scope`,
     });
   });
 
