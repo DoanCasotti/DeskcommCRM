@@ -55,8 +55,14 @@ const pool = new pg.Pool({
   max: 4,
 });
 
-/** A marca da instrução do pedido humano — o que o dublê escuta. */
-const MARCA_DO_PEDIDO = 'clicou em "Sugerir resposta"';
+/**
+ * A marca da instrução do pedido humano — o que o dublê escuta.
+ *
+ * Sem aspas de propósito: o dublê olha o prompt SERIALIZADO (`JSON.stringify`),
+ * e uma marca com `"` viraria `\"` e nunca casaria — foi assim que a primeira
+ * corrida do teste passou pelo passo novo e o dublê continuou calado.
+ */
+const MARCA_DO_PEDIDO = "pediu um texto para esta conversa";
 const TEXTO_PROPOSTO = "Bom dia! Posso ajudar com o seu pedido?";
 const FECHAMENTO = JSON.stringify({
   commitments: [],
@@ -126,7 +132,10 @@ function deps(prompts: string[]) {
     llmCfg: { anthropicApiKey: "***" } as never,
     knobs,
     log: createLogger(),
-    clock: () => new Date("2026-09-07T15:00:00Z"),
+    // Relógio REAL: as mensagens do cenário nascem com `now()`. Fixar o relógio
+    // no passado fecharia a janela de 24 h contra elas e o veto de janela
+    // mascararia o que este teste mede.
+    clock: () => new Date(),
     embed: async () => ({ embedding: Array(1536).fill(0.1), promptTokens: 0, model: "stub" }),
     registry: modelo(prompts),
   };
@@ -257,9 +266,14 @@ describe("Sugerir resposta propõe quando o agente automático calaria (#3281)",
     });
 
     const rascunho = await ultimoRascunho(f.org, f.conversation);
-    expect(rascunho?.original_body, "cliquei em Sugerir resposta e continuou vazio").toBe(
-      TEXTO_PROPOSTO,
-    );
+    expect(
+      rascunho?.original_body,
+      `cliquei em Sugerir resposta e continuou vazio (status=${rascunho?.status}, code=${
+        rascunho?.error_code
+      }, chamadas=${promptsRascunho.length}, instrucao_na_2a=${String(
+        promptsRascunho[1]?.includes(MARCA_DO_PEDIDO),
+      )})`,
+    ).toBe(TEXTO_PROPOSTO);
     expect(rascunho?.status, "proposta pronta não pode nascer como falha").toBe("pending");
     // A 1ª chamada é o turno como o automático o faria — sem a instrução.
     expect(promptsRascunho[0]).not.toContain(MARCA_DO_PEDIDO);
