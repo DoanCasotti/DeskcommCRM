@@ -40,6 +40,8 @@ interface StageColumnProps {
   /** `manager`+ — mesmo corte de papel da rota que renomeia a etapa. */
   podeRenomear?: boolean;
   onRenomear?: (nome: string) => void;
+  /** Densidade dos cards (issue #3461, item 2) — atravessa como `pulses`. */
+  denso?: boolean;
 }
 
 export function StageColumn({
@@ -58,6 +60,7 @@ export function StageColumn({
   onMoverPara,
   podeRenomear = false,
   onRenomear,
+  denso = false,
 }: StageColumnProps) {
   const t = useT();
   // O TOTAL É POR MOEDA (#1531). Antes ele somava todos os `value_cents` e
@@ -275,6 +278,7 @@ export function StageColumn({
                 onOpen={onOpen}
                 etapas={etapas}
                 onMoverPara={onMoverPara}
+                denso={denso}
               />
             ))}
             {provided.placeholder}

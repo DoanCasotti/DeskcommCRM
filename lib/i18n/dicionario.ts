@@ -14068,6 +14068,7 @@ export const DICIONARIO: Traducoes = {
   "Densidade dos cards": { es: "Densidad de las tarjetas" },
   "Confortável": { es: "Cómoda" },
   "Compacta": { es: "Compacta" },
+  "Cards compactos": { es: "Tarjetas compactas" },
   "Mostrar descrição nos cards": { es: "Mostrar descripción en las tarjetas" },
   "Abrir guia": { es: "Abrir guía" },
   "Ative para abrir o guia.": { es: "Actívala para abrir la guía." },
