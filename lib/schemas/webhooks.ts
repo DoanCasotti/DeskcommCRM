@@ -245,9 +245,12 @@ export { conditionSchema } from "@/lib/automation/conditions";
  * válido e continua fazendo SÓ o que fazia. Nenhuma automação existente passa a
  * mover conversa porque o schema ganhou um campo.
  *
- * No rodízio elas não entram: quem recebeu só é conhecido dentro da função SQL
- * que anda a fila, e passar carteira/conversa exige gravar os três donos na
- * MESMA transação da vez — assunto da segunda etapa (a issue #3514 registra).
+ * No rodízio elas não entram NESTA entrega, e não por acaso: a vez é decidida
+ * dentro de `fn_automation_rodizio_atribuir`, que grava o dono do negócio na
+ * MESMA transação em que registra a escolha. Passar cliente e conversas ali
+ * seria uma SEGUNDA passada, com um destinatário que o banco escolheu e que a
+ * ação só conhece depois do commit — desenho que merece issue própria em vez de
+ * vir de carona nesta.
  */
 export const configDoAtribuirSchema = z.discriminatedUnion("modo", [
   z.object({

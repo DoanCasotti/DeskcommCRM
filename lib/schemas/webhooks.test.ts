@@ -330,7 +330,7 @@ describe("assign_owner: atendente fixo ou rodízio", () => {
     expect(r.error?.issues[0]?.path).toEqual(["actions", 0, "config", "conversas"]);
   });
 
-  it("no rodízio as caixas não existem: o parse as descarta (quem recebeu só se sabe na função)", () => {
+  it("no rodízio as caixas não existem: o parse as descarta (a vez é decidida no banco)", () => {
     const fila = [{ user_id: UUID, pausado: false }];
     const r = regra([{ type: "assign_owner", config: { modo: "rodizio", fila, contato: true, conversas: true } }]);
     expect(r.success).toBe(true);
