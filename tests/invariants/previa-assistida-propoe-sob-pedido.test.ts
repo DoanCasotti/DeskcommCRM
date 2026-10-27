@@ -11,6 +11,7 @@ import { createLogger } from "@/lib/agent-engine/obs/logger";
 import { loadEnv } from "@/lib/agent-engine/env";
 import { turnKnobsFromEnv } from "@/lib/agent-engine/agent/turn-knobs";
 import * as queue from "@/lib/agent-engine/queue/queue";
+import { seedGov } from "./gov-helpers";
 import { replyFixture } from "../support/autonomia-fixture";
 
 /**
@@ -225,6 +226,7 @@ async function turnoAutomatico(
 }
 
 beforeAll(async () => {
+  await seedGov();
   await pool.query(
     `with v as (
        insert into playbook_versions (organization_id, layer, content)
