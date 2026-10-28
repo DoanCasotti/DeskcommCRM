@@ -58,6 +58,26 @@
  * como no editor do Inbox (#2789), e cada chip do contato ganha o gatilho de
  * repintar (#2771).
  *
+ * ─── A BUSCA: o MESMO vocabulário do Inbox (issue #3144) ────────────────────
+ *
+ * Faltava a outra metade da paridade: `GET /api/v1/contact-tags` SEM texto lê os
+ * 1000 contatos atualizados mais recentemente e corta em 200 etiquetas
+ * (`app/api/v1/contact-tags/route.ts`), então a etiqueta de Configurações → Tags
+ * que nenhum contato usa ainda — ou a que só aparece em `crm_leads`/conversas, ou
+ * a que só existe como `add_tag` de uma regra — nunca virava sugestão na ficha.
+ * Quem digitava "diam" via "Criar etiqueta «diam»" e digitava o nome inteiro, ou
+ * uma variante dele: exatamente o erro de digitação que a seleção de etiquetas
+ * existentes veio evitar. O Inbox já perguntava com o texto digitado desde a
+ * #2855 (`?busca=` → `fn_vocabulario_de_tags_pagina`), e é isso que a ficha passa
+ * a fazer — pelo MESMO hook, pela MESMA rota: `onDigitar` sobe o texto, quem
+ * monta consulta, e o que o servidor achou volta em `encontradas`.
+ *
+ * Este campo continua sem rede: o componente segue testável sem provider e sem
+ * dublê (o mapa de cores degrada para vazio, e `encontradas` ausente é a lista de
+ * antes). A falha da leitura, essa sim, passou a ser VISÍVEL (`erroNoVocabulario`):
+ * silêncio ali lia como "não há etiquetas", que é o que empurra a pessoa a digitar
+ * a variante. É a mesma frase que o Inbox mostra.
+ *
  * ─── O texto digitado não pode sumir ao SALVAR ──────────────────────────────
  *
  * O texto em digitação mora num `useState` DESTE campo (`draft`): enquanto não
