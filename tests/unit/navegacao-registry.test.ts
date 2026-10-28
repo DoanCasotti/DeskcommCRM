@@ -335,8 +335,10 @@ describe("capacidade da organização (#1290): Chamadas só com a telefonia em u
     expect(com.hub.filter((h) => !sem.hub.includes(h))).toEqual(["/app/calls"]);
     expect(com.busca.filter((h) => !sem.busca.includes(h))).toEqual(["/app/calls"]);
     expect(sem.hub.filter((h) => !com.hub.includes(h))).toEqual([]);
+    // Vizinhos sem condição declarada continuam no lugar — a régua deles é
+    // outra (`modulo`, papel, destinos da empresa) e este filtro não a toca.
     expect(sem.hub).toContain("/app/kanban");
-    expect(sem.hub).toContain("/app/comandas");
+    expect(sem.hub).toContain("/app/products");
   });
 
   it("nem o administrador da instalação ganha a porta de módulo desligado", () => {
