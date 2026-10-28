@@ -1,5 +1,12 @@
 -- manifest: **A assinatura do ChatGPT desconectada vira UM aviso na Central, e ele se fecha sozinho quando o login volta (issue #3371).** No cliente Obralivre o `401 · Provided authentication token is expired` apareceu em 107 turnos seguidos, ~26 h sem a IA responder e a Central de avisos vazia: quem olhava a operação não tinha por que suspeitar da conta. A migration só ACRESCENTA `assinatura_desconectada` ao vocabulário fechado de `agent_inbox_items.kind` (drop/re-add preservando os 42 valores vigentes, padrão da 0105/0655 — esta passa a ser a última que a reconstrói) e cria o índice único parcial que garante "um incidente = um aviso": 107 turnos não podem virar 107 itens. A regra que abre/fecha mora em `lib/ai/credenciais/assinatura-desconectada.ts` (pura) + `lib/ai/credenciais/aviso-da-assinatura.ts` (banco): o seam abre com `severity='critical'` quando o 401 vem com sinal de expiração E a renovação foi recusada, e a rota de revalidate fecha o MESMO item quando o login volta. Auto-curativa e idempotente: a lista só CRESCE, e a dedupe antes do índice resolve qualquer duplicata aberta de uma rodada anterior.
 
+-- Drop ANTES do add, no MESMO arquivo: a constraint existe desde a 0050 (CHECK
+-- de coluna, nome automático). Num clone que aplica a CADEIA, o add sem drop
+-- falha com 42710 e para a aplicação ali — a cerca
+-- `reconstruir-constraint-derruba-antes` existe exatamente por isso.
+alter table public.agent_inbox_items
+  drop constraint if exists agent_inbox_items_kind_check;
+
 alter table public.agent_inbox_items
   add constraint agent_inbox_items_kind_check check (kind in (
     'appointment_outcome_required',
