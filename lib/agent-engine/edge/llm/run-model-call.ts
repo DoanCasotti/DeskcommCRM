@@ -1197,7 +1197,7 @@ export async function runModelCall(db: pg.Pool, cfg: LlmEdgeConfig, input: RunMo
     // 401 com sinal de expiração + renovação RECUSADA = a conta desconectou e
     // ninguém vai saber. Foi assim que o cliente Obralivre passou ~26 h com 107
     // turnos recusados e a Central de avisos VAZIA. Um item por incidente (a
-    // regra pura + o índice único da migration 9026), aberto aqui e fechado
+    // regra pura + o índice único da migration 9027), aberto aqui e fechado
     // sozinho pela rota do login novo. Best-effort: o turno já falhou, o aviso
     // não pode virar uma segunda falha.
     if (

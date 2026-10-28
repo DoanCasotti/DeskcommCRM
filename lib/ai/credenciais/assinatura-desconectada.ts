@@ -21,7 +21,7 @@
  * abre) e pela rota que recebe o login novo (que fecha).
  */
 
-/** O kind em `agent_inbox_items` (vocabulário fechado por CHECK, migration 9026). */
+/** O kind em `agent_inbox_items` (vocabulário fechado por CHECK, migration 9027). */
 export const KIND_ASSINATURA_DESCONECTADA = "assinatura_desconectada" as const;
 
 /** O título do item. Diz a CONSEQUÊNCIA para quem atende, não o token. */

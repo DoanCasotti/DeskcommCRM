@@ -126,7 +126,7 @@ export type InboxKind =
   // dois dispara pela MESMA lista (`lib/tarefas/preferencia-de-lembrete.ts`).
   | 'task_due'
   | 'task_overdue'
-  // (migration 9026, issue #3371) A conta da assinatura do ChatGPT desconectou
+  // (migration 9027, issue #3371) A conta da assinatura do ChatGPT desconectou
   // e a renovação foi recusada: 107 turnos com 401 no cliente Obralivre, ~26 h
   // sem resposta e a Central vazia. UM item por incidente (índice único
   // parcial), fechado sozinho quando o login volta pela tela de Credenciais.

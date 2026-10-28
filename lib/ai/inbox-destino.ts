@@ -186,7 +186,7 @@ export const POLITICAS_DE_AVISO = {
     refs: ["task"],
     orientacao: "A tarefa venceu sem conclusão. Abra e conclua, ou reagende o prazo se ele não for mais possível.",
   },
-  // (migration 9026, issue #3371) O aviso nasce SEM referência: o que o conserta
+  // (migration 9027, issue #3371) O aviso nasce SEM referência: o que o conserta
   // não é uma linha do banco, é o login da conta — e o login mora na tela de
   // Credenciais. O botão diz o que fazer ("Reconectar"), não "revisar", porque
   // nada há para inspecionar: a conta precisa ser conectada de novo.

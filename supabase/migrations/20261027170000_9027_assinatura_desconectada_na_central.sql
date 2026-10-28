@@ -157,7 +157,7 @@ alter table public.agent_inbox_items
     -- lista pelas razões de sempre (bloco único por constraint, #159).
     'task_due',
     'task_overdue',
-    -- (migration 9026, issue #3371) A conta da assinatura do ChatGPT morreu em
+    -- (migration 9027, issue #3371) A conta da assinatura do ChatGPT morreu em
     -- silêncio no cliente Obralivre: `401 · Provided authentication token is
     -- expired` em 107 turnos, ~26 h sem a IA responder. Entra NESTA lista pelas
     -- razões de sempre (#159, bloco único por constraint) e o item nasce SEM

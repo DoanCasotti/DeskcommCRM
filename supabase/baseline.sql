@@ -10272,7 +10272,7 @@ alter table public.agent_inbox_items
     -- lista pelas razões de sempre (bloco único por constraint, #159).
     'task_due',
     'task_overdue',
-    -- (migration 9026, issue #3371) A conta da assinatura do ChatGPT morreu em
+    -- (migration 9027, issue #3371) A conta da assinatura do ChatGPT morreu em
     -- silêncio no cliente Obralivre: `401 · Provided authentication token is
     -- expired` em 107 turnos, ~26 h sem a IA responder. Entra NESTA lista pelas
     -- razões de sempre (#159, bloco único por constraint) e o item nasce SEM
@@ -64497,7 +64497,7 @@ create unique index if not exists agent_inbox_canal_pausado_aberto_unico
   on public.agent_inbox_items (organization_id, kind, ref_id)
   where status = 'open' and kind = 'canal_pausado';
 
--- ---- a assinatura desconectada: UM aviso por organização (migration 9026, #3371) ----
+-- ---- a assinatura desconectada: UM aviso por organização (migration 9027, #3371) ----
 -- Sem `ref_id`: o aviso não aponta para uma linha, aponta para o LOGIN. Um por
 -- incidente — 107 turnos com 401 não podem virar 107 itens na Central.
 create unique index if not exists agent_inbox_assinatura_desconectada_aberto_unico

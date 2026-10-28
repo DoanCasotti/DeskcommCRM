@@ -11755,7 +11755,7 @@ export const DICIONARIO: Traducoes = {
     es: "Las respuestas a los clientes están esperando. Recarga el saldo en la cuenta del proveedor: salen solas cuando vuelva el saldo, durante hasta 6 horas. Después de eso, la conversación que no se respondió aparece aquí en la Central.",
   },
   "Revisar credencial": { es: "Revisar credencial" },
-  // ─── lib/ai/inbox-destino.ts, `assinatura_desconectada` (#3371, migration 9026) ───
+  // ─── lib/ai/inbox-destino.ts, `assinatura_desconectada` (#3371, migration 9027) ───
   // O botão diz o que FAZER ("Reconectar"), não "revisar": nada há para inspecionar,
   // a conta precisa ser conectada de novo. O espanhol repete a ação, não o rótulo.
   "Reconectar a assinatura": { es: "Reconectar la suscripción" },

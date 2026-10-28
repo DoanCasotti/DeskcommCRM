@@ -119,7 +119,7 @@ export async function sincronizarAvisoDaAssinatura(
       // Central leva (`lib/ai/inbox-destino.ts`).
     });
     // 23505 = outra rodada simultânea abriu o aviso entre a leitura e o INSERT.
-    // O índice único parcial da migration 9026 é quem garante "um incidente =
+    // O índice único parcial da migration 9027 é quem garante "um incidente =
     // um aviso"; aqui só reconhecemos que ele já existe.
     if (error?.code === "23505") return "sem_mudanca";
     if (error) {
