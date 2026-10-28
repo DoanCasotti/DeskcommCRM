@@ -1024,11 +1024,17 @@ export async function runModelCall(db: pg.Pool, cfg: LlmEdgeConfig, input: RunMo
   // Objeto e não `let`: o valor é escrito dentro do callback da renovação e lido
   // depois, no catch — e é a leitura DEPOIS que decide o aviso da Central.
   const renovacaoDoTurno: { recusa: string | null } = { recusa: null };
+  // O par tentativa/resposta do seam. Anotado porque o genérico de
+  // `chamarComRetryUnicoEm401` inferiria só o ramo de SUCESSO e recusaria o de
+  // erro — o tipo é o mesmo objeto, o retry único é que é o contrato.
+  type TentativaDaAssinatura =
+    | { ok: true; resultado: Awaited<ReturnType<typeof generateText>> }
+    | { ok: false; erro: unknown };
   const chamarComRenovacaoNo401 = async (
     cfgUsada: OrgLlmConfig,
     fabrica: typeof factory,
   ): Promise<Awaited<ReturnType<typeof generateText>>> => {
-    const { corpo, tentativas } = await chamarComRetryUnicoEm401({
+    const { corpo, tentativas } = await chamarComRetryUnicoEm401<TentativaDaAssinatura>({
       tentar: async () => {
         try {
           return {
