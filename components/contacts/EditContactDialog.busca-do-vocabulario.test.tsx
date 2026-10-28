@@ -111,6 +111,16 @@ const campo = () => screen.getByLabelText("Adicionar etiqueta");
 /** A sugestão pelo rótulo que ela mesma anuncia (o chip com papel de botão). */
 const sugestao = (tag: string) => screen.queryByRole("button", { name: `Adicionar etiqueta: ${tag}` });
 
+/** A cor de FUNDO aplicada, no MESMO formato que o navegador usa. */
+function mesmaCor(el: HTMLElement | null, hex: string): boolean {
+  if (!el) return false;
+  const prova = document.createElement("span");
+  prova.style.backgroundColor = hex;
+  return (
+    window.getComputedStyle(el).backgroundColor === window.getComputedStyle(prova).backgroundColor
+  );
+}
+
 const CONTATO = {
   id: "ct-3144",
   organization_id: "org-1",
@@ -170,7 +180,13 @@ describe("a ficha pergunta ao vocabulário curado, como o Inbox (issue #3144)", 
         expect.anything(),
       ),
     );
-    expect(await screen.findByRole("button", { name: "Adicionar etiqueta: cliente diamante" })).toBeTruthy();
+    const achada = await screen.findByRole("button", {
+      name: "Adicionar etiqueta: cliente diamante",
+    });
+    // E sai PINTADA com o tom que ela tem no Inbox: a cor vem do mesmo mapa
+    // (`ProvedorDeCoresDasEtiquetas`), não da lista que a tela já tinha em mãos —
+    // é o que faz a etiqueta do vocabulário curado ser reconhecida de relance.
+    await waitFor(() => expect(mesmaCor(achada, "#0091ff")).toBe(true));
   });
 
   it("escolher a sugestão grava a grafia do vocabulário no PATCH do contato", async () => {
