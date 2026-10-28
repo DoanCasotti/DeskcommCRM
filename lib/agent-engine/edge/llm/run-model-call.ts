@@ -22,6 +22,7 @@ import { z } from 'zod';
 
 import { PROVEDOR_POR_ASSINATURA } from '@/lib/ai/pontos/provedores';
 import { chamarComRetryUnicoEm401 } from '@/lib/ai/pontos/renovacao-da-assinatura';
+import { sincronizarAvisoDaAssinatura } from '@/lib/ai/credenciais/aviso-da-assinatura';
 import { renovarAssinaturaNoTurno } from '@/lib/ai/credenciais/login-codex';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { PONTO_POR_ID } from '@/lib/ai/pontos/registro';
@@ -1020,7 +1021,9 @@ export async function runModelCall(db: pg.Pool, cfg: LlmEdgeConfig, input: RunMo
    * `recusaDaRenovacao` guarda o PORQUÊ da recusa (fatia 3): é ele que vira o
    * aviso único na Central (fatia 2) quando a conta precisa ser reconectada.
    */
-  let recusaDaRenovacao: string | null = null;
+  // Objeto e não `let`: o valor é escrito dentro do callback da renovação e lido
+  // depois, no catch — e é a leitura DEPOIS que decide o aviso da Central.
+  const renovacaoDoTurno: { recusa: string | null } = { recusa: null };
   const chamarComRenovacaoNo401 = async (
     cfgUsada: OrgLlmConfig,
     fabrica: typeof factory,
@@ -1051,13 +1054,13 @@ export async function runModelCall(db: pg.Pool, cfg: LlmEdgeConfig, input: RunMo
           });
           return;
         }
-        recusaDaRenovacao = r.motivoDetalhe ? `${r.motivo}:${r.motivoDetalhe}` : r.motivo;
+        renovacaoDoTurno.recusa = r.motivoDetalhe ? `${r.motivo}:${r.motivoDetalhe}` : r.motivo;
         deps.log?.error('llm: a assinatura respondeu 401 e a renovação foi RECUSADA', {
           organization_id: input.tenantId,
           purpose,
           provider: cfgUsada.provider,
           model,
-          motivo: recusaDaRenovacao,
+          motivo: renovacaoDoTurno.recusa,
         });
       },
     });
@@ -1183,6 +1186,25 @@ export async function runModelCall(db: pg.Pool, cfg: LlmEdgeConfig, input: RunMo
     }).catch(() => {
       // O log da falha não pode causar uma segunda falha.
     });
+    // ─── O AVISO QUE A CENTRAL NÃO TINHA (#3371, fatia 2) ─────────────────────
+    //
+    // 401 com sinal de expiração + renovação RECUSADA = a conta desconectou e
+    // ninguém vai saber. Foi assim que o cliente Obralivre passou ~26 h com 107
+    // turnos recusados e a Central de avisos VAZIA. Um item por incidente (a
+    // regra pura + o índice único da migration 9026), aberto aqui e fechado
+    // sozinho pela rota do login novo. Best-effort: o turno já falhou, o aviso
+    // não pode virar uma segunda falha.
+    if (
+      config.provider === PROVEDOR_POR_ASSINATURA &&
+      statusDaFalha === 401 &&
+      renovacaoDoTurno.recusa !== null
+    ) {
+      await sincronizarAvisoDaAssinatura(createAdminClient(), {
+        organizationId: input.tenantId,
+        conectada: false,
+        recusa: renovacaoDoTurno.recusa,
+      }).catch(() => 'falhou');
+    }
     const camposDaFalha = {
       organization_id: input.tenantId,
       purpose,

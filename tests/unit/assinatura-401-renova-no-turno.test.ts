@@ -27,6 +27,7 @@ import {
   renovarAssinaturaNoTurno,
 } from "@/lib/ai/credenciais/login-codex";
 import { chamarComRetryUnicoEm401 } from "@/lib/ai/pontos/renovacao-da-assinatura";
+import { sincronizarAvisoDaAssinatura } from "@/lib/ai/credenciais/aviso-da-assinatura";
 
 vi.mock("ai", () => ({
   generateText: vi.fn(),
@@ -36,6 +37,9 @@ vi.mock("ai", () => ({
   tool: (t: unknown) => t,
 }));
 vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: vi.fn(() => ({})) }));
+vi.mock("@/lib/ai/credenciais/aviso-da-assinatura", () => ({
+  sincronizarAvisoDaAssinatura: vi.fn(async () => "aberto"),
+}));
 vi.mock("@/lib/ai/credenciais/login-codex", () => ({
   lerLoginCodexRenovandoSeProxima: vi.fn(async () => ({
     access_token: "token-de-assinatura-de-teste",
@@ -189,6 +193,26 @@ describe("401 → renova → 401: dois POSTs e ponto (sem laço)", () => {
 
     expect(vi.mocked(renovarAssinaturaNoTurno)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(streamText), "insistiu além do retry único").toHaveBeenCalledTimes(2);
+  });
+
+  it("⭐ a recusa VIRA aviso na Central, com o motivo — não fica só no log", async () => {
+    vi.mocked(renovarAssinaturaNoTurno).mockResolvedValue({
+      ok: false,
+      motivo: "falha",
+      motivoDetalhe: "refresh_token_revoked",
+    });
+    roteiroDoProvedor(["401", "401"]);
+
+    await expect(rodar()).rejects.toThrow();
+
+    // A Central de avisos do cliente Obralivre ficou VAZIA em ~26 h de 401. O
+    // turno que falha é quem abre o item — e o motivo vem da fatia 3.
+    expect(vi.mocked(sincronizarAvisoDaAssinatura), "a recusa não virou aviso").toHaveBeenCalledTimes(1);
+    expect(vi.mocked(sincronizarAvisoDaAssinatura).mock.calls[0]?.[1]).toMatchObject({
+      organizationId: ORG,
+      conectada: false,
+      recusa: "falha:refresh_token_revoked",
+    });
   });
 
   it("renovação RECUSADA também não vira laço: mesma renovação, mesma repetição", async () => {
