@@ -10278,7 +10278,7 @@ alter table public.agent_inbox_items
     -- `cliente_sem_resposta_na_queda` aponta a conversa cuja última mensagem
     -- recuperada é do cliente sem resposta (ref_kind='conversation', um aberto
     -- por conversa). Cada um com índice único parcial próprio, no apêndice da
-    -- migration 9026. Entram NESTA lista (bloco único por constraint, #159).
+    -- migration 9033. Entram NESTA lista (bloco único por constraint, #159).
     'recuperacao_da_queda',
     'cliente_sem_resposta_na_queda',
     'other'
@@ -65623,8 +65623,8 @@ update public.lead_field_proposals p
      )
    );
 
--- ---- Recuperar as mensagens da queda do número (migration 9026, Spec 32) ----
--- Espelho idempotente da 9026; o porquê está no cabeçalho dela. Não cria função,
+-- ---- Recuperar as mensagens da queda do número (migration 9033, Spec 32) ----
+-- Espelho idempotente da 9033; o porquê está no cabeçalho dela. Não cria função,
 -- então pode ficar depois da VARREDURA anon. Os dois kinds novos entraram no
 -- bloco ÚNICO de agent_inbox_items_kind_check (não se recria aqui, #159).
 alter table public.importacoes_de_historico
