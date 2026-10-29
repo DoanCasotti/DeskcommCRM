@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { apiClient } from "@/lib/api/client";
 import { showApiError } from "@/components/feedback/ApiErrorToast";
 import { PROVEDORES } from "@/lib/ai/pontos/provedores";
+import { PROVEDORES_DE_SERVICO } from "@/lib/ai/pontos/provedores-de-servico";
 
 /**
  * Derivado de `lib/ai/pontos/provedores.ts` — a lista única desde a migration
@@ -11,10 +12,16 @@ import { PROVEDORES } from "@/lib/ai/pontos/provedores";
  */
 export type Provider = (typeof PROVEDORES)[number]["id"];
 
+/** Irmão de `Provider`, para quem não conversa com o cliente (voz, hoje). */
+export type ServiceProvider = (typeof PROVEDORES_DE_SERVICO)[number]["id"];
+
+/** A linha vem da MESMA tabela para os dois mundos — ver provedores-de-servico.ts. */
+export type AnyProvider = Provider | ServiceProvider;
+
 export interface CredentialRow {
   id: string;
   organization_id: string;
-  provider: Provider;
+  provider: AnyProvider;
   label: string;
   api_key_last4: string | null;
   validated_at: string | null;

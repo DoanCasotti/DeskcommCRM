@@ -36,6 +36,7 @@ import {
 } from "@/hooks/ai/useCredentials";
 import { useT } from "@/hooks/i18n/useT";
 import { PROVEDORES } from "@/lib/ai/pontos/provedores";
+import { PROVEDORES_DE_SERVICO } from "@/lib/ai/pontos/provedores-de-servico";
 import { descreverErroDeValidacao } from "@/lib/ai/credenciais/erro-de-validacao";
 
 interface Props {
@@ -71,7 +72,10 @@ export function CredentialCard({ credential, canWrite, usageCount }: Props) {
   const last4 = credential.api_key_last4 ?? "????";
   const inUse = usageCount > 0;
   const erro = descreverErroDeValidacao(credential.validation_error);
-  const provedor = PROVEDORES.find((p) => p.id === credential.provider);
+  const provedor =
+    PROVEDORES.find((p) => p.id === credential.provider) ??
+    PROVEDORES_DE_SERVICO.find((p) => p.id === credential.provider);
+  const ehServicoDeVoz = PROVEDORES_DE_SERVICO.some((p) => p.id === credential.provider);
 
   const onRevalidate = () => {
     startTransition(async () => {
@@ -159,7 +163,7 @@ export function CredentialCard({ credential, canWrite, usageCount }: Props) {
 
       <dl className="grid grid-cols-2 gap-2 text-xs">
         <div>
-          <dt className="text-muted-foreground">{t("Modelos")}</dt>
+          <dt className="text-muted-foreground">{t(ehServicoDeVoz ? "Vozes" : "Modelos")}</dt>
           <dd className="font-mono">{credential.models_available?.length ?? "—"}</dd>
         </div>
         <div>

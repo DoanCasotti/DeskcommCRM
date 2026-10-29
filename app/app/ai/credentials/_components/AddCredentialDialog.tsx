@@ -21,7 +21,10 @@ import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
+  SelectSeparator,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -29,16 +32,19 @@ import { apiClient } from "@/lib/api/client";
 import { showApiError } from "@/components/feedback/ApiErrorToast";
 import {
   credentialsListQueryKey,
+  type AnyProvider,
   type CredentialRow,
-  type Provider,
 } from "@/hooks/ai/useCredentials";
 import { IDS_DE_PROVEDOR, PROVEDORES } from "@/lib/ai/pontos/provedores";
+import { IDS_DE_SERVICO, PROVEDORES_DE_SERVICO } from "@/lib/ai/pontos/provedores-de-servico";
 import { descreverErroDeValidacao } from "@/lib/ai/credenciais/erro-de-validacao";
 import { useT } from "@/hooks/i18n/useT";
 
 const formSchema = z.object({
-  // Derivado da lista única (`lib/ai/pontos/provedores.ts`), como a rota.
-  provider: z.enum(IDS_DE_PROVEDOR),
+  // Derivado da lista única de cada mundo (`lib/ai/pontos/provedores.ts` e
+  // `provedores-de-servico.ts`), como a rota — mesma credencial, mesma tabela,
+  // vocabulário de quem pode ser escolhido separado em dois arquivos.
+  provider: z.enum([...IDS_DE_PROVEDOR, ...IDS_DE_SERVICO]),
   label: z.string().trim().min(1, "Obrigatório").max(80),
   api_key: z.string().trim().min(8, "API key muito curta").max(2048),
 });
@@ -58,12 +64,15 @@ export function AddCredentialDialog({ open, onOpenChange }: Props) {
   const t = useT();
   const router = useRouter();
   const qc = useQueryClient();
-  const [provider, setProvider] = useState<Provider>("anthropic");
+  const [provider, setProvider] = useState<AnyProvider>("anthropic");
   const [label, setLabel] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [errors, setErrors] = useState<Partial<Record<keyof FormValues, string>>>({});
-  const provedor = PROVEDORES.find((p) => p.id === provider) ?? PROVEDORES[0];
+  const provedor =
+    PROVEDORES.find((p) => p.id === provider) ??
+    PROVEDORES_DE_SERVICO.find((p) => p.id === provider) ??
+    PROVEDORES[0];
 
   const reset = () => {
     setProvider("anthropic");
@@ -105,8 +114,13 @@ export function AddCredentialDialog({ open, onOpenChange }: Props) {
         const fresh = qc.getQueryData<CredentialRow[]>(credentialsListQueryKey);
         const justCreated = fresh?.find((c) => c.id === res.data.id);
         if (justCreated?.models_available != null) {
+          // "modelos" não descreve o catálogo de um serviço de voz — ali o que
+          // a chave devolve é a lista de vozes da conta, não modelo de chat.
+          const substantivo = PROVEDORES_DE_SERVICO.some((p) => p.id === justCreated.provider)
+            ? t("vozes disponíveis.")
+            : t("modelos disponíveis.");
           toast.success(
-            `${t("Validada")} — ${justCreated.models_available.length} ${t("modelos disponíveis.")}`,
+            `${t("Validada")} — ${justCreated.models_available.length} ${substantivo}`,
           );
         } else if (justCreated?.validation_error) {
           const erro = descreverErroDeValidacao(justCreated.validation_error);
@@ -146,16 +160,27 @@ export function AddCredentialDialog({ open, onOpenChange }: Props) {
         <form onSubmit={onSubmit} className="space-y-4">
           <div className="space-y-2">
             <Label htmlFor="cred-provider">{t("Provedor")}</Label>
-            <Select value={provider} onValueChange={(v) => setProvider(v as Provider)}>
+            <Select value={provider} onValueChange={(v) => setProvider(v as AnyProvider)}>
               <SelectTrigger id="cred-provider">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {PROVEDORES.map((p) => (
-                  <SelectItem key={p.id} value={p.id}>
-                    {p.rotulo}
-                  </SelectItem>
-                ))}
+                <SelectGroup>
+                  {PROVEDORES.map((p) => (
+                    <SelectItem key={p.id} value={p.id}>
+                      {p.rotulo}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+                <SelectSeparator />
+                <SelectGroup>
+                  <SelectLabel>{t("Serviços de voz")}</SelectLabel>
+                  {PROVEDORES_DE_SERVICO.map((p) => (
+                    <SelectItem key={p.id} value={p.id}>
+                      {p.rotulo}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
               </SelectContent>
             </Select>
             <p className="text-xs text-muted-foreground">{t(provedor.quandoUsar)}</p>

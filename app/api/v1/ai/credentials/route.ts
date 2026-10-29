@@ -16,9 +16,10 @@ import { z } from "zod";
 
 import { ok, fail } from "@/lib/api/wrappers";
 import { requireRole } from "@/lib/auth/require-role";
-import { type Provider } from "@/lib/ai/provider-validators";
+import { type AnyProvider } from "@/lib/ai/provider-validators";
 import { guardarCredencial } from "@/lib/ai/credenciais/guardar";
 import { IDS_DE_PROVEDOR } from "@/lib/ai/pontos/provedores";
+import { IDS_DE_SERVICO } from "@/lib/ai/pontos/provedores-de-servico";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { traduzir } from "@/lib/i18n/dicionario";
@@ -33,7 +34,12 @@ const createSchema = z.object({
   // 0127. Enquanto era uma cópia à mão, o banco aceitava OpenRouter e ESTA rota
   // recusava com 422 — o operador via a tela de Provedores oferecer OpenRouter
   // e não tinha onde cadastrar a chave.
-  provider: z.enum(IDS_DE_PROVEDOR),
+  //
+  // `IDS_DE_SERVICO` entra na MESMA rota (não um endpoint próprio): a
+  // credencial é a mesma tabela, a mesma cifra, o mesmo audit — só o
+  // vocabulário de quem pode ser escolhido é separado (ver o cabeçalho de
+  // `provedores-de-servico.ts`).
+  provider: z.enum([...IDS_DE_PROVEDOR, ...IDS_DE_SERVICO]),
   label: z.string().trim().min(1).max(80),
   api_key: z.string().trim().min(8).max(2048),
 });
@@ -82,7 +88,7 @@ export async function POST(req: NextRequest): Promise<Response> {
     });
   }
   const input = parsed.data;
-  const provider = input.provider as Provider;
+  const provider = input.provider as AnyProvider;
 
   // O miolo — cifrar, gravar, auditar e validar em segundo plano — mora em
   // `lib/ai/credenciais/guardar.ts` porque o wizard precisa exatamente do mesmo
