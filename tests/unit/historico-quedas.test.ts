@@ -68,7 +68,7 @@ function admin() {
       let payload: Linha = {};
       const filtros: Array<(r: Linha) => boolean> = [];
       const vistos: Record<string, unknown> = {};
-      let ordem: Array<(a: Linha, b: Linha) => number> = [];
+      const ordem: Array<(a: Linha, b: Linha) => number> = [];
       let faixa: [number, number] | null = null;
       let limite: number | null = null;
 

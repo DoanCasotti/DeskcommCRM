@@ -71,6 +71,7 @@ interface Construtor {
   gt(coluna: string, valor: unknown): Construtor;
   order(coluna: string): Construtor;
   limit(n: number): Construtor;
+  range(de: number, ate: number): Construtor;
   insert(linha: Linha): Construtor;
   update(patch: Linha): Construtor;
   then<T1 = Resultado, T2 = never>(
@@ -99,6 +100,7 @@ function fakeAdmin(opts: Opcoes = {}) {
     from(tabela: string): Construtor {
       const chamada: Chamada = { tabela, op: "select", filtros: [] };
       let limite: number | undefined;
+      let inicioDaFaixa = 0;
       let ordem: string | undefined;
 
       const executar = (): Resultado => {
@@ -129,8 +131,9 @@ function fakeAdmin(opts: Opcoes = {}) {
         }
 
         let achados = linhas.filter((l) => casa(l, chamada.filtros));
-        if (ordem) achados = [...achados].sort((a, b) => String(a[ordem]).localeCompare(String(b[ordem])));
-        if (limite !== undefined) achados = achados.slice(0, limite);
+        const coluna = ordem;
+        if (coluna) achados = [...achados].sort((a, b) => String(a[coluna]).localeCompare(String(b[coluna])));
+        if (limite !== undefined) achados = achados.slice(inicioDaFaixa, inicioDaFaixa + limite);
         return { data: achados.map(copia), error: null };
       };
 
@@ -147,7 +150,13 @@ function fakeAdmin(opts: Opcoes = {}) {
           return construtor;
         },
         order(coluna) {
-          ordem = coluna;
+          // Só a 1ª ordenação conta: a 2ª (`id`) é desempate, e aqui não há empate.
+          if (ordem === undefined) ordem = coluna;
+          return construtor;
+        },
+        range(de, ate) {
+          inicioDaFaixa = de;
+          limite = ate - de + 1;
           return construtor;
         },
         limit(n) {
@@ -280,7 +289,7 @@ describe("texto do resumo, por motivo", () => {
     // 10:00 UTC é 07:00 em São Paulo (UTC-3): o período sai no horário de quem opera.
     // O separador entre data e hora varia por build do ICU (vírgula, espaço ou espaço fino): aceita qualquer um.
     expect(linha!.body).toMatch(
-      /^Recuperamos 12 mensagens de 3 conversas do período em que o número ficou fora \(27\/10\/\d{2}[,\s  ]+07:00 a 28\/10\/\d{2}[,\s  ]+07:00\)\.$/,
+      /^Recuperamos 12 mensagens de 3 conversas do período em que o número ficou fora \(27\/10\/\d{2,4}[,\s  ]+07:00 a 28\/10\/\d{2,4}[,\s  ]+07:00\)\.$/,
     );
     expect(linha!.title).toBe("Conversas da queda recuperadas");
     // Sabotagem: trocar a data por ISO cru (sem formatar) deixa a expressão acima sem casar.

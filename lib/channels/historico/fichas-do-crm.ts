@@ -93,15 +93,19 @@ export function telefonesDoChatParaFicha(
   telefoneResolvido: string | null,
   mensagens: WahaPayload[],
 ): string[] {
+  // Cada fonte grafa o número de um jeito (`+5511…` do chat, `5511…` do canal):
+  // só dígitos, para não repetir o mesmo número nem buscar duas vezes. As
+  // variantes do nono dígito saem depois, na busca da ficha.
   const telefones = new Set<string>();
-  const doChat = parseChatId(chatId);
-  if (doChat.phone) telefones.add(doChat.phone);
-  if (telefoneResolvido) telefones.add(telefoneResolvido);
+  const somar = (valor: string | null | undefined) => {
+    const digitos = (valor ?? "").replace(/\D/g, "");
+    if (digitos) telefones.add(digitos);
+  };
+  somar(parseChatId(chatId).phone);
+  somar(telefoneResolvido);
   for (const p of mensagens) {
-    const alternativo = telefoneAlternativoDe(p);
-    if (alternativo) telefones.add(alternativo);
-    const id = identidadeDoChat(p);
-    if (id.phone) telefones.add(id.phone);
+    somar(telefoneAlternativoDe(p));
+    somar(identidadeDoChat(p).phone);
   }
   return [...telefones];
 }

@@ -69,6 +69,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { canonicalPhoneBR } from "@/lib/channels/phone-variants";
+import { resumirErroDaImportacao } from "@/lib/channels/historico/resumo-do-erro";
 import { buscaEmLotes } from "@/lib/supabase/em-lotes";
 import { getWahaClient } from "@/lib/waha/client";
 import {
@@ -128,6 +129,14 @@ export interface CursorDaImportacao {
    * é da passada de conferência, que não grava.
    */
   conferida?: boolean;
+  /**
+   * Escopo `so_crm`: a ficha que a conversa de `indiceConversa` já casou. A
+   * decisão sai da 1ª página (telefones do chat e `remoteJidAlt` das mensagens);
+   * uma rodada que retoma a conversa no meio lê outra página, que pode não ter o
+   * `remoteJidAlt` — reconsultar ali faria o resto da conversa virar "sem ficha".
+   * `null` = ainda não decidida nesta conversa.
+   */
+  fichaContactId?: string | null;
   /**
    * Só da importação da queda (Spec 32 §2): por conversa que recebeu mensagem
    * recuperada, quem é o contato e de quem foi a última mensagem gravada. É o
@@ -253,7 +262,9 @@ export async function rodarUmaRodada(
   const desdeDaLinha = imp.desde ? Math.floor(Date.parse(imp.desde) / 1000) : null;
   const ateSegundos = imp.ate ? Math.floor(Date.parse(imp.ate) / 1000) : null;
   const dentroDoFim = (p: WahaPayload) =>
-    ateSegundos === null || typeof p.timestamp !== "number" || p.timestamp < ateSegundos;
+    // Sem instante numérico não há como provar que está antes do fim: com `ate`
+    // definido fica fora (o mapeador gravaria 1970 e ela viraria a "última" da conversa).
+    ateSegundos === null || (typeof p.timestamp === "number" && p.timestamp < ateSegundos);
   const cursor: CursorDePosicao = {
     indiceConversa: cursorSalvo.indiceConversa ?? 0,
     offsetMensagens: cursorSalvo.offsetMensagens ?? 0,
@@ -262,16 +273,23 @@ export async function rodarUmaRodada(
       desdeDaLinha ??
       Math.floor(Date.now() / 1000) - (imp.dias ?? 0) * SEGUNDOS_POR_DIA,
     conferida: cursorSalvo.conferida ?? false,
+    fichaContactId: cursorSalvo.fichaContactId ?? null,
   };
   // Só da queda; mudar `tocadas` não mexe no cursor de posição (não é refeito).
   let tocadas: Record<string, TocadaDaRecuperacao> = origemDaQueda ? { ...(cursorSalvo.tocadas ?? {}) } : {};
   /** Manual grava o cursor como sempre; a queda leva também as conversas tocadas. */
-  const cursorParaGravar = (): CursorDaImportacao =>
-    origemDaQueda ? { ...cursor, tocadas } : { ...cursor };
+  const cursorParaGravar = (): CursorDaImportacao => {
+    // `fichaContactId` só vai ao banco quando há ficha decidida: o cursor da
+    // importação manual (`todos`) fica exatamente como sempre foi.
+    const { fichaContactId, ...posicao } = cursor;
+    const base: CursorDaImportacao = fichaContactId ? { ...posicao, fichaContactId } : posicao;
+    return origemDaQueda ? { ...base, tocadas } : base;
+  };
   const irParaConversa = (posicao: number) => {
     cursor.indiceConversa = posicao;
     cursor.offsetMensagens = 0;
     cursor.conferida = false;
+    cursor.fichaContactId = null;
   };
   const desta = { conversas: 0, gravadas: 0, existentes: 0, ignoradas: 0 };
   // Fora de `desta` de propósito: mídia resolvida não volta a `pendente` quando a
@@ -374,12 +392,24 @@ export async function rodarUmaRodada(
         organizationId,
         channelSessionId,
         motivo: "erro",
-        erro: (erro ?? "").slice(0, 200),
+        erro: resumirErroDaImportacao(erro ?? ""),
       });
       return;
     }
     for (const [conversationId, tocada] of Object.entries(tocadas)) {
       if (tocada.ultima !== "in") continue;
+      // A importação termina minutos depois da volta: a equipe pode já ter
+      // respondido AO VIVO. Esse "já respondeu" é anterior ao aviso, e o fechador
+      // só olha saída depois dele — então se confere aqui, antes de abrir.
+      const { data: conversa, error: erroDaConversa } = await admin
+        .from("conversations")
+        .select("last_outbound_at")
+        .eq("organization_id", organizationId)
+        .eq("id", conversationId)
+        .maybeSingle();
+      if (erroDaConversa) continue;
+      const ultimaSaida = (conversa as { last_outbound_at: string | null } | null)?.last_outbound_at ?? null;
+      if (ultimaSaida && Date.parse(ultimaSaida) >= Date.parse(tocada.em)) continue;
       await avisarClienteSemResposta(admin, { organizationId, conversationId, contactId: tocada.contactId });
     }
     const mensagens = (imp.mensagens_gravadas ?? 0) + desta.gravadas;
@@ -500,12 +530,17 @@ export async function rodarUmaRodada(
           });
           // Escopo `so_crm` (Spec 32 §1): a ficha é decidida na 1ª página, antes de
           // qualquer gravação. Erro na consulta LANÇA (falha fechada) e a rodada para em erro.
+          if (escopo === "so_crm" && fichaDaConversa === undefined && cursor.fichaContactId) {
+            // Retomada no meio da conversa: a ficha já foi decidida numa rodada anterior.
+            fichaDaConversa = { contactId: cursor.fichaContactId };
+          }
           if (escopo === "so_crm" && fichaDaConversa === undefined) {
             fichaDaConversa = await fichaDoCrmParaOChat(admin, {
               organizationId: imp.organization_id,
               telefones: telefonesDoChatParaFicha(conversa.chatId, telefoneDoChat ?? null, mensagens),
               lid: parseChatId(conversa.chatId).lid,
             });
+            if (fichaDaConversa) cursor.fichaContactId = fichaDaConversa.contactId;
             if (fichaDaConversa === null) {
               // Sem ficha: a página lida conta em `ignoradas` (só a 1ª página; o resto do
               // chat não é lido) e o chat não entra no teto de conversas.

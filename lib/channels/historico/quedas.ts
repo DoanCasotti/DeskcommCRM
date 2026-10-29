@@ -234,7 +234,7 @@ async function abrirDaOrganizacao(admin: SupabaseClient, organizationId: string,
         action: "channel.historico_import_started",
         organizationId,
         resourceType: "channel_session",
-        resourceId: conexao,
+        resourceId: aberta.channelSessionId,
         bypassedRls: true,
         metadata: {
           importacao_id: id,

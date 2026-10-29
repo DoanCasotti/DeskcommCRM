@@ -49,6 +49,7 @@ const KIND_CLIENTE = "cliente_sem_resposta_na_queda" as const;
  * previsível, e o resto fica para a próxima passada.
  */
 const LOTE_MAXIMO = 100;
+const PAGINAS_MAXIMAS = 5;
 
 /**
  * A data no formato que a Central mostra: fuso de instalação, dia e hora. O
@@ -215,19 +216,31 @@ export async function fecharAvisosDeClienteRespondido(
   organizationId: string,
 ): Promise<number> {
   try {
-    const { data: abertos, error } = await admin
-      .from("agent_inbox_items")
-      .select("id, ref_id, created_at")
-      .eq("organization_id", organizationId)
-      .eq("kind", KIND_CLIENTE)
-      .eq("status", "open")
-      .order("created_at", { ascending: true })
-      .limit(LOTE_MAXIMO);
-    if (error) {
-      logger.warn("[recuperacao-da-queda] leitura dos avisos de cliente falhou", {
-        detail: error.message,
-      });
-      return 0;
+    // Páginas de LOTE_MAXIMO, até PAGINAS_MAXIMAS: só com `limit` os mesmos 100
+    // mais antigos (nunca respondidos) voltariam a cada passada, e os mais novos
+    // — mesmo já respondidos — nunca seriam examinados.
+    const abertos: { id: string; ref_id: string | null; created_at: string }[] = [];
+    for (let pagina = 0; pagina < PAGINAS_MAXIMAS; pagina++) {
+      const inicio = pagina * LOTE_MAXIMO;
+      const { data, error } = await admin
+        .from("agent_inbox_items")
+        .select("id, ref_id, created_at")
+        .eq("organization_id", organizationId)
+        .eq("kind", KIND_CLIENTE)
+        .eq("status", "open")
+        .order("created_at", { ascending: true })
+        .order("id", { ascending: true })
+        .range(inicio, inicio + LOTE_MAXIMO - 1);
+      if (error) {
+        logger.warn("[recuperacao-da-queda] leitura dos avisos de cliente falhou", {
+          detail: error.message,
+        });
+        if (abertos.length === 0) return 0;
+        break;
+      }
+      const pedaco = (data ?? []) as { id: string; ref_id: string | null; created_at: string }[];
+      abertos.push(...pedaco);
+      if (pedaco.length === 0) break;
     }
 
     const lote = (abertos ?? []) as { id: string; ref_id: string | null; created_at: string }[];

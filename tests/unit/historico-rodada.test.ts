@@ -171,6 +171,19 @@ function bancoDeMentira() {
           },
         };
       }
+      if (tabela === "conversations") {
+        // Só a leitura do fim da queda: a equipe já respondeu ao vivo depois da volta?
+        const filtros: Array<[string, unknown]> = [];
+        const q = {
+          eq: (c: string, v: unknown) => (filtros.push([c, v]), q),
+          maybeSingle: async () => {
+            const id = filtros.find(([c]) => c === "id")?.[1] as string | undefined;
+            const linha = id ? conversations.get(id) : undefined;
+            return { data: linha ? { last_outbound_at: (linha.last_outbound_at as string | undefined) ?? null } : null, error: null };
+          },
+        };
+        return { select: () => q };
+      }
       if (tabela === "channel_sessions") {
         const q = {
           eq: () => q,
@@ -943,7 +956,7 @@ describe("rodarUmaRodada: escopo, janela e origem da queda (Spec 32)", () => {
     // Sabotagem: abrir o resumo mesmo com 0 mensagens faz o `not.toHaveBeenCalled` ficar vermelho.
   });
 
-  it("fim da queda com erro: o resumo sai com motivo 'erro' e o texto do erro (até 200 caracteres)", async () => {
+  it("fim da queda com erro: o resumo sai com motivo 'erro' e o erro resumido (sem o nome do provedor)", async () => {
     canal.falha = "waha caiu no meio";
     const db = bancoDeMentira();
     novaImportacao(db, { origem: "queda", dias: null, desde: iso(agora - 5 * DIA), ate: iso(agora + DIA) });
@@ -951,7 +964,8 @@ describe("rodarUmaRodada: escopo, janela e origem da queda (Spec 32)", () => {
     expect(r.status).toBe("erro");
     expect(avisos.resumo).toHaveBeenCalledWith(
       expect.anything(),
-      expect.objectContaining({ motivo: "erro", erro: expect.stringContaining("waha caiu no meio") }),
+      // `resumirErroDaImportacao`: o aviso do administrador não mostra o nome do provedor.
+      expect.objectContaining({ motivo: "erro", erro: expect.stringContaining("canal caiu no meio") }),
     );
     expect(avisos.cliente).not.toHaveBeenCalled();
     // Sabotagem: avisar o cliente também no erro faz o `not.toHaveBeenCalled` ficar vermelho.
