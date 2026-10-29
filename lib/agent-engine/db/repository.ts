@@ -126,6 +126,13 @@ export type InboxKind =
   // dois dispara pela MESMA lista (`lib/tarefas/preferencia-de-lembrete.ts`).
   | 'task_due'
   | 'task_overdue'
+  // (migration 9033, Spec 32) Dois avisos da recuperação das conversas da queda.
+  // `recuperacao_da_queda` é o resumo da conexão (um aberto por conexão, atualizado
+  // numa queda nova). `cliente_sem_resposta_na_queda` é um por conversa cujo cliente
+  // escreveu enquanto o número estava fora e ninguém respondeu. Os dois têm índice
+  // único parcial de aberto, e é o banco que fecha a corrida.
+  | 'recuperacao_da_queda'
+  | 'cliente_sem_resposta_na_queda'
   | 'other';
 
 export interface InboxItemRow {
