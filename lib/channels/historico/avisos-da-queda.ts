@@ -36,6 +36,8 @@ import {
   type MotivoDoResumoDaRecuperacao,
 } from "@/lib/ai/agent-inbox-copy";
 import { logger } from "@/lib/logger";
+import { tagDeIdioma } from "@/lib/i18n/datas";
+import type { Idioma } from "@/lib/i18n/idiomas";
 import { FUSO_PADRAO } from "@/lib/tempo/fusos";
 
 export type MotivoDoResumo = MotivoDoResumoDaRecuperacao;
@@ -48,6 +50,9 @@ const KIND_CLIENTE = "cliente_sem_resposta_na_queda" as const;
  * requisição do operador: lote limitado mantém a consulta pequena e o tempo
  * previsível, e o resto fica para a próxima passada.
  */
+/** O título e o corpo do aviso são gravados em português (como os vizinhos). */
+const IDIOMA_DO_AVISO: Idioma = "pt-BR";
+
 const LOTE_MAXIMO = 100;
 const PAGINAS_MAXIMAS = 5;
 
@@ -56,7 +61,10 @@ const PAGINAS_MAXIMAS = 5;
  * aviso é linha gravada, então o horário é escrito já formatado.
  */
 function formatarMomento(iso: string): string {
-  return new Intl.DateTimeFormat("pt-BR", {
+  // Pela camada de datas (`tagDeIdioma`), como `momentoDaPausa` em canal-pausado.ts:
+  // o texto do aviso nasce em português, e a cerca i18n-a-data-segue-o-idioma
+  // proíbe "pt-BR" fixo fora dela.
+  return new Intl.DateTimeFormat(tagDeIdioma(IDIOMA_DO_AVISO), {
     dateStyle: "short",
     timeStyle: "short",
     timeZone: FUSO_PADRAO,
