@@ -134,9 +134,13 @@ export interface CursorDaImportacao {
    * decisão sai da 1ª página (telefones do chat e `remoteJidAlt` das mensagens);
    * uma rodada que retoma a conversa no meio lê outra página, que pode não ter o
    * `remoteJidAlt` — reconsultar ali faria o resto da conversa virar "sem ficha".
-   * `null` = ainda não decidida nesta conversa.
+   * `null` = ainda não decidida nesta conversa. Vale SÓ para o chat gravado em
+   * `fichaChatId`: o cursor guarda a conversa pela posição na lista, e se a lista
+   * mudar de ordem entre rodadas a posição aponta outro chat — reaproveitar a
+   * ficha ali gravaria as mensagens de um cliente na ficha de outro.
    */
   fichaContactId?: string | null;
+  fichaChatId?: string | null;
   /**
    * Só da importação da queda (Spec 32 §2): por conversa que recebeu mensagem
    * recuperada, quem é o contato e de quem foi a última mensagem gravada. É o
@@ -274,6 +278,7 @@ export async function rodarUmaRodada(
       Math.floor(Date.now() / 1000) - (imp.dias ?? 0) * SEGUNDOS_POR_DIA,
     conferida: cursorSalvo.conferida ?? false,
     fichaContactId: cursorSalvo.fichaContactId ?? null,
+    fichaChatId: cursorSalvo.fichaChatId ?? null,
   };
   // Só da queda; mudar `tocadas` não mexe no cursor de posição (não é refeito).
   let tocadas: Record<string, TocadaDaRecuperacao> = origemDaQueda ? { ...(cursorSalvo.tocadas ?? {}) } : {};
@@ -281,8 +286,9 @@ export async function rodarUmaRodada(
   const cursorParaGravar = (): CursorDaImportacao => {
     // `fichaContactId` só vai ao banco quando há ficha decidida: o cursor da
     // importação manual (`todos`) fica exatamente como sempre foi.
-    const { fichaContactId, ...posicao } = cursor;
-    const base: CursorDaImportacao = fichaContactId ? { ...posicao, fichaContactId } : posicao;
+    const { fichaContactId, fichaChatId, ...posicao } = cursor;
+    const base: CursorDaImportacao =
+      fichaContactId && fichaChatId ? { ...posicao, fichaContactId, fichaChatId } : posicao;
     return origemDaQueda ? { ...base, tocadas } : base;
   };
   const irParaConversa = (posicao: number) => {
@@ -290,6 +296,7 @@ export async function rodarUmaRodada(
     cursor.offsetMensagens = 0;
     cursor.conferida = false;
     cursor.fichaContactId = null;
+    cursor.fichaChatId = null;
   };
   const desta = { conversas: 0, gravadas: 0, existentes: 0, ignoradas: 0 };
   // Fora de `desta` de propósito: mídia resolvida não volta a `pendente` quando a
@@ -530,8 +537,13 @@ export async function rodarUmaRodada(
           });
           // Escopo `so_crm` (Spec 32 §1): a ficha é decidida na 1ª página, antes de
           // qualquer gravação. Erro na consulta LANÇA (falha fechada) e a rodada para em erro.
-          if (escopo === "so_crm" && fichaDaConversa === undefined && cursor.fichaContactId) {
-            // Retomada no meio da conversa: a ficha já foi decidida numa rodada anterior.
+          if (
+            escopo === "so_crm" &&
+            fichaDaConversa === undefined &&
+            cursor.fichaContactId &&
+            cursor.fichaChatId === conversa.chatId
+          ) {
+            // Retomada no meio da MESMA conversa: a ficha já foi decidida numa rodada anterior.
             fichaDaConversa = { contactId: cursor.fichaContactId };
           }
           if (escopo === "so_crm" && fichaDaConversa === undefined) {
@@ -540,7 +552,10 @@ export async function rodarUmaRodada(
               telefones: telefonesDoChatParaFicha(conversa.chatId, telefoneDoChat ?? null, mensagens),
               lid: parseChatId(conversa.chatId).lid,
             });
-            if (fichaDaConversa) cursor.fichaContactId = fichaDaConversa.contactId;
+            if (fichaDaConversa) {
+              cursor.fichaContactId = fichaDaConversa.contactId;
+              cursor.fichaChatId = conversa.chatId;
+            }
             if (fichaDaConversa === null) {
               // Sem ficha: a página lida conta em `ignoradas` (só a 1ª página; o resto do
               // chat não é lido) e o chat não entra no teto de conversas.
