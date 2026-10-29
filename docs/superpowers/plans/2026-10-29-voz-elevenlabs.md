@@ -1,7 +1,7 @@
 # Voz no CRM — ElevenLabs para ouvir e falar
 
 **Data:** 2026-10-29
-**Estado:** plano, aguardando aprovação
+**Estado:** em execução — ver "Progresso" abaixo
 **Escopo aprovado:** o agente RESPONDE em áudio (TTS) e OUVE o áudio do cliente (STT/Scribe).
 **Fora de escopo:** ligação telefônica em tempo real (Conversational AI) — exige telefonia
 (SIP/Twilio) e um caminho de áudio ao vivo que não existe no produto. Projeto separado.
@@ -223,6 +223,48 @@ cada um com o comentário do bug que o originou.
 Só vozes de catálogo do ElevenLabs. Clonar a voz de um vendedor exige consentimento escrito dele e
 cria um ativo biométrico dentro do CRM — decisão de produto e de LGPD, não de implementação, e não
 vai de carona nesta frente.
+
+---
+
+## Progresso (atualizado 2026-10-29)
+
+| Fase | Status | Onde |
+|---|---|---|
+| 1 — vocabulário de serviço + credencial + validador | ✅ feito | commit `396778807`→`31d1a5f28`, branch `feature/voz-elevenlabs-fase1` |
+| 2 — `fixo.opcoes` (mecanismo de menu) | ✅ feito | commit `d684a1f9f`, junto com a 3 |
+| 3 — Scribe plugado no worker | ✅ feito | commit `d684a1f9f` |
+| 4 — preço por caractere (`custoDeVozCents`) | ✅ feito (sem migration) | `lib/agent-engine/edge/llm/pricing.ts` — **ainda não commitado** |
+| 5 — `texto-falavel.ts` + `sintetizar.ts` | ✅ feito, **deliberadamente ÓRFÃOS** | `lib/ai/voz/` — **ainda não commitado** |
+| 6 — colunas `voz_enabled`/`voz_quando` + regra de quando falar + envio idempotente | ⬜ não iniciado | — |
+| 7 — tela de configuração | ⬜ não iniciado | — |
+
+**Por que a Fase 5 está "órfã" de propósito.** `sintetizarVoz()` e `custoDeVozCents()` são reais,
+testados e chamáveis — mas **nada no runtime do agente os chama ainda**, e o ponto `sintese_de_voz`
+**não foi registrado** em `lib/ai/pontos/registro.ts`. Registrar o ponto ou gravar custo em
+`llm_calls` sem um chamador de produção seria o defeito que
+`tests/unit/pontos-de-ia-completude.test.ts` existe para pegar (ponto/gasto que nenhuma rota, cron
+ou tool aciona). A Fase 6 é quem dá o chamador real — e é também a fase mais arriscada que falta:
+migration nova, e a mudança entra bem no meio do caminho de ENVIO (`sendTurnMessage` →
+`sendMessageHandler` → WAHA), que hoje só sabe mandar `type: 'text'`/`'template'` no turno do
+agente — nunca mídia. Avaliado nesta sessão e **deliberadamente deixado para uma rodada própria**,
+em vez de emendado às pressas no mesmo commit das Fases 4/5.
+
+**O que a Fase 6 precisa, concretamente** (para quem continuar):
+1. Migration: `ai_agent_versions.voz_enabled boolean not null default false`,
+   `voz_quando text not null default 'espelhar' check (voz_quando in ('nunca','espelhar','sempre'))`
+   — precedente: `video_frames_enabled` (migration 0058).
+2. `SendMessageInput` (ou o chamador da tool `send_message`) precisa saber decidir "falar em vez de
+   escrever" ANTES de montar o payload, e `sendMessageHandler`/o adapter precisam aceitar
+   `type: 'audio'` + `media_storage_path` vindo do AGENTE (hoje esse branch só existe para mídia
+   subida pelo OPERADOR em `app/api/v1/messages/_handler.ts`).
+3. Idempotência (plano §4.5): sintetizar + subir pro Storage **dentro** do estado `requested` do
+   `send_ledger`, gravando `media_storage_path` ali — um crash entre síntese e envio não pode
+   resintetizar (e pagar) de novo no replay.
+4. O texto FALADO (`textoFalavel(body)`) não é o `body` da mensagem — a thread precisa manter o
+   texto original em `media_derived_text` (plano §4.4), senão busca/LGPD/classificador de
+   follow-up ficam cegos.
+5. SÓ NESSE COMMIT o ponto `sintese_de_voz` entra em `registro.ts`, com `emissor` apontando pro
+   código que de fato chama — nunca antes.
 
 ---
 
