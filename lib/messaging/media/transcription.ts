@@ -17,7 +17,8 @@ export interface TranscriptionCreds {
 const DEFAULT_BASE = "https://api.openai.com";
 const DEFAULT_MODEL = "whisper-1";
 
-function extFor(mime: string): string {
+/** Exportada: `transcription-elevenlabs.ts` precisa do mesmo mapeamento MIME→extensão. */
+export function extFor(mime: string): string {
   const base = mime.split(";")[0]!.trim().toLowerCase();
   if (base.includes("ogg")) return "ogg";
   if (base.includes("mpeg") || base.includes("mp3")) return "mp3";

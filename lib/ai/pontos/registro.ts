@@ -154,8 +154,23 @@ export interface PontoDeIa {
    * `usa` diz o que ele de fato chama: sem isso a tela caía na cadeia de
    * resolução dos pontos de conversa e anunciava um modelo de chat num ponto
    * que fala com a API de transcrição.
+   *
+   * `opcoes`, quando presente, é o menu FECHADO de serviços entre os quais o
+   * painel deixa escolher — fechado porque nenhum destes pontos fala a API de
+   * chat: oferecer o seletor genérico de provider/modelo (que pressupõe um
+   * catálogo de modelos de CONVERSA) deixaria o operador digitar qualquer
+   * coisa num ponto que não é turno de agente. Ausente = o cadeado de sempre,
+   * sem nada a escolher. Presente = ainda `fixo` (o painel não aceita um
+   * provider/modelo livre aqui), mas com uma decisão real: QUAL serviço, entre
+   * os que o produto sabe chamar para este ponto. A escolha grava em
+   * `ai_purpose_bindings` como qualquer outra — ver o degrau 0 de
+   * `decidirBinding` em `resolver.ts`.
    */
-  fixo?: { razao: string; usa?: { provider: string; modelId: string } };
+  fixo?: {
+    razao: string;
+    usa?: { provider: string; modelId: string };
+    opcoes?: readonly { provider: string; modelId: string; rotulo: string }[];
+  };
   registraEm: DestinoDeTelemetria;
 }
 
@@ -405,7 +420,7 @@ export const PONTOS_DE_IA: readonly PontoDeIa[] = [
     emissor: "lib/messaging/media/transcription.ts",
     fixo: {
       razao:
-        "Usa o padrão de transcrição da OpenAI, que é o formato que os serviços do mercado implementam. Aceita apontar para outro serviço compatível — inclusive um rodando na sua própria máquina — mas exige uma chave desse serviço, separada da chave do modelo de conversa.",
+        "Escolha entre os serviços de transcrição que o produto sabe chamar — não um modelo de conversa: nenhum dos dois fala a API de chat.",
       // ⚠️ O QUE ELE USA DE VERDADE, e por que precisa estar escrito aqui.
       //
       // A tela mostrava `claude-sonnet-5` neste ponto, com "usando o padrão da
@@ -417,9 +432,17 @@ export const PONTOS_DE_IA: readonly PontoDeIa[] = [
       // Um modelo de conversa NÃO transcreve áudio. Anunciar um ali é dizer a
       // quem opera que o áudio está sendo ouvido pelo modelo errado — e mandá-lo
       // caçar um problema que não existe, ou trocar um modelo que não é o que
-      // faz o trabalho. `lib/messaging/media/transcription.ts` manda para
-      // `/v1/audio/transcriptions` com `whisper-1`.
+      // faz o trabalho.
       usa: { provider: "openai", modelId: "whisper-1" },
+      // Dois serviços, cada um com arquivo e chave PRÓPRIOS — nenhum é
+      // OpenAI-compatível com o outro, então não é "mesmo formato, endpoint
+      // diferente": `lib/messaging/media/transcription.ts` manda para
+      // `/v1/audio/transcriptions` (`whisper-1`); `transcription-elevenlabs.ts`
+      // manda para `/v1/speech-to-text` (`scribe_v1`) com `xi-api-key`.
+      opcoes: [
+        { provider: "openai", modelId: "whisper-1", rotulo: "OpenAI (Whisper)" },
+        { provider: "elevenlabs", modelId: "scribe_v1", rotulo: "ElevenLabs (Scribe)" },
+      ],
     },
     sintomaDeFalha:
       "O cliente manda áudio e o agente responde como se não tivesse recebido nada.",

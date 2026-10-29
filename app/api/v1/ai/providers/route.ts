@@ -29,6 +29,7 @@ import {
 } from "@/lib/ai/pontos/resolver";
 import { PAPEIS, PONTOS_DE_IA, PONTO_POR_ID } from "@/lib/ai/pontos/registro";
 import { PROVEDORES, ehProvedorSuportado } from "@/lib/ai/pontos/provedores";
+import { ehProvedorDeServicoSuportado } from "@/lib/ai/pontos/provedores-de-servico";
 import { validarBinding } from "@/lib/ai/pontos/validar-binding";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
@@ -208,10 +209,16 @@ const corpoDoPut = z.object({
   // API é pública) gravava `provider: "foobar"`, a rota respondia 200, e todo
   // uso daquele ponto morria em produção com provedor desconhecido. Metade da
   // defesa transferida e nunca instalada.
+  //
+  // Também aceita provedor de SERVIÇO (voz, hoje): um ponto fixo-com-menu
+  // (`transcricao_de_audio`) pode gravar `provider: "elevenlabs"`, que não
+  // está em `ehProvedorSuportado` (lista de chat). Qual provider vale para
+  // qual PONTO é checado abaixo, em `validarBinding` — aqui só se confirma
+  // que a instalação CONHECE o provider, de algum dos dois mundos.
   provider: z
     .string()
     .min(1)
-    .refine(ehProvedorSuportado, {
+    .refine((p) => ehProvedorSuportado(p) || ehProvedorDeServicoSuportado(p), {
       message:
         "provedor não suportado por esta instalação — escolha um da lista em Agente de IA → Provedores",
     }),
@@ -253,6 +260,7 @@ export async function PUT(req: NextRequest): Promise<Response> {
 
   const validacao = validarBinding({
     pontoId: corpo.purpose,
+    provider: corpo.provider,
     modelo: {
       model_id: corpo.model_id,
       supports_tools: modelo?.supports_tools ?? false,

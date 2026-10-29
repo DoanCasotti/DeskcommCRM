@@ -49,7 +49,11 @@ interface Ponto {
   papel: string;
   exige: { tools?: boolean; imagem?: boolean; audio?: boolean; embeddingDims?: number };
   sintomaDeFalha: string;
-  fixo: { razao: string } | null;
+  fixo: {
+    razao: string;
+    /** Menu fechado de serviços — ver o cabeçalho de `fixo` em registro.ts. */
+    opcoes?: { provider: string; modelId: string; rotulo: string }[];
+  } | null;
   mandadoPeloAgente: boolean;
   efetivo: {
     provider: string;
@@ -445,6 +449,15 @@ function CartaoDoPonto({
 
   const editavel = dados.podeEditar && ponto.fixo === null && !ponto.mandadoPeloAgente;
 
+  // Ponto fixo COM menu (ver `fixo.opcoes` em registro.ts): reusa os mesmos
+  // estados e o mesmo `salvar()` de baixo — só a largura da escolha muda (um
+  // par fechado, não provider+modelo livres). `credentialId`/`baseUrl` seguem
+  // valendo: a credencial é por provedor como em qualquer outro ponto, e este
+  // menu nunca aponta para um provedor que aceite endpoint próprio.
+  const opcoesFixas = ponto.fixo?.opcoes;
+  const temMenuFixo = (opcoesFixas?.length ?? 0) > 0;
+  const editavelComoMenu = dados.podeEditar && temMenuFixo;
+
   async function salvar() {
     setSalvando(true);
     try {
@@ -534,6 +547,61 @@ function CartaoDoPonto({
             {t("Configurar no agente")}
           </Link>
         </p>
+      )}
+
+      {editavelComoMenu && opcoesFixas && (
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          <div>
+            <Label className="text-xs">{t("Serviço")}</Label>
+            <Select
+              value={`${provider}|${modelId}`}
+              onValueChange={(v) => {
+                const [p, m] = v.split("|");
+                setProvider(p ?? "");
+                setModelId(m ?? "");
+                setCredentialId("");
+              }}
+            >
+              <SelectTrigger data-testid={`servico-${ponto.id}`}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {opcoesFixas.map((o) => (
+                  <SelectItem key={`${o.provider}|${o.modelId}`} value={`${o.provider}|${o.modelId}`}>
+                    {o.rotulo}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div>
+            <Label className="text-xs">{t("Chave")}</Label>
+            <Select value={credentialId} onValueChange={setCredentialId}>
+              <SelectTrigger data-testid={`chave-${ponto.id}`}>
+                <SelectValue placeholder={t("da instalação")} />
+              </SelectTrigger>
+              <SelectContent>
+                {credsDoProvider.map((c) => (
+                  <SelectItem key={c.id} value={c.id}>
+                    {c.label} ••{c.api_key_last4 ?? "??"}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="sm:col-span-2">
+            <Button
+              size="sm"
+              disabled={salvando || !modelId}
+              onClick={() => void salvar()}
+              data-testid={`salvar-${ponto.id}`}
+            >
+              {salvando ? t("Salvando…") : t("Salvar")}
+            </Button>
+          </div>
+        </div>
       )}
 
       {editavel && (

@@ -1780,6 +1780,7 @@ export const DICIONARIO: Traducoes = {
   "vozes disponíveis.": { es: "voces disponibles." },
   "Serviços de voz": { es: "Servicios de voz" },
   Vozes: { es: "Voces" },
+  Serviço: { es: "Servicio" },
   "Para o agente ouvir o áudio que o cliente manda com mais precisão (inclusive diferenciando quem fala) e para responder falando, em nota de voz, quando fizer sentido.":
     {
       es: "Para que el agente escuche el audio que el cliente envía con más precisión (incluso diferenciando quién habla) y para responder hablando, en nota de voz, cuando tenga sentido.",

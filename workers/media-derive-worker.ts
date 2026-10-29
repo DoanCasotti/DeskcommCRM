@@ -17,6 +17,7 @@ import { deriveMediaText, type DeriveDeps } from "@/lib/messaging/media/derive";
 import { TIPOS_DERIVAVEIS } from "@/lib/messaging/media/derivable";
 import { deriveVideoText } from "@/lib/messaging/media/video-derive";
 import { apiTranscriptionProvider } from "@/lib/messaging/media/transcription";
+import { elevenLabsTranscriptionProvider } from "@/lib/messaging/media/transcription-elevenlabs";
 import { logger } from "@/lib/logger";
 import { createAdminClient } from "@/lib/supabase/admin";
 
@@ -131,28 +132,85 @@ export async function deriveMessageMedia(row: EventRow): Promise<HandlerResult> 
       }
     }
 
-    // A transcrição é SEMPRE do Whisper (api.openai.com), então precisa de uma
-    // chave OpenAI — não da chave do provedor de chat da org. O comentário
-    // antigo já dizia isso ("senão exige credencial openai dedicada"), mas o
-    // código passava `llm.apiKey` direto: numa org com Anthropic, a chave da
-    // Anthropic era enviada para a OpenAI e voltava 401 em toda tentativa
-    // (visto nesta VPS: media.derive_requested preso com transcription_401,
-    // e o cliente ouvindo "não consigo ouvir áudio" com a chave certa no .env).
-    let openaiKey: string | null = null;
-    if (llm.provider === "openai") {
-      openaiKey = llm.apiKey;
-    } else {
+    // A transcrição tem DOIS serviços no menu de `transcricao_de_audio`
+    // (`lib/ai/pontos/registro.ts`): Whisper (OpenAI, o padrão) e Scribe
+    // (ElevenLabs). Nenhum dos dois é a chave do provedor de CHAT da org — o
+    // comentário antigo já dizia isso para o Whisper ("senão exige credencial
+    // openai dedicada"), mas o código passava `llm.apiKey` direto: numa org
+    // com Anthropic, a chave da Anthropic era enviada para a OpenAI e voltava
+    // 401 em toda tentativa (visto nesta VPS: media.derive_requested preso com
+    // transcription_401, e o cliente ouvindo "não consigo ouvir áudio" com a
+    // chave certa no .env).
+    const bindingDaTranscricao = await lerBindingDoPonto(admin, row.organization_id, "transcricao_de_audio");
+    let transcriber: DeriveDeps["transcriber"] | undefined;
+
+    if (bindingDaTranscricao?.provider === "elevenlabs") {
       try {
-        const oa = await resolveOrgLlmConfig(derivePool(), llmCfg, row.organization_id, {
-          provider: "openai",
+        const el = await resolveOrgLlmConfig(derivePool(), llmCfg, row.organization_id, {
+          provider: "elevenlabs",
+          credentialId: bindingDaTranscricao.credential_id,
         });
-        openaiKey = oa.apiKey;
-      } catch {
-        openaiKey = null; // sem credencial e sem OPENAI_API_KEY: áudio fica sem transcrição
+        transcriber = elevenLabsTranscriptionProvider({
+          apiKey: el.apiKey,
+          model: bindingDaTranscricao.model_id,
+        });
+      } catch (err) {
+        // Mesma regra do binding de visão, linhas acima: binding apontando
+        // para provedor sem chave não pode derrubar a derivação — cai no
+        // padrão (Whisper, abaixo) e AVISA no log. O aviso que chega à
+        // Central só abre se o padrão TAMBÉM falhar (ver mais abaixo) — dois
+        // avisos em sequência para o mesmo áudio seriam ruído, não ajuda.
+        logger.warn(
+          "[media-derive] binding de transcrição (ElevenLabs) sem credencial utilizável; tentando o padrão (Whisper)",
+          {
+            organization_id: row.organization_id,
+            error: err instanceof Error ? err.message : String(err),
+          },
+        );
       }
     }
 
-    const deps = buildDeriveDeps(llm, openaiKey, row.organization_id, admin);
+    if (!transcriber) {
+      let openaiKey: string | null = null;
+      if (llm.provider === "openai") {
+        openaiKey = llm.apiKey;
+      } else {
+        try {
+          const oa = await resolveOrgLlmConfig(derivePool(), llmCfg, row.organization_id, {
+            provider: "openai",
+          });
+          openaiKey = oa.apiKey;
+        } catch {
+          openaiKey = null; // sem credencial e sem OPENAI_API_KEY: áudio fica sem transcrição
+        }
+      }
+      // Sem chave nenhuma NÃO há como transcrever: devolver string vazia é honesto
+      // (o derivado fica vazio e o marcador "[áudio]" continua valendo) e evita
+      // o loop de 401 que retentava a cada drain.
+      transcriber = openaiKey
+        ? apiTranscriptionProvider({ apiKey: openaiKey })
+        : {
+            transcribe: async () => {
+              // Mesma razão da visão: devolver "" fazia o agente responder ao
+              // áudio como se ele não existisse. O aviso é o que dá ao
+              // operador a chance de cadastrar a chave — sem ele, o sintoma é
+              // indistinguível de "o agente é ruim".
+              //
+              // O texto NOMEIA o serviço que o operador de fato escolheu —
+              // "falta uma chave da OpenAI" seria FALSO para quem configurou
+              // ElevenLabs neste ponto e mandaria caçar a chave errada (a
+              // mesma classe de defeito que o binding de visão já documentou).
+              const motivo =
+                bindingDaTranscricao?.provider === "elevenlabs"
+                  ? "você escolheu o ElevenLabs para ouvir o áudio, mas a chave não está disponível, e não há uma chave da OpenAI de reserva"
+                  : "falta uma chave da OpenAI para transcrever";
+              await avisarMidiaNaoLida(row.organization_id, "áudio", motivo);
+              return MARCADOR_NAO_LIDA;
+            },
+          };
+    }
+
+    const deps = buildDeriveDeps(llm, transcriber, row.organization_id, admin);
 
     const text = await deriveMediaText(msg.type, buffer, msg.media_mime ?? "application/octet-stream", deps);
     await admin.from("messages")
@@ -200,7 +258,7 @@ async function lerBindingDoPonto(
 
 function buildDeriveDeps(
   llm: { provider: string; apiKey: string; defaultModel: string | null },
-  openaiKey: string | null,
+  transcriber: DeriveDeps["transcriber"],
   orgId: string,
   admin: ReturnType<typeof createAdminClient>,
 ): DeriveDeps {
@@ -282,21 +340,9 @@ function buildDeriveDeps(
     });
     return res.text;
   };
-  // Sem chave OpenAI não há como transcrever: devolver string vazia é honesto
-  // (o derivado fica vazio e o marcador "[áudio]" continua valendo) e evita o
-  // loop de 401 que retentava a cada drain.
-  const transcriber: DeriveDeps["transcriber"] = openaiKey
-    ? apiTranscriptionProvider({ apiKey: openaiKey })
-    : {
-        transcribe: async () => {
-          // Mesma razão da visão: devolver "" fazia o agente responder ao áudio
-          // como se ele não existisse. O aviso é o que dá ao operador a chance
-          // de cadastrar a chave — sem ele, o sintoma é indistinguível de "o
-          // agente é ruim".
-          await avisarMidiaNaoLida(orgId, "áudio", "falta uma chave da OpenAI para transcrever");
-          return MARCADOR_NAO_LIDA;
-        },
-      };
+  // `transcriber` já chega pronto — a escolha entre Whisper e Scribe (e o
+  // fallback + aviso quando falta chave) é decidida no corpo principal, onde o
+  // binding do ponto é lido. Ver `deriveMessageMedia`.
   return {
     transcriber,
     describeImage,
