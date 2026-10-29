@@ -24605,3 +24605,18 @@ comment on column public.user_organizations.provisional_until_handover is
   'quando o tenant foi criado para OUTRA pessoa (owner_email <> e-mail de quem '
   'cria). Nunca deduzir este valor depois: a ausência dele foi o que fez a '
   'primeira versão desta regra expulsar alguém da própria empresa.';
+
+-- ---- O ledger de envio guarda mídia já sintetizada (migration 0252) ----
+-- Prepara o terreno para o agente responder em áudio (plano de voz, Fase 6a):
+-- um lugar para registrar "já sintetizei isto" ANTES do envio, keyed por
+-- (job_id, seq) — a mesma identidade que o ledger já usa para intenção
+-- exactly-once. Idempotente; não muda o comportamento de nenhum envio de
+-- texto existente, e nenhuma linha hoje grava este valor.
+alter table public.send_ledger
+  add column if not exists media_storage_path text;
+
+comment on column public.send_ledger.media_storage_path is
+  'Migration 0252. Caminho no Storage do áudio JÁ sintetizado para este '
+  '(job_id, seq) — preenchido uma vez, antes do envio, para um retry não '
+  'resintetizar (e pagar) de novo pela mesma mensagem lógica. NULL para toda '
+  'mensagem que não é voz, e para voz cuja síntese ainda não terminou.';

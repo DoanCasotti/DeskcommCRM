@@ -233,9 +233,10 @@ vai de carona nesta frente.
 | 1 — vocabulário de serviço + credencial + validador | ✅ feito | commit `396778807`→`31d1a5f28`, branch `feature/voz-elevenlabs-fase1` |
 | 2 — `fixo.opcoes` (mecanismo de menu) | ✅ feito | commit `d684a1f9f`, junto com a 3 |
 | 3 — Scribe plugado no worker | ✅ feito | commit `d684a1f9f` |
-| 4 — preço por caractere (`custoDeVozCents`) | ✅ feito (sem migration) | `lib/agent-engine/edge/llm/pricing.ts` — **ainda não commitado** |
-| 5 — `texto-falavel.ts` + `sintetizar.ts` | ✅ feito, **deliberadamente ÓRFÃOS** | `lib/ai/voz/` — **ainda não commitado** |
-| 6 — colunas `voz_enabled`/`voz_quando` + regra de quando falar + envio idempotente | ⬜ não iniciado | — |
+| 4 — preço por caractere (`custoDeVozCents`) | ✅ feito (sem migration) | commit `d58e399d0` |
+| 5 — `texto-falavel.ts` + `sintetizar.ts` | ✅ feito, **deliberadamente ÓRFÃOS** | commit `d58e399d0` |
+| 6a — `sendTurnMessage` aprende a mandar voz (idempotente, com custo) | ⬜ avaliado, não iniciado | precisa da migration do item 1 abaixo |
+| 6b — o AGENTE decide falar (`inbound-turn.ts` + `ai_agent_versions`) | ⬜ avaliado, **maior e mais arriscado do que o plano original previa** | ver achado abaixo |
 | 7 — tela de configuração | ⬜ não iniciado | — |
 
 **Por que a Fase 5 está "órfã" de propósito.** `sintetizarVoz()` e `custoDeVozCents()` são reais,
@@ -249,22 +250,68 @@ migration nova, e a mudança entra bem no meio do caminho de ENVIO (`sendTurnMes
 agente — nunca mídia. Avaliado nesta sessão e **deliberadamente deixado para uma rodada própria**,
 em vez de emendado às pressas no mesmo commit das Fases 4/5.
 
-**O que a Fase 6 precisa, concretamente** (para quem continuar):
-1. Migration: `ai_agent_versions.voz_enabled boolean not null default false`,
-   `voz_quando text not null default 'espelhar' check (voz_quando in ('nunca','espelhar','sempre'))`
-   — precedente: `video_frames_enabled` (migration 0058).
-2. `SendMessageInput` (ou o chamador da tool `send_message`) precisa saber decidir "falar em vez de
-   escrever" ANTES de montar o payload, e `sendMessageHandler`/o adapter precisam aceitar
-   `type: 'audio'` + `media_storage_path` vindo do AGENTE (hoje esse branch só existe para mídia
-   subida pelo OPERADOR em `app/api/v1/messages/_handler.ts`).
-3. Idempotência (plano §4.5): sintetizar + subir pro Storage **dentro** do estado `requested` do
-   `send_ledger`, gravando `media_storage_path` ali — um crash entre síntese e envio não pode
-   resintetizar (e pagar) de novo no replay.
-4. O texto FALADO (`textoFalavel(body)`) não é o `body` da mensagem — a thread precisa manter o
-   texto original em `media_derived_text` (plano §4.4), senão busca/LGPD/classificador de
-   follow-up ficam cegos.
-5. SÓ NESSE COMMIT o ponto `sintese_de_voz` entra em `registro.ts`, com `emissor` apontando pro
-   código que de fato chama — nunca antes.
+**Achado desta sessão — por que a Fase 6 virou DUAS fases, e a segunda é bem maior do que parecia.**
+
+Investigado: `app/api/v1/messages/_handler.ts` **já aceita** `type: 'audio'` + `media_storage_path`
+sem gate de ator nenhum (`sendMessageHandler` usa `input: SendMessageInput`, o MESMO tipo da rota
+REST; o branch de mídia só olha `input.media_storage_path`, nunca `ctx.actor.type`) — então o item
+2 da lista antiga ("o handler precisa aceitar áudio do agente") estava **errado por excesso de
+pessimismo**: não precisa de mudança nenhuma ali. O que de fato falta se divide em dois mundos bem
+separados, com riscos MUITO diferentes:
+
+**6a — "`sendTurnMessage` sabe mandar voz" (plumbing isolável, mesmo risco das Fases 4/5):**
+1. Migration: `send_ledger` ganha `media_storage_path text` — é ONDE a idempotência mora (item 3
+   abaixo), e é a única peça de schema que esta sub-fase precisa.
+2. `SendMessageInput` (a interface de `lib/agent-engine/edge/crm/send-message.ts`, não o Zod da
+   rota) ganha um campo opcional `voz` (texto falado + voiceId + credencial já resolvida). Ausente
+   = comportamento atual, byte a byte.
+3. Idempotência (plano §4.5): resolvida por um `INSERT ... ON CONFLICT (job_id, seq) DO UPDATE SET
+   media_storage_path = coalesce(...)` ANTES de chamar `sendWithLedger` — a mesma identidade
+   `(job_id,seq)` que o ledger já usa, sem precisar alterar `sendWithLedger` (função provada,
+   usada por TODO envio de texto hoje; o plano é não tocá-la, só chamá-la depois). Precisa expor
+   `bodyHash()` de `send-ledger.ts` (hoje um one-liner interno) para o pré-passo calcular o MESMO
+   hash e não colidir com o `create()` que `sendWithLedger` ainda vai chamar depois.
+4. `ctx: HandlerCtx` ganha `aiVoiceDerivedText?: string | null` (mesmo padrão de
+   `serviceBoundary`/`serviceOrigin`: interno, nunca vindo do corpo da requisição) — é o que
+   preenche `media_derived_text` no insert da linha (plano §4.4), sem abrir um campo público que
+   qualquer chamador da API pudesse usar para inventar texto que não bate com o áudio.
+5. O Storage path segue `isMediaPathOwnedBy` (`lib/messaging/media/upload-validation.ts`):
+   `${organizationId}/${conversationId}/...` — upload fora desse prefixo é recusado com
+   `invalid_media_path`, então o uploader precisa montar o path assim de propósito.
+6. **SÓ aqui** o ponto `sintese_de_voz` entra em `registro.ts` — porque só aqui existe um `emissor`
+   de verdade (o próprio `sendTurnMessage`, chamado o tempo todo em produção).
+
+**6b — "o agente DECIDE falar" — maior do que o plano original estimava:**
+
+A cadeia real, medida nesta sessão lendo `lib/agent-engine/agent/inbound-turn.ts` (4175 linhas, o
+maior e mais denso arquivo do motor): a tool `send_message.execute` tem o `body` do modelo e
+`agentConfig` (onde `voz_enabled`/`voz_quando` morariam) em escopo — mas o envio não vai direto a
+`sendTurnMessage`. Ele passa por `sendInBubbles` (`lib/agent-engine/agent/split-message.ts`), que
+QUEBRA o texto em bolhas e chama `liveChannel().send(...)` **uma vez por bolha**. Voz não bolha —
+uma nota de voz é UMA mensagem, não três. Então a decisão "falar" precisa DESVIAR de
+`sendInBubbles` inteiro quando ativa, não só acrescentar um campo a ela. Resumo do que falta:
+
+1. Migration: `ai_agent_versions.voz_enabled boolean not null default false` +
+   `voz_quando text not null default 'espelhar' check (...)` — precedente: `video_frames_enabled`
+   (migration 0058). Mais a config da voz em si (`voice_id`, etc.) — provavelmente
+   `organizations.settings->'voz'`, mesmo padrão de `settings->'llm'`.
+2. Dentro de `send_message.execute` (inbound-turn.ts): ler `agentConfig.vozEnabled` +
+   `agentConfig.vozQuando`, decidir "espelhar" checando se a ÚLTIMA mensagem INBOUND do turno é
+   `type:'audio'` (o dado já existe, só falta a leitura), e resolver a credencial ElevenLabs da org
+   (mesma função `resolveOrgLlmConfig(..., {provider:'elevenlabs'})` que o worker de transcrição já
+   usa) — SEM credencial, cair em texto normal com aviso, nunca travar o turno.
+3. Quando a decisão é "falar": pular `sendInBubbles`, chamar `textoFalavel(finalBody)` e invocar
+   `liveChannel().send({ ..., voz: {...} })` (o campo novo da 6a) UMA vez com o texto inteiro.
+4. `liveChannel()` é uma interface/abstração (closures injetadas via `deps`), não uma chamada direta
+   — então o tipo do parâmetro de `.send()` precisa aceitar `voz` em TODOS os pontos que a
+   implementam (produção e os dublês de teste), não só no de produção.
+5. O MODO PRÉVIA (`agent_preview`) e o `send_template` ficam de fora — voz é resposta real ao
+   cliente, não teste nem template aprovado pela Meta.
+
+Dado o tamanho e o risco qualitativamente diferente da 6b (editar o arquivo mais denso do motor de
+turnos, que roda em TODA mensagem de TODA organização, contra algo isolável como as Fases 1–5),
+esta sessão parou depois de MAPEAR a 6b, sem escrever código nela — ver a mensagem de handoff para
+quem retomar.
 
 ---
 
