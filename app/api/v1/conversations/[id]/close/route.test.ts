@@ -59,6 +59,10 @@ const CONVERSA_FECHADA = {
   organization_id: ORG,
   status: "closed",
   service_revision: 7,
+  // A main passou a exigir controle da conversa antes de qualquer escrita
+  // (`exigirControleDaConversa`): sem dono, o `fn_can_view_conversation` abaixo
+  // responde que este atendente pode encerrar.
+  assigned_to_user_id: null,
 };
 
 function chamar(corpo: Record<string, unknown> = {}): Promise<Response> {
@@ -88,6 +92,9 @@ beforeEach(() => {
         eq: () => ({ eq: () => ({ maybeSingle: async () => ({ data: CONVERSA_FECHADA, error: null }) }) }),
       }),
     }),
+    // `exigirControleDaConversa` (main) chama `fn_can_view_conversation` para
+    // conversa SEM dono humano; `true` = este atendente pode encerrar.
+    rpc: async () => ({ data: true, error: null }),
   } as unknown as Awaited<ReturnType<typeof createClient>>);
   vi.mocked(createAdminClient).mockReturnValue({
     rpc: async () => ({ data: CONVERSA_FECHADA, error: null }),
