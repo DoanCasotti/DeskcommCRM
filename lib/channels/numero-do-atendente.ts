@@ -284,7 +284,10 @@ export async function conversaQueContinua(
   return {
     id: conversa.id,
     nome: conversa.assigned_to_user_name ?? null,
-    propria: conversa.assigned_to_user_id === p.userId,
+    // Sem dono também é "no seu número": a conversa que continua está sempre
+    // num número de quem envia (é assim que `fn_conversa_que_continua` a acha).
+    // É o caso da conversa que a IA atende, que a adoção não toma (doc 237, 3-B).
+    propria: conversa.assigned_to_user_id === p.userId || conversa.assigned_to_user_id === null,
   };
 }
 

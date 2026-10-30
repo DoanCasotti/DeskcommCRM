@@ -168,6 +168,23 @@ describe("#3732 — a recusa do envio leva para a conversa que continua", () => 
     });
   });
 
+  it("a conversa que continua está SEM dono (a IA atende, doc 237 3-B): fala do seu número", async () => {
+    // Ela está sempre num número de quem envia; sem dono, "no número de outro
+    // atendente" seria falso.
+    admin.rpc.mockResolvedValue({ data: CONVERSA_NOVA, error: null });
+    admin.linha.mockResolvedValue({
+      data: { id: CONVERSA_NOVA, assigned_to_user_id: null, assigned_to_user_name: null },
+      error: null,
+    });
+
+    const err = await enviar();
+
+    expect(err.message).toMatch(/seu número/i);
+    expect(err.details).toMatchObject({
+      conversa_que_continua: { id: CONVERSA_NOVA, nome: null, propria: true },
+    });
+  });
+
   it("CONTROLE: sem continuação, a frase de sempre fica e o detalhe não aparece", async () => {
     const err = await enviar();
 
