@@ -23,15 +23,17 @@ const visto = vi.hoisted(() => ({
 
 const arquivado = vi.hoisted(() => ({ valor: true }));
 const carregando = vi.hoisted(() => ({ valor: false }));
+const parametros = vi.hoisted(() => ({ valor: "" }));
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ replace: vi.fn(), push: vi.fn() }),
   usePathname: () => "/app/pipelines/p-1",
-  useSearchParams: () => new URLSearchParams(),
+  useSearchParams: () => new URLSearchParams(parametros.valor),
 }));
 vi.mock("@/hooks/kanban/useBoard", () => ({
-  useBoard: () => ({
-    data: carregando.valor ? undefined : {
+  // Como o hook real: com `enabled: false` a consulta não roda e não há dado.
+  useBoard: (_id: string, _lead: string | null, opcoes?: { enabled?: boolean }) => ({
+    data: carregando.valor || opcoes?.enabled === false ? undefined : {
       pipeline: {
         id: "p-1",
         name: "Comercial 2025",
@@ -92,6 +94,7 @@ function montarPagina() {
 beforeEach(() => {
   arquivado.valor = true;
   carregando.valor = false;
+  parametros.valor = "";
   visto.somenteLeitura = null;
   visto.podeRenomearEtapa = null;
 });
@@ -123,6 +126,14 @@ describe("a página de um funil arquivado (#1298, item 1)", () => {
 
     expect(visto.somenteLeitura).toBe(true);
     expect(visto.podeRenomearEtapa).toBe(false);
+  });
+
+  it("com ?visao=lista na URL, o funil arquivado ainda carrega e mostra o quadro", async () => {
+    parametros.valor = "visao=lista";
+    await montarPagina();
+
+    expect(screen.getByTestId("quadro")).toBeTruthy();
+    expect(visto.somenteLeitura).toBe(true);
   });
 
   it("enquanto o quadro carrega, o funil do servidor já fecha o Novo Lead e as abas", async () => {

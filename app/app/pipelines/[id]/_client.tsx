@@ -137,7 +137,11 @@ export function PipelinePageClient({
   const { data, isLoading, error, pulses, realtimeStatus, seguranca } = useBoard(
     pipelineId,
     searchParams.get("lead"),
-    { enabled: visao !== "lista" },
+    // Funil arquivado só tem o quadro (#1298): com `?visao=lista` na URL a lista
+    // não é desenhada, então a consulta do quadro não pode ficar desligada pela
+    // visão CRUA — a tela cairia em "Carregando…" para sempre. O funil do
+    // servidor já diz se está arquivado antes de o quadro chegar.
+    { enabled: visao !== "lista" || funilInicial.is_archived === true },
   );
   const router = useRouter();
   const pathname = usePathname();

@@ -323,7 +323,7 @@ export function FunisClient({
                     */}
                     <Link
                       href={`/app/pipelines/${funil.id}`}
-                      className="min-w-0 flex-1 truncate text-sm text-muted-foreground underline-offset-2 hover:text-text hover:underline"
+                      className="min-h-6 min-w-0 flex-1 truncate py-0.5 text-sm text-muted-foreground underline-offset-2 hover:text-text hover:underline"
                       aria-label={`${t("Abrir")} «${funil.name}» ${t("sem tirar do arquivo")}`}
                       data-testid={`abrir-arquivado-${funil.id}`}
                     >
