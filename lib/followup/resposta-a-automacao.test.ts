@@ -176,3 +176,83 @@ describe("contatosQueSoResponderamAAutomacao — a pergunta e a decisão", () =>
     expect(consultas).toHaveLength(0);
   });
 });
+
+/**
+ * O caminho 1 da decisão do mantenedor na #3720: o corte não é "respondeu a uma
+ * automação", é "respondeu a uma automação SEM DIZER NADA". Ele mediu os dois
+ * casos e os dois caíam no mesmo corte — a campanha que recebe "quero, quanto
+ * custa?" (lead quente, que precisa da retomada) e o coração ao parabéns (que
+ * não precisa de venda em cima). Os três casos abaixo são a régua dessa
+ * separação, e o segundo bloco de resposta do fake é a leitura dos inbounds.
+ */
+describe("contatosQueSoResponderamAAutomacao — só corta quando NADA tem conteúdo", () => {
+  /** A automação das 09h07 e a resposta das 09h11: o cenário medido na instalação. */
+  const AUTOMACAO = { conversation_id: "conv-1", sent_via: "automation", sent_at: "2026-10-28T12:07:00.000Z" };
+  const INBOUND_AT = "2026-10-28T12:11:00.000Z";
+
+  it("reação pura (linha type=reaction, sem corpo) → fora do fluxo", async () => {
+    const { admin, consultas } = fakeAdmin([
+      [AUTOMACAO],
+      [{ conversation_id: "conv-1", type: "reaction", body: null, sent_at: INBOUND_AT }],
+    ]);
+
+    const fora = await contatosQueSoResponderamAAutomacao(admin, ORG, [candidato("contato-1", "conv-1", INBOUND_AT)]);
+
+    expect(fora).toEqual(new Set(["contato-1"]));
+    // A segunda consulta é a pergunta nova, e os filtros são a prova de que ela
+    // pergunta a coisa certa (uma guarda que devolve vazio por filtro errado
+    // seria indistinguível desta).
+    const conteudo = consultas[1]!;
+    expect(conteudo[0]).toEqual({ metodo: "from", args: ["messages"] });
+    expect(conteudo).toContainEqual({ metodo: "eq", args: ["organization_id", ORG] });
+    expect(conteudo).toContainEqual({ metodo: "eq", args: ["direction", "inbound"] });
+    expect(conteudo).toContainEqual({ metodo: "in", args: ["conversation_id", ["conv-1"]] });
+    expect(conteudo.some((c) => c.metodo === "gte")).toBe(true);
+    expect(conteudo.some((c) => c.metodo === "lte")).toBe(true);
+  });
+
+  it("texto só de emoji (sem letra nem dígito) → fora do fluxo", async () => {
+    const { admin } = fakeAdmin([
+      [AUTOMACAO],
+      [{ conversation_id: "conv-1", type: "text", body: "❤️", sent_at: INBOUND_AT }],
+    ]);
+
+    const fora = await contatosQueSoResponderamAAutomacao(admin, ORG, [candidato("contato-1", "conv-1", INBOUND_AT)]);
+
+    expect(fora).toEqual(new Set(["contato-1"]));
+  });
+
+  it("campanha respondida com 'quero, quanto custa?' → NÃO é cortado (recebe a retomada)", async () => {
+    // O outro caso que o mantenedor mediu: a campanha pergunta o preço e a
+    // pessoa responde querendo comprar. Mesmo sendo resposta a uma automação,
+    // tem conteúdo — e é exatamente a mensagem que o fluxo precisa atender.
+    const { admin } = fakeAdmin([
+      [AUTOMACAO],
+      [
+        { conversation_id: "conv-1", type: "text", body: "quero, quanto custa?", sent_at: INBOUND_AT },
+      ],
+    ]);
+
+    const fora = await contatosQueSoResponderamAAutomacao(admin, ORG, [candidato("contato-1", "conv-1", INBOUND_AT)]);
+
+    expect(fora).toEqual(new Set());
+  });
+
+  it("reação primeiro e texto com conteúdo depois, no MESMO período → NÃO é cortado", async () => {
+    // A regra é "NENHUMA mensagem com conteúdo", não "a última". Quem reagiu e
+    // voltou a escrever é lead de verdade.
+    const { admin } = fakeAdmin([
+      [AUTOMACAO],
+      [
+        { conversation_id: "conv-1", type: "text", body: "quanto fica o plano de 2 linhas?", sent_at: "2026-10-28T12:14:00.000Z" },
+        { conversation_id: "conv-1", type: "reaction", body: null, sent_at: "2026-10-28T12:11:00.000Z" },
+      ],
+    ]);
+
+    const fora = await contatosQueSoResponderamAAutomacao(admin, ORG, [
+      candidato("contato-1", "conv-1", "2026-10-28T12:14:00.000Z"),
+    ]);
+
+    expect(fora).toEqual(new Set());
+  });
+});

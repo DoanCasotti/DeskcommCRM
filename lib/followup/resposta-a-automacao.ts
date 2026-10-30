@@ -26,6 +26,28 @@
  * varredura não o inscreve: o fluxo de silêncio não é a resposta certa para
  * quem acabou de ser parabenizado.
  *
+ * ─── E o corte só vale se NADA do que ele mandou tinha conteúdo ────────────
+ *
+ * "Respondeu à automação" não é o mesmo que "não tem assunto" (decisão do
+ * mantenedor na #3720, caminho 1). Uma campanha que pergunta o preço recebe
+ * "quero, quanto custa?", e essa pessoa é um lead quente — calar o fluxo para
+ * ela é perder a venda; quem manda um "❤️" ao parabéns é outra história. As
+ * duas caíam no MESMO corte da primeira versão, e é a regra que a issue já
+ * pedia que separa as duas: o contato só fica de fora quando, desde a
+ * automação, NENHUMA mensagem dele tem conteúdo.
+ *
+ * O que é "sem conteúdo", e só isso:
+ *   - a linha `type = 'reaction'` — a reação não é mensagem (`lib/channels/reacao.ts`),
+ *     ela nem carrega corpo;
+ *   - texto em que não há UMA letra nem UM dígito (`/[\p{L}\p{N}]/u`): emoji,
+ *     emoji com variation selector, "👍🏽", pontuação solta.
+ * Qualquer outra coisa é conteúdo — inclusive imagem, áudio, localização e
+ * figurinha, que são envios deliberados do cliente mesmo sem texto. E basta UMA
+ * mensagem com conteúdo no período (da automação até a resposta) para ele sair
+ * da exclusão e receber a retomada. Não confundir com `semConteudoVisivel`
+ * (`lib/agent-engine/agent/conteudo-visivel.ts`): lá o emoji É conteúdo, porque
+ * a pergunta é "a bolha sairia em branco"; aqui a pergunta é "ele disse algo".
+ *
  * Três precisões, e cada uma tem um caso que a justifica:
  *
  *  1. "A última que saiu antes dela", não "alguma automática na janela". Se
@@ -100,6 +122,32 @@ interface FatoDaConversa {
   /** `sent_at` do último outbound ANTERIOR à resposta; ausente = não houve outbound antes dela. */
   ultimoOutboundMs?: number;
   ultimoOutboundVia?: string | null;
+  /** Algum inbound ENTRE a automação e a resposta disse alguma coisa (letra, dígito ou envio que não é texto). */
+  temInboundComConteudo?: boolean;
+}
+
+/**
+ * O que NÃO é conteúdo, na regra do caminho 1 da #3720: a letra e o dígito são o
+ * teste positivo. `\p{L}` cobre acento de qualquer alfabeto e `\p{N}` o dígito
+ * de qualquer script; o `u` é o que faz o emoji com variation selector
+ * (`❤️` = U+2764 U+FE0F) não vazar como letra.
+ */
+const CONTEUDO_NO_CORPO = /[\p{L}\p{N}]/u;
+
+/**
+ * A linha inbound do cliente "tem conteúdo"? (issue #3720, caminho 1)
+ *
+ * Reação NÃO é mensagem — é o desenho sobre o balão alvo, sem corpo
+ * (`lib/channels/reacao.ts`): sem conteúdo por definição. Texto sem uma letra e
+ * sem um dígito é emoji/pontuação. Todo o resto (imagem, áudio, documento,
+ * localização, figurinha, template) é envio deliberado do cliente e conta como
+ * conteúdo — a pergunta aqui é "ele disse algo?", não "a bolha sairia em branco?"
+ * (essa é outra régua: `semConteudoVisivel`).
+ */
+function inboundTemConteudo(linha: { type: string | null; body: string | null }): boolean {
+  if (linha.type === "reaction") return false;
+  if (linha.type !== null && linha.type !== "text") return true;
+  return CONTEUDO_NO_CORPO.test(linha.body ?? "");
 }
 
 /**
@@ -182,10 +230,79 @@ export async function contatosQueSoResponderamAAutomacao(
     }
   }
 
-  for (const fato of porConversa.values()) {
+  // ── Fase 2: o que ele mandou tinha CONTEÚDO? ─────────────────────────────
+  //
+  // Só as conversas que JÁ passaram pelo corte de ordem/janela são consultadas
+  // de novo: o resto não entra no fluxo de qualquer jeito, e perguntar por ele
+  // gastaria uma segunda consulta por balde à toa.
+  const candidatosAoCorte = new Map<string, FatoDaConversa>();
+  for (const [conversationId, fato] of porConversa) {
     if (fato.ultimoOutboundMs === undefined) continue;
     if (fato.ultimoOutboundVia !== "automation") continue;
     if (fato.inboundMs - fato.ultimoOutboundMs > JANELA_DA_RESPOSTA_A_AUTOMACAO_MS) continue;
+    candidatosAoCorte.set(conversationId, fato);
+  }
+
+  if (candidatosAoCorte.size > 0) {
+    // Mesmo balde de UM dia da fase 1: a janela [automação, resposta] cabe
+    // sempre dentro de `[dia do inbound − 48 h, dia do inbound + 24 h]`, porque
+    // a automação está a no máximo 48 h da resposta. E a resposta é o TETO da
+    // leitura — inbound depois dela não existe (o silêncio mediu o último), e
+    // se existisse não seria resposta à automação.
+    const baldesDoConteudo = new Map<number, string[]>();
+    for (const [conversationId, fato] of candidatosAoCorte) {
+      const balde = Math.floor(fato.inboundMs / DIA_MS);
+      const lista = baldesDoConteudo.get(balde) ?? [];
+      lista.push(conversationId);
+      baldesDoConteudo.set(balde, lista);
+    }
+
+    for (const [balde, conversas] of baldesDoConteudo) {
+      const desdeIso = new Date(balde * DIA_MS - JANELA_DA_RESPOSTA_A_AUTOMACAO_MS).toISOString();
+      const ateIso = new Date(balde * DIA_MS + DIA_MS).toISOString();
+      for (let i = 0; i < conversas.length; i += LOTE_DE_CONVERSAS) {
+        const lote = conversas.slice(i, i + LOTE_DE_CONVERSAS);
+        for (let de = 0; ; de += PAGINA_DE_MENSAGENS) {
+          const { data, error } = await admin
+            .from("messages")
+            .select("conversation_id, type, body, sent_at")
+            .eq("organization_id", orgId)
+            .eq("direction", "inbound")
+            .in("conversation_id", lote)
+            .gte("sent_at", desdeIso)
+            .lte("sent_at", ateIso)
+            .order("sent_at", { ascending: false })
+            .range(de, de + PAGINA_DE_MENSAGENS - 1);
+          if (error) throw new Error(`resposta_a_automacao_conteudo_query_failed: ${error.message}`);
+
+          const linhas = (data ?? []) as Array<{
+            conversation_id: string;
+            type: string | null;
+            body: string | null;
+            sent_at: string;
+          }>;
+          for (const linha of linhas) {
+            const fato = candidatosAoCorte.get(linha.conversation_id);
+            if (!fato || fato.ultimoOutboundMs === undefined) continue;
+            const sentMs = Date.parse(linha.sent_at);
+            if (!Number.isFinite(sentMs)) continue;
+            // O PERÍODO: da automação até a resposta. Antes da automação é
+            // conversa antiga (o cliente já tinha falado, e é justamente o que
+            // ele respondeu); depois da resposta não é resposta a ela.
+            if (sentMs < fato.ultimoOutboundMs) continue;
+            if (sentMs > fato.inboundMs) continue;
+            if (inboundTemConteudo(linha)) fato.temInboundComConteudo = true;
+          }
+          if (linhas.length < PAGINA_DE_MENSAGENS) break;
+        }
+      }
+    }
+  }
+
+  for (const fato of candidatosAoCorte.values()) {
+    // Uma letra ou um dígito no período e ele é um lead de verdade: o fluxo de
+    // silêncio volta a valer (é a "retomada" pedida na issue).
+    if (fato.temInboundComConteudo) continue;
     excluidos.add(fato.contactId);
   }
   return excluidos;
