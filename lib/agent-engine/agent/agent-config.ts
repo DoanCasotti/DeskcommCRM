@@ -22,7 +22,6 @@ import {
   carregarFatosDoContato,
   lerPublicoDoGatilho,
   passaNoPublico,
-  type PublicoDoAgente,
 } from './publico-do-gatilho';
 
 export interface PublishedAgentConfig {
@@ -118,17 +117,6 @@ export interface PublishedAgentConfig {
    * Opcional porque nasce depois das fixtures que montam esta interface à mão.
    */
   filtroDePalavraChave?: RegExp | null;
-  /**
-   * PÚBLICO do agente (#3722): `trigger_config.filters.include_tags` /
-   * `exclude_tags` / `include_pipeline_ids` / `exclude_pipeline_ids`.
-   * `null`/ausente = atende todo mundo (o comportamento de sempre).
-   *
-   * Quem obedece é a SELEÇÃO do agente — `escolherAgenteDoNumero`, abaixo —,
-   * não o turno: com dois agentes no mesmo número, o público é o que decide
-   * QUAL deles atende. A régua mora em `publico-do-gatilho.ts`.
-   * Opcional porque nasce depois das fixtures que montam esta interface à mão.
-   */
-  publicoDoAgente?: PublicoDoAgente | null;
   /**
    * Texto do aviso de fora do horário (#1926), lido do mesmo `trigger_config`
    * (`filters.business_hours.notice`). `null` = sem aviso configurado: quem
@@ -292,8 +280,6 @@ function mapAgentConfigRow(r: Row): PublishedAgentConfig {
     // Mesma leitura defensiva da linha acima: regex torta/valor vazio ⇒ `null`
     // (sem filtro ⇒ entra em tudo), nunca uma mordaça acidental (#2679).
     filtroDePalavraChave: lerFiltroDePalavraChave(r.trigger_config),
-    // Mesma leitura defensiva: lista torta ⇒ `null` ⇒ atende todo mundo.
-    publicoDoAgente: lerPublicoDoGatilho(r.trigger_config),
     versionCreatedBy: r.version_created_by,
     agentCreatedBy: r.agent_created_by,
   };
@@ -380,28 +366,33 @@ export async function escolherAgenteDoNumero(
      order by (a.paused_at is not null) asc, a.priority desc, a.created_at asc`,
     [organizationId, channelSessionId],
   );
-  const candidatos = rows.map(mapAgentConfigRow);
+  // O público (#3722) é lido da linha crua, ao lado da config: quem o consome é
+  // só esta seleção, então ele não entra em `PublishedAgentConfig` (o turno não
+  // tem o que fazer com ele). Lista torta ⇒ `null` ⇒ atende todo mundo.
+  const candidatos = rows.map((r) => ({
+    config: mapAgentConfigRow(r),
+    publico: lerPublicoDoGatilho(r.trigger_config),
+  }));
   const primeiro = candidatos[0];
   if (primeiro === undefined) return { config: null, motivo: 'sem_agente' };
 
   // Ninguém declarou público: comportamento de antes, sem tocar em `contacts`.
-  if (!candidatos.some((c) => c.publicoDoAgente != null)) {
-    return { config: primeiro, motivo: 'primeiro_da_fila' };
+  if (!candidatos.some((c) => c.publico !== null)) {
+    return { config: primeiro.config, motivo: 'primeiro_da_fila' };
   }
 
   // Público configurado mas sem contato no chamador: a régua não pode ser
   // aplicada, e chutar "barrou" calaria o número por um erro de fiação. Cai no
   // primeiro da fila e o motivo fica registrado.
   if (contactId == null) {
-    return { config: primeiro, motivo: 'sem_contato' };
+    return { config: primeiro.config, motivo: 'sem_contato' };
   }
 
   // Erro de leitura sobe de propósito: a fila re-tenta o job.
   const fatos = await carregarFatosDoContato(db, organizationId, contactId);
   for (const candidato of candidatos) {
-    const publico = candidato.publicoDoAgente ?? null;
-    if (publico === null || passaNoPublico(publico, fatos)) {
-      return { config: candidato, motivo: 'publico_liberou' };
+    if (candidato.publico === null || passaNoPublico(candidato.publico, fatos)) {
+      return { config: candidato.config, motivo: 'publico_liberou' };
     }
   }
   return { config: null, motivo: 'publico_barrou' };
