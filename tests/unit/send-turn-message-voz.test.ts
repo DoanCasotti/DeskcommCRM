@@ -12,9 +12,10 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 // `vi.mock` é içado para o topo do arquivo — referenciar uma const comum
 // declarada DEPOIS dispararia "Cannot access before initialization". `vi.hoisted`
 // é o escape oficial: o que está dentro dele é içado JUNTO com o `vi.mock`.
-const { sendMessageHandlerMock, resolverCaminhoDeVozMock } = vi.hoisted(() => ({
+const { sendMessageHandlerMock, resolverCaminhoDeVozMock, registrarCustoDeVozMock } = vi.hoisted(() => ({
   sendMessageHandlerMock: vi.fn(),
   resolverCaminhoDeVozMock: vi.fn(),
+  registrarCustoDeVozMock: vi.fn(),
 }));
 
 vi.mock("@/app/api/v1/messages/_handler", () => ({
@@ -23,6 +24,7 @@ vi.mock("@/app/api/v1/messages/_handler", () => ({
 
 vi.mock("@/lib/agent-engine/edge/crm/send-voice", () => ({
   resolverCaminhoDeVoz: resolverCaminhoDeVozMock,
+  registrarCustoDeVoz: registrarCustoDeVozMock,
   VozLedgerTerminalError: class VozLedgerTerminalError extends Error {
     constructor(
       public readonly kind: "already_sent" | "blocked",
@@ -90,6 +92,7 @@ const baseInput: SendMessageInput = {
 beforeEach(() => {
   sendMessageHandlerMock.mockReset();
   resolverCaminhoDeVozMock.mockReset();
+  registrarCustoDeVozMock.mockReset();
 });
 
 describe("sendTurnMessage — voz (Fase 6a)", () => {
@@ -134,6 +137,28 @@ describe("sendTurnMessage — voz (Fase 6a)", () => {
     expect(payload.media_storage_path).toBe("org1/conv1/voz-agente-job1-1.mp3");
     expect(payload.media_mime).toBe("audio/mpeg");
     expect(ctx.aiVoiceDerivedText).toBe("Texto original 🎉");
+
+    // sintetizouAgora:true — a chamada ao ElevenLabs de fato aconteceu agora,
+    // então o custo precisa entrar no orçamento.
+    expect(registrarCustoDeVozMock).toHaveBeenCalledWith(
+      expect.objectContaining({ organizationId: "org1", caracteres: 20 }),
+    );
+  });
+
+  it("retry que REUSOU o path (sintetizouAgora:false): NÃO registra custo de novo", async () => {
+    resolverCaminhoDeVozMock.mockResolvedValue({
+      mediaStoragePath: "org1/conv1/voz-agente-job1-1.mp3",
+      mimeType: "audio/mpeg",
+      caracteres: 20,
+      sintetizouAgora: false,
+    });
+    sendMessageHandlerMock.mockResolvedValue({ id: "msg1", status: "sent" });
+    const db = dbComJob();
+    await sendTurnMessage(db, cfg, {
+      ...baseInput,
+      voz: { textoOriginal: "x", apiKey: "sk", voiceId: "v1", upload: vi.fn() },
+    });
+    expect(registrarCustoDeVozMock).not.toHaveBeenCalled();
   });
 
   it("síntese recusada por desfecho already_sent: NUNCA chama sendMessageHandler", async () => {

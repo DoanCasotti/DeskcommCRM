@@ -460,6 +460,23 @@ export const PONTOS_DE_IA: readonly PontoDeIa[] = [
       "O cliente manda uma foto do produto ou um comprovante e o agente age como se a imagem não existisse.",
     registraEm: "nenhum",
   },
+  {
+    id: "sintese_de_voz",
+    rotulo: "Responder o cliente falando",
+    oQueFaz:
+      "Transforma a resposta do agente em nota de voz, nas organizações e versões que ligaram essa opção.",
+    papel: "atender",
+    exige: {},
+    emissor: "lib/agent-engine/edge/crm/send-message.ts",
+    fixo: {
+      razao:
+        "Usa o ElevenLabs — não é um modelo de conversa, e hoje não há um segundo serviço de síntese para escolher entre.",
+      usa: { provider: "elevenlabs", modelId: "eleven_multilingual_v2" },
+    },
+    sintomaDeFalha:
+      "A organização ligou a resposta em voz e o agente continua respondendo só em texto.",
+    registraEm: "llm_calls",
+  },
 
   // ────────────────────────── Melhorar e testar ────────────────────────────
   {

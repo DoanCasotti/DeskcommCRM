@@ -23,8 +23,12 @@
  * essa decisão (Fase 6b) ainda não tem um chamador de produção. Ver a seção
  * "Progresso" do plano.
  */
+import type { SupabaseClient } from "@supabase/supabase-js";
+
 import { bodyHash, resolverChaveDoLedger, type Intent, type LedgerStore } from "./send-ledger";
 import { sintetizarVoz, type SintetizarVozInput } from "@/lib/ai/voz/sintetizar";
+import { custoDeVozCents } from "@/lib/agent-engine/edge/llm/pricing";
+import { logger } from "@/lib/logger";
 
 export interface ResolverCaminhoDeVozInput {
   store: LedgerStore;
@@ -100,6 +104,60 @@ export async function resolverCaminhoDeVoz(
  * nenhum. O chamador decide: para `already_sent`, não há nada a fazer (a
  * mensagem já saiu); para `blocked`, idem (opt-out).
  */
+/**
+ * Registra o CUSTO da síntese em `llm_calls` — é o que faz `voz_enabled` ter
+ * teto. `fn_update_budget_consumption` dispara em TODO insert em `llm_calls`
+ * e soma `cost_cents`; sem esta linha a síntese gastaria fora do orçamento da
+ * organização, o defeito de origem que `lib/agent-engine/edge/llm/
+ * credentials.ts` documenta para a camada de chat, repetido no eixo novo.
+ *
+ * Fire-and-forget pelo MESMO motivo de `lib/ai/log-invocation.ts`: o custo
+ * JÁ foi pago (a chamada ao ElevenLabs já aconteceu) quando isto é chamado —
+ * atrasar o envio esperando o INSERT não evita gasto nenhum, só soma latência
+ * à resposta que o cliente está esperando.
+ *
+ * `input_tokens`/`output_tokens` ficam em ZERO, de propósito — não em
+ * `caracteres`. A tela de execuções soma essas duas colunas como "tokens"
+ * (`ExecucoesDeIa.tsx`) e `metrics.ts` as agrega no sistema inteiro
+ * (`run_input_tokens`); gravar caracteres ali misturaria DUAS unidades na
+ * MESMA coluna, em silêncio — exatamente a classe de defeito que este
+ * produto evita em todo outro lugar. `cost_cents` é o sinal real; `purpose`
+ * já distingue a linha de uma chamada de chat.
+ */
+export function registrarCustoDeVoz(params: {
+  supabase: SupabaseClient;
+  organizationId: string;
+  caracteres: number;
+  modelId: string;
+}): void {
+  queueMicrotask(() => {
+    void (async () => {
+      try {
+        const { error } = await params.supabase.from("llm_calls").insert({
+          organization_id: params.organizationId,
+          purpose: "sintese_de_voz",
+          provider: "elevenlabs",
+          model: params.modelId,
+          input_tokens: 0,
+          output_tokens: 0,
+          cost_cents: custoDeVozCents(params.caracteres),
+        });
+        if (error) {
+          logger.warn("[send-voice] custo de síntese não gravado em llm_calls", {
+            organization_id: params.organizationId,
+            error: error.message,
+          });
+        }
+      } catch (err) {
+        logger.warn("[send-voice] insert de custo de síntese lançou", {
+          organization_id: params.organizationId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    })();
+  });
+}
+
 export class VozLedgerTerminalError extends Error {
   constructor(
     public readonly kind: "already_sent" | "blocked",

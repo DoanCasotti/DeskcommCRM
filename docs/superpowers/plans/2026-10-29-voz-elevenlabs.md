@@ -235,9 +235,9 @@ vai de carona nesta frente.
 | 3 — Scribe plugado no worker | ✅ feito | commit `d684a1f9f` |
 | 4 — preço por caractere (`custoDeVozCents`) | ✅ feito (sem migration) | commit `d58e399d0` |
 | 5 — `texto-falavel.ts` + `sintetizar.ts` | ✅ feito, **deliberadamente ÓRFÃOS** | commit `d58e399d0` |
-| 6a — `sendTurnMessage` aprende a mandar voz (idempotente, com custo) | ⬜ avaliado, não iniciado | precisa da migration do item 1 abaixo |
-| 6b — o AGENTE decide falar (`inbound-turn.ts` + `ai_agent_versions`) | ⬜ avaliado, **maior e mais arriscado do que o plano original previa** | ver achado abaixo |
-| 7 — tela de configuração | ⬜ não iniciado | — |
+| 6a — `sendTurnMessage` aprende a mandar voz (idempotente, com custo) | ✅ feito | commit `ccf267718`, migration 0252 |
+| 6b — o AGENTE decide falar (`inbound-turn.ts` + `ai_agent_versions`) | ✅ feito | migration 0253, ver "o que foi construído" abaixo |
+| 7 — tela de configuração (ligar voz, escolher voice_id, ouvir prévia) | ⬜ não iniciado | é o ÚNICO motivo de `voz_enabled` ainda não poder ser ligado por ninguém |
 
 **Por que a Fase 5 está "órfã" de propósito.** `sintetizarVoz()` e `custoDeVozCents()` são reais,
 testados e chamáveis — mas **nada no runtime do agente os chama ainda**, e o ponto `sintese_de_voz`
@@ -308,10 +308,34 @@ uma nota de voz é UMA mensagem, não três. Então a decisão "falar" precisa D
 5. O MODO PRÉVIA (`agent_preview`) e o `send_template` ficam de fora — voz é resposta real ao
    cliente, não teste nem template aprovado pela Meta.
 
-Dado o tamanho e o risco qualitativamente diferente da 6b (editar o arquivo mais denso do motor de
-turnos, que roda em TODA mensagem de TODA organização, contra algo isolável como as Fases 1–5),
-esta sessão parou depois de MAPEAR a 6b, sem escrever código nela — ver a mensagem de handoff para
-quem retomar.
+**O que foi de fato construído na 6b** (depois do mapeamento acima ser confirmado por leitura
+direta do código, e com confirmação explícita do usuário antes de editar o motor de turnos):
+
+- Migration 0253: `ai_agent_versions.voz_enabled`/`voz_quando`, com o trigger de imutabilidade de
+  versão publicada (`fn_ai_agent_version_content_immutable`, estendido pelas migrations 0125/0181)
+  ensinado a conhecer as duas colunas — senão ficariam editáveis numa versão já publicada sem
+  virar draft nova, reabrindo o buraco que 0125/0181 fecharam para as colunas delas.
+- `lib/agent-engine/agent/voz-do-turno.ts` (`resolverVozDoTurno`): a decisão "falar", resolvida
+  UMA vez por turno — nunca-fala/fala-se-cliente-mandou-áudio/sempre-fala, lendo
+  `organizations.settings.voz.voice_id` e resolvendo a credencial ElevenLabs via
+  `resolveOrgLlmConfig`. Falha SEMPRE para texto (credencial ausente, `voice_id` não configurado,
+  erro de rede) — nunca trava o turno.
+- `inbound-turn.ts`: `send_message.execute` desvia de `sendInBubbles` inteiro quando
+  `vozParaEsteTurno` está presente — uma nota de voz é UMA mensagem física, nunca bolhas. Modo
+  prévia (`!preview`) fica de fora.
+- `sintese_de_voz` **entrou em `registro.ts`** — só agora, porque só agora existe um `emissor` de
+  produção de verdade. Custo registrado em `llm_calls` (`registrarCustoDeVoz`), só quando a
+  síntese de fato aconteceu agora (não num retry que reusou o path).
+- **Achado tardio, consertado antes do commit:** o apêndice de `baseline.sql` cresce por
+  acréscimo, e colar a migration 0253 (que recria uma função) no FIM do arquivo a colocaria DEPOIS
+  do bloco "VARREDURA anon" (migration 0116) — que só cura `anon` em EXECUTE para funções que já
+  existem no momento em que ela corre. `tests/unit/varredura-anon-e-o-ultimo-bloco.test.ts` pegou
+  isso antes de qualquer commit; o apêndice de 0252/0253 foi movido para ANTES da varredura.
+
+**O que NÃO foi feito, de propósito — e é só isso que falta para a voz funcionar de ponta a
+ponta:** não há tela. `voz_enabled` só pode ser ligado por quem edita o banco direto, e essa
+pessoa precisa TAMBÉM configurar `organizations.settings.voz.voice_id` e cadastrar a credencial
+ElevenLabs (Fase 1) — sem os três, o agente responde em texto, sempre.
 
 ---
 
@@ -324,8 +348,8 @@ quem retomar.
 | **3** | **Frente A completa** — Scribe plugado, aviso provider-aware (§3) | não |
 | **4** | Preço por caractere em `pricing.ts` + log em `llm_calls` (§4.6) | não |
 | **5** | `texto-falavel.ts` + `sintetizar.ts` + ponto `sintese_de_voz` (§4.1, §4.3) | não |
-| **6** | Colunas `voz_enabled`/`voz_quando` + regra de quando falar + envio idempotente (§4.2, §4.5) | **sim** |
-| **7** | Tela: ligar a voz na versão do agente, escolher voz, ouvir prévia | não |
+| **6** | Colunas `voz_enabled`/`voz_quando` + regra de quando falar + envio idempotente (§4.2, §4.5) — **feita**, ver "Progresso" | **sim** |
+| **7** | Tela: ligar a voz na versão do agente, escolher voz, ouvir prévia — **falta só isto** | não |
 
 Fase 1→3 entrega valor sozinha (ouvir melhor) e pode ir para produção antes de qualquer linha de
 TTS. **Fase 4 vem antes da 5 de propósito:** medir o gasto antes de habilitar o gasto.

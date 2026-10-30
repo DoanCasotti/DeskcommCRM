@@ -40,6 +40,21 @@ export interface ChannelSendInput {
     /** Valor por slot, chaveado por `slotKey` — a mesma chave da tela. */
     values: Record<string, string>;
   };
+  /**
+   * Presente = este envio é uma NOTA DE VOZ (Fase 6b do plano de voz,
+   * `docs/superpowers/plans/2026-10-29-voz-elevenlabs.md`), não texto.
+   *
+   * Opcional pela MESMA razão do `template` acima: um adapter que ignore o
+   * campo manda `body` como texto — degrada, não quebra. Hoje só o adapter
+   * WAHA-via-CRM o lê (repassa direto a `SendMessageInput.voz`, mesmo shape).
+   */
+  voz?: {
+    textoOriginal: string;
+    apiKey: string;
+    voiceId: string;
+    modelId?: string;
+    upload: (audio: Buffer, mimeType: string) => Promise<string>;
+  };
 }
 
 /**

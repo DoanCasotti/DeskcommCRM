@@ -27,7 +27,7 @@ import { parseServiceBoundary } from '@/lib/atendimento/fronteira';
  *      rotaciona o id (tentativa lógica nova).
  */
 import { sendWithLedger, pgSendLedger, type SendOutcome } from './send-ledger';
-import { resolverCaminhoDeVoz, VozLedgerTerminalError } from './send-voice';
+import { registrarCustoDeVoz, resolverCaminhoDeVoz, VozLedgerTerminalError } from './send-voice';
 export type { SendOutcome, SendLedgerStatus } from './send-ledger';
 
 import { ApiError } from '@/lib/api/types';
@@ -175,6 +175,18 @@ export async function sendTurnMessage(
         upload: input.voz.upload,
       });
       vozResolvida = { mediaStoragePath: r.mediaStoragePath, mimeType: r.mimeType };
+      // Custo entra no orçamento SÓ quando a síntese de fato ACONTECEU agora
+      // — um retry que reusou o path de uma tentativa anterior não pagou o
+      // ElevenLabs de novo, e registrar de novo contaria um gasto que não
+      // existiu, inflando o orçamento da organização por retry.
+      if (r.sintetizouAgora) {
+        registrarCustoDeVoz({
+          supabase: cfg.supabase,
+          organizationId: input.tenantId,
+          caracteres: r.caracteres,
+          modelId: input.voz.modelId ?? 'eleven_multilingual_v2',
+        });
+      }
     } catch (err) {
       // A linha já tinha desfecho TERMINAL antes de chegarmos aqui — não há
       // síntese a fazer nem envio a tentar; o resultado É esse desfecho.

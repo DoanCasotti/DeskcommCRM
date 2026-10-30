@@ -53,6 +53,8 @@ import { WahaChannelAdapter } from '../edge/channel/waha-adapter';
 // applySendOutcome é disposição de FILA (cancel/reschedule + cache de opt-out), não
 // egress de canal — o envio em si vai pelo adapter (ChannelAdapter). Ver F2-25.
 import { applySendOutcome } from '../edge/crm/send-message';
+import { resolverVozDoTurno } from './voz-do-turno';
+import { textoFalavel } from '@/lib/ai/voz/texto-falavel';
 import {
   LlmBudgetExceededError,
   runModelCall,
@@ -483,6 +485,58 @@ export async function loadInboundBodyForJob(
   );
   const row = result.rows[0];
   return row === undefined ? null : corpoDaMensagem(row);
+}
+
+/**
+ * O `type` (não o corpo) da mesma mensagem que `loadInboundBodyForJob` lê —
+ * função IRMÃ, não extensão daquela: mudar o retorno de uma função já usada
+ * em produção (`string | null`) para acrescentar um campo arriscaria todo
+ * chamador que já existe. `resolverVozDoTurno` (Fase 6b do plano de voz) usa
+ * isto para decidir `voz_quando='espelhar'` — falar só quando o CLIENTE
+ * mandou áudio.
+ */
+export async function loadInboundTypeForJob(
+  db: Queryable,
+  input: { tenantId: string; conversationId: string; inboundMessageId: string },
+): Promise<string | null> {
+  const result = await db.query<{ type: string }>(
+    `select type
+       from messages
+      where organization_id = $1
+        and conversation_id = $2
+        and id = $3
+        and direction = 'inbound'
+      limit 1`,
+    [input.tenantId, input.conversationId, input.inboundMessageId],
+  );
+  return result.rows[0]?.type ?? null;
+}
+
+/**
+ * Sobe o áudio sintetizado para o MESMO bucket/convenção de path da mídia de
+ * sempre (`_handler.ts`, o worker de derivação) — `isMediaPathOwnedBy`
+ * (`lib/messaging/media/upload-validation.ts`) recusa qualquer path fora de
+ * `${organizationId}/${conversationId}/...`, e é exatamente por isso que o
+ * path abaixo começa assim.
+ *
+ * Exportada para o teste: é o único ponto, nesta frente, que fala com o
+ * Storage de verdade — o resto (síntese, idempotência) já é testado sem rede.
+ */
+export async function uploadDeVoz(input: {
+  tenantId: string;
+  conversationId: string;
+  jobId: string;
+  seq: number;
+  audio: Buffer;
+  mimeType: string;
+}): Promise<string> {
+  const path = `${input.tenantId}/${input.conversationId}/voz-agente-${input.jobId}-${input.seq}.mp3`;
+  const admin = createAdminClient();
+  const { error } = await admin.storage
+    .from('whatsapp-media')
+    .upload(path, input.audio, { contentType: input.mimeType, upsert: false });
+  if (error) throw new Error(`voz_upload_failed: ${error.message}`);
+  return path;
 }
 
 /** Conteúdo do checkpoint — o modelo devolve, o Zod valida, o Postgres guarda. */
@@ -1988,6 +2042,32 @@ async function executarTurnoDoAgente(
           inboundMessageId: input.inboundMessageId,
         });
 
+  // Voz (Fase 6b do plano de voz): resolvida UMA vez por turno, antes de
+  // qualquer `send_message` — a pergunta "o agente fala agora" não muda
+  // entre tentativas do MESMO turno, e credencial/voice_id custam uma ida ao
+  // banco que não vale repetir por bolha.
+  //
+  // MODO PRÉVIA fica de fora: `!preview` — prévia é teste, nunca vira nota de
+  // voz de verdade (e `agent_preview` nem está no menu de `send_message`
+  // real; é cinto e suspensório, não redundância morta).
+  const vozParaEsteTurno =
+    !preview && agentConfig?.vozEnabled
+      ? await resolverVozDoTurno({
+          pool,
+          tenantId,
+          vozEnabled: agentConfig.vozEnabled,
+          vozQuando: agentConfig.vozQuando,
+          inboundType:
+            input.inboundMessageId === undefined
+              ? null
+              : await loadInboundTypeForJob(pool, {
+                  tenantId,
+                  conversationId: input.conversationId,
+                  inboundMessageId: input.inboundMessageId,
+                }),
+        })
+      : null;
+
   // Seam de canal (F2-25): o envio vai SÓ pela interface ChannelAdapter — o
   // default WAHA-via-CRM envolve o sink F2-06. Instanciado por job (o pool é
   // per-job neste codebase); trocar o adapter não muda nada abaixo.
@@ -2716,8 +2796,39 @@ async function executarTurnoDoAgente(
               : {}),
             // `finalBody` = corpo após a cadeia (o disclosureGate F4-05 pode prependar o
             // disclosure via inject); é ELE que vai ao canal, não o `body` capturado da tool.
-            send: (finalBody: string) =>
-              sendInBubbles(finalBody, {
+            send: (finalBody: string): Promise<ChannelSendResult> => {
+              // Voz (Fase 6b): desvia da bolha INTEIRA, não acrescenta um
+              // campo a ela — uma nota de voz é UMA mensagem física, nunca
+              // três. `vozParaEsteTurno` já veio resolvida (credencial +
+              // voice_id) antes do turno chegar aqui; `resolverVozDoTurno`
+              // devolve `null` para toda razão de não falar, então este
+              // branch só lida com "fala, e já sabe como".
+              if (vozParaEsteTurno) {
+                seq += 1;
+                const seqDesteEnvio = seq;
+                return liveChannel().send({
+                  tenantId,
+                  leadId,
+                  jobId: liveJob().id,
+                  jobClaim: claimOfJob(liveJob()),
+                  agentOperation,
+                  seq: seqDesteEnvio,
+                  conversationId: input.conversationId,
+                  // `body` continua sendo o texto FALADO — é ele que entra no
+                  // hash de idempotência do ledger (ver o comentário de
+                  // `SendMessageInput.voz` em send-message.ts).
+                  body: textoFalavel(finalBody),
+                  voz: {
+                    textoOriginal: finalBody,
+                    apiKey: vozParaEsteTurno.apiKey,
+                    voiceId: vozParaEsteTurno.voiceId,
+                    ...(vozParaEsteTurno.modelId ? { modelId: vozParaEsteTurno.modelId } : {}),
+                    upload: (audio, mimeType) =>
+                      uploadDeVoz({ tenantId, conversationId: input.conversationId, jobId: liveJob().id, seq: seqDesteEnvio, audio, mimeType }),
+                  },
+                });
+              }
+              return sendInBubbles(finalBody, {
                 enabled: agentConfig?.splitMessages ?? false,
                 maxChars: agentConfig?.splitMaxChars ?? 600,
                 sleep: deps.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms))),
@@ -2763,7 +2874,8 @@ async function executarTurnoDoAgente(
                     body: bubble,
                   });
                 },
-              }),
+              });
+            },
           };
           let chain = await runBeforeSend(beforeSendArgs);
           if (chain.status === 'vetoed' && chain.code === 'case_promise_without_case') {
