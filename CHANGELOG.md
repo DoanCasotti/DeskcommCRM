@@ -8,6 +8,320 @@ Se você roda o DeskcommCRM numa VPS, **leia a seção da versão para a qual es
 
 ## [Não lançado]
 
+## [1.95.0] — 2026-10-30
+
+### Adicionado
+
+- **Arrastar um arquivo para dentro da conversa anexa pelo mesmo caminho do botão** No Inbox, arrastar um arquivo de fora do navegador e soltá-lo sobre a área de digitação passou a abrir a mesma prévia do botão de anexar: o arquivo aparece com nome, campo de legenda e os botões de enviar ou cancelar, e nada sobe antes de o atendente confirmar. Soltar vários de uma vez enfileira todos, na ordem em que foram soltos, e o texto vai como legenda do primeiro que a aceita. Enquanto o arquivo está no ar, a área do compositor se destaca com o aviso "Solte o arquivo para anexar" — e o destaque não pisca quando o ponteiro atravessa o campo ou os botões.
+
+  O gesto obedece às mesmas regras do botão de anexar, porque é o mesmo caminho: conversa travada até alguém assumir, canal bloqueado, janela de 24 horas fechada na resposta e prévia já aberta continuam recusando o arquivo, e a nota interna continua aceitando como antes. O destino é decidido no momento em que o arquivo é escolhido, então um arquivo solto em "Nota interna" vai para o acervo interno e nunca para o cliente. Soltar texto, link ou um trecho da própria página não vira anexo: o navegador segue dono desse gesto.
+
+  Nada muda para quem continua usando o botão de anexar nem para quem cola uma imagem com Ctrl+V: o clique, a colagem e o arraste entram pela mesma fila de anexos, com o mesmo limite de tamanho, os mesmos tipos aceitos e o mesmo retry em caso de falha. Não há rota de upload nova, não há migration e não há nada a configurar na VPS.
+
+- **Atalhos no card do negócio: botões que ligam pelo softphone ou abrem o sistema da empresa com o dado do cliente** Cada funil pode ter até seis atalhos, cadastrados em Configurações › Funis. Eles aparecem no dossiê do negócio (quadro, lista e calendário) e no painel lateral do Inbox. Cada atalho tem um rótulo, um ícone e um endereço com marcadores como `{{telefone}}`, `{{nome}}` ou um campo personalizado. São aceitos `tel:`, `http://` e `https://`, e o domínio fica fixo no endereço. Quando o negócio não tem o dado que o atalho usa, o botão não aparece. Funil sem atalho continua igual. Nada muda na VPS.
+
+  Crédito: @webtecnica.
+
+- **O card do funil mostra os arquivos dos campos do tipo arquivo** O campo personalizado do tipo arquivo já podia ser criado e já recebia upload no dossiê do negócio, mas o card do funil não o mostrava: o operador subia o contrato e o quadro não dizia que aquele negócio tinha documento.
+
+  Agora o card mostra, por campo, a contagem e o nome de cada arquivo, com o total real mesmo quando há mais do que cabe na linha. Clicar abre o documento pela mesma rota autenticada de mídia, com URL assinada de curta duração, e não abre o dossiê por cima. Campo declarado e vazio aparece com zero e o aviso de que não há arquivo anexado, em vez de desaparecer.
+
+  Nada muda para quem nunca criou um campo desse tipo: nenhuma consulta nova e nenhum dado a mais na resposta do quadro. Se a sua integração lê a rota do quadro de um funil que tem campo de arquivo, cada negócio passa a trazer também o campo `anexos`. Nenhuma migração de banco é necessária: os anexos já moram na tabela própria, criada com o campo.
+
+  As travas de etapa (só mover o negócio quando o documento exigido estiver anexado) não entram nesta fatia. Crédito: @webtecnica.
+
+- **Novos modelos da OpenAI e Anthropic aparecem automaticamente** O catálogo diário passa a descobrir novos modelos de conversa da OpenAI e Anthropic com ferramentas, sem esperar uma atualização do sistema a cada lançamento. A consulta usa o catálogo público Models.dev, sem chave adicional. As escolhas dos agentes e as entradas já cadastradas são preservadas; se a fonte falhar, a lista existente continua disponível. Crédito: @rafaelcesardev.
+
+- **Quem já comprou e volta a escrever pode entrar pelo funil de clientes, e não pelo de captação** Nova opção em Configurações › Distribuição de atendimento, desligada de fábrica. Ligada, o contato que tem um negócio ganho e nenhum aberto passa a contar como cliente. A conversa nova dele nasce no funil marcado como de clientes. Sem funil de clientes marcado, ela nasce no funil padrão, como antes. Nos dois casos, a linha do tempo do negócio cita a venda anterior: há quantos dias foi, em que funil e por quanto. Uma janela de pós-venda opcional (0 a 365 dias, padrão 0) evita abrir negócio para quem acabou de comprar e escreve só para confirmar a entrega. A opção aparece também em Recursos opcionais. Organização que não ligar nada fica igual. Nada muda na VPS.
+
+  Crédito: @webtecnica.
+
+- **A duração do atendimento pode ser escolhida na hora de marcar** O painel de marcação abre com a duração do serviço no campo "Duração (minutos)" e deixa você mudá-la para este atendimento — 90 minutos para uma visita técnica que vai demorar, 15 para um retorno rápido. O padrão continua sendo a duração cadastrada no serviço; quem não mexer no campo marca como sempre marcou.
+
+  O que muda de verdade é a lista de horários: ela passa a ser calculada com a duração escolhida. Um horário que tem só 30 minutos livres deixa de aparecer quando você pediu 90, em vez de ser oferecido e marcar por cima do próximo compromisso. A grade não se desloca — os horários continuam os mesmos de meia em meia hora (ou do intervalo configurado), o que muda é quanto cada um precisa ter livre.
+
+  Valores fora de 5 a 1440 minutos são recusados na própria tela, antes de qualquer chamada ao servidor: o campo avisa o motivo e o botão de confirmar fica travado. Trocar a duração depois de já ter escolhido um horário limpa a escolha, porque aquela lista era de outra régua.
+
+  Serviço com agenda publicada (reserva com vaga e ocorrência) não muda: nele a duração vem da agenda do serviço, e a marcação recusa uma duração avulsa com a mensagem de que ela é definida na agenda do serviço. Remarcar um compromisso também não muda: o bloco mantém o comprimento que já tinha.
+
+- **O editor do agente lista as ferramentas do servidor MCP externo e liga cada uma no agente** No cartão "Usar o servidor de ferramentas externo durante o atendimento", na tela do agente, o dono da instalação passa a ver as ferramentas que o servidor anuncia e marca quais o agente pode usar, escolhendo leitura ou escrita em cada uma. Antes o cartão era só um interruptor: o agente não recebia ferramenta nenhuma do servidor, e o servidor não via requisição nenhuma durante o atendimento.
+
+  Durante a conversa com o cliente só rodam as ferramentas marcadas como leitura, e só quando o próprio servidor as declara assim; as de escrita continuam recusadas. Ligar um pacote de capacidades não apaga mais essas escolhas, e elas contam no limite de 27 capacidades por agente.
+
+  Crédito: @webtecnica, e @luka1601, que achou o mesmo buraco e o mediu numa instalação em produção (#3578).
+
+- **O contato pessoa física passa a ter endereço (CEP, rua, número, bairro, cidade, UF) na ficha** Até aqui só a empresa tinha endereço; quem vendia para pessoa física e precisava entregar ou cobrar guardava a rua em campo personalizado ou fora do CRM. Agora o diálogo de edição do contato tem CEP, UF, logradouro, número, complemento, bairro e cidade, e a ficha mostra o endereço numa linha quando ele existe. A API de contatos aceita os mesmos campos no POST e no PATCH (`zip_code`, `street`, `number`, `complement`, `district`, `city`, `state`).
+
+  Todos os campos são opcionais: contato sem endereço segue como estava, e a ficha não mostra o bloco. A anonimização (LGPD) apaga o endereço junto com nome, e-mail e telefone, e o relatório de acesso do titular passa a trazê-lo.
+
+  Nada muda para quem opera a VPS: as colunas entram pela atualização normal, sem edição de arquivo. A busca pelo CEP e o endereço na exportação de contatos ficam para depois. Crédito: @webtecnica.
+
+- **Levar para outro funil deixa escolher a etapa de entrada** O diálogo "Levar para outro funil", aberto pelo menu do card e pelo painel da conversa, passou a oferecer a etapa de entrada no funil de destino, com as etapas abertas daquele funil. Antes o negócio sempre nascia na primeira etapa aberta, o que obrigava a arrastar o card de novo quando a troca acontecia porque o negócio avançou: SDR que passa ao closer caía em "Novo", cliente levado para pós-venda caía em "Onboarding", e o caminho ainda disparava as automações das etapas intermediárias e contava tempo em etapa que o negócio nunca viveu. Quem não escolhe etapa continua com o comportamento de antes, e o servidor segue decidindo a primeira aberta. Trocar o funil limpa a etapa escolhida, e um funil sem etapa aberta avisa na tela em vez de deixar o pedido falhar. Não exige configuração nem atualização da instalação.
+
+- **Juntar duas fichas guarda os dois telefones, e a mensagem pelo segundo número cai na mesma ficha** Quando a mesma empresa fala por dois números e você junta as duas fichas, o número da ficha absorvida passa a ficar guardado na ficha que ficou, como telefone extra, com o tipo (fixo, celular ou outro) e se tem WhatsApp. A próxima mensagem ou ligação por esse número cai na mesma ficha, em vez de abrir uma terceira, e a resposta pelo WhatsApp sai pelo número que escreveu. A ficha mostra os telefones, e o principal ganha o tipo, sugerido pelo próprio número. Um número só pode estar em uma ficha. Os campos personalizados da ficha absorvida também passam para a que ficou, sem apagar o que ela já tinha. Anonimizar a ficha (LGPD) apaga também os telefones extras. Nada a fazer na VPS.
+
+- **GPT-6.1 Terra entra na lista de modelos** Em Provedores de IA e no seletor do agente passa a aparecer o GPT-6.1 Terra, o intermediário da linha 6 da OpenAI: mais capaz que o GPT-6 Luna e pela metade do preço do GPT-6.1 Sol. O custo dele é contado em Uso e orçamento. Quem deixou `OPENAI_REASONING_EFFORT` em `none` ou `minimal` pode usá-lo: ele aceita desligar o raciocínio, então recebe `none`, o mais rápido. O modelo padrão não muda. Crédito: @matheussouzasantos.
+
+- **Cada atendente escolhe quais blocos aparecem na lateral do Inbox, e em que ordem** Na lateral do contato no Inbox, a engrenagem no alto abre "Personalizar lateral": a pessoa liga ou desliga cada bloco (contato, tags, carteira, demandas, tarefas, follow-up, memória, leads, compras, pedidos, atividade, acervo e os demais) e muda a ordem arrastando ou pelos botões de subir e descer. A escolha vale só para quem a fez, em qualquer computador, e "Restaurar padrão" volta à lateral de sempre. Quem nunca abrir o diálogo continua vendo a lateral como antes; a única mudança para todos é que as tags do contato viram um bloco próprio, logo abaixo do cartão do contato. Esconder um bloco não apaga nem desliga nada no CRM. Nada muda na VPS: sem migration e sem configuração nova. Crédito: @webtecnica.
+
+- **No canal oficial direto, o modelo de mensagem agora se cria, edita e apaga pela tela do CRM** Quem conecta o WhatsApp pela API oficial direta, inclusive por coexistência, precisava sair do CRM para criar o modelo no Gerenciador do WhatsApp, esperar a aprovação e voltar para clicar em "Sincronizar". Quem usa o canal de parceiro já fazia isso pela tela.
+
+  Agora a aba de Modelos do canal oficial tem "Criar modelo", e cada modelo tem "Editar" e "Apagar". O formulário é o mesmo do canal de parceiro: categoria, cabeçalho com imagem enviada do computador, corpo, rodapé e botões. O modelo criado ou editado volta para revisão e aparece na lista como pendente. Apagar pede confirmação e, se o modelo estiver em uso num follow-up ou num agente, mostra onde antes de apagar. Apagar é definitivo na conta do WhatsApp. Criar, editar e apagar exigem o papel de administrador.
+
+  Quando a conta do WhatsApp não tem a permissão de gerenciar modelos (`whatsapp_business_management`), a tela diz qual permissão falta, em vez de um erro genérico. Conexão sem conta ou sem token gravado recebe o pedido de reconectar o número. O botão "Sincronizar" continua igual. Nenhuma migração de banco é necessária e nada muda na VPS.
+
+  Crédito: @webtecnica.
+
+- **O negócio guarda o valor único e a mensalidade, cada um no seu campo** Quem vende implantação mais mensalidade — agência, clínica, escola, software — tinha um campo de valor só, e escolhia entre gravar o setup (o contrato parecia menor do que é) ou somar tudo (ninguém sabia quanto entrava por mês). Agora o negócio tem, ao lado do valor, um valor recorrente mensal e a duração em meses.
+
+  O card do funil, a lista do funil, o painel lateral do atendimento e a última compra do contato mostram as duas parcelas separadas: R$ 3.000,00 + R$ 500,00/mês. Nada é somado em lugar nenhum. Negócio que só tem valor único continua exatamente como era, e apagar a mensalidade limpa a duração junto — não sobra contrato com prazo e sem valor.
+
+  O agente também grava e devolve os campos novos pelas ferramentas de negócio, e o banco recusa mensalidade negativa, periodicidade desconhecida e duração fora de 1 a 600 meses. Os relatórios e a previsão do funil passam a considerar a recorrência numa próxima entrega.
+
+- **O balão da IA no Inbox mostra o nome do agente que respondeu, e o +N das etiquetas mostra as ocultas ao passar o mouse** No Inbox, a mensagem enviada por um agente de IA passa a mostrar no balão "IA · <nome do agente>", em vez de só "IA". Com mais de um agente atendendo pelo mesmo número, dá para saber qual deles respondeu sem abrir nada. O nome é gravado na própria mensagem no momento do envio, então mensagens antigas, e as enviadas por caminhos que não identificam o agente, continuam mostrando "IA". Na lista de conversas, ao passar o mouse sobre o "+N" das etiquetas, aparecem as etiquetas que não couberam. Nada muda na VPS.
+
+  Crédito: @webtecnica.
+
+- **Sugestão de resposta avisa quando uma versão anterior foi barrada, com a causa** No modo assistido, a conferência pode barrar uma versão da resposta, e o agente pode escrever outra na mesma rodada. Até aqui, a sugestão que vinha depois chegava ao painel de revisão da Inbox sem nenhum sinal disso. Agora aparece uma linha discreta acima do texto: "Uma versão anterior desta sugestão foi barrada: <causa>. Confira antes de enviar.", com a causa em poucas palavras (por exemplo, "afirmava um fato sem apoio no material de referência"). Quem atende confere a sugestão sabendo do histórico. Aprovar e rejeitar continuam iguais. Não há mudança de banco nem nada a fazer na VPS.
+
+- **O painel da conversa mostra o negócio do cliente quando ele escreve de outro número, e a busca do funil acha o card pelo telefone** Quando o cliente escreve de um número adicional, cadastrado como pessoa relacionada no negócio, o painel ao lado da conversa passa a mostrar esse negócio em vez de "Sem leads". Se esse número tiver um negócio próprio aberto, o próprio continua na frente; um negócio próprio já ganho ou perdido não esconde mais o negócio aberto do cliente. A busca do quadro do funil passa a achar o card pelo telefone principal do contato, digitado com ou sem máscara, como "(11) 99999-8888". Nada muda na VPS.
+
+  Crédito: @webtecnica.
+
+- **O negócio enxerga os outros números do cliente** Na lista "Pessoas relacionadas" do negócio, o botão "+ telefone" liga ao card o número de outra pessoa do cliente (o comprador, o gerente, o fixo da loja): o CRM acha o contato que já tem aquele número ou cria um novo. Cada pessoa da lista mostra o número e o atalho para a conversa dela. A partir daí, a mensagem que chega desse número não abre outro card enquanto o negócio estiver aberto, e a ligação dele cai na linha do tempo do negócio do cliente. Quem é o contato principal de um negócio próprio continua como antes. Crédito: @flaviosiq.
+
+- **Prospecção a partir da sua própria planilha** Em CRM → Prospecção, o cartão "1. Encontrar empresas" ganha a aba "Usar minha planilha": envie um arquivo .csv ou .xlsx (primeira aba, até 500 empresas, com nome da empresa e telefone) e ele vira uma campanha em preparação, sem busca paga e sem precisar da chave do provedor. A tela mostra quantas empresas entraram e quais linhas foram recusadas, com o número da linha e o motivo; há um modelo para baixar. Quem já é contato do CRM continua sem ser abordado, quem foi excluído a pedido do titular não volta por planilha e enviar o mesmo arquivo duas vezes não duplica nada. O campo "De onde veio esta lista?" é obrigatório e fica registrado na campanha. Nenhuma abordagem começa nesta etapa. Não exige ação na atualização. Crédito: @paulolimajr77.
+
+- **A prospecção preenche os links da ficha do contato** Cada contato criado pela prospecção agora nasce com os endereços que a busca achou: site, Instagram, Facebook, LinkedIn e Google Meu Negócio. Um endereço do Instagram que veio no campo de site vai para o Instagram, e não para o Site. Os contatos que já existem não são alterados pela prospecção; eles são completados pelo botão "Completar fichas", que acrescenta só os links que estão faltando e não altera o que a pessoa já digitou na aba Links. Crédito: @paulolimajr77.
+
+- **Refazer uma atualização com falha pela tela** Quando o servidor confirma uma instalação oficial e anuncia suporte, o dono
+  pode pedir pela tela que uma atualização com falha seja refeita, inclusive na
+  mesma versão. O pedido preserva a cópia de segurança e as conferências do kit.
+  Instalações personalizadas ou sem confirmação continuam exigindo conferência
+  antes de substituir suas imagens.
+
+  O agente de voz passa a informar a disponibilidade de seu listener interno,
+  permitindo incluí-lo na confirmação das imagens da instalação. Isso não declara
+  que tronco, áudio ou chamada foram verificados.
+
+- **Uma regra automática pode atuar no máximo uma vez por contato** Na edição de uma regra automática, a opção **Rodar no máximo uma vez por contato**
+  evita repetir suas ações quando outro evento do mesmo contato chegar. Ela
+  começa desligada; as regras existentes continuam funcionando como antes.
+  A aba Atividade informa quando uma execução foi impedida por essa opção.
+
+  Os novos recibos de erro guardam códigos técnicos em lugar da frase livre
+  devolvida por um provedor, que pode conter dados pessoais. Os motivos de parada
+  e os identificadores de entrega continuam disponíveis para investigação.
+
+  Contribuição de @webtecnica, a partir do PR #3267.
+
+- **A tela Duplicados sugere fichas com nome parecido, e dá para juntar duas fichas escolhidas à mão** A mesma empresa que entrou com dois telefones aparece em "Parecidos — confira", com os dados lado a lado. "Não são a mesma empresa" tira a sugestão para todos. Na ficha, "Juntar com outra ficha" busca e junta. Juntar continua sendo decisão de uma pessoa (gestor). Nada a fazer na VPS.
+
+- **Respostas rápidas combinam texto, imagens e áudio** Cadastre respostas rápidas com texto, imagens, áudio ou suas combinações. No
+  Inbox, os anexos passam pela prévia antes do envio; o texto acompanha a imagem
+  ou continua no campo quando a resposta leva somente áudio.
+
+  Na edição, é possível substituir o áudio mesmo no limite de cinco mídias e
+  marcar sua remoção, desfazer ou cancelar antes de salvar. Se um upload falhar
+  depois da criação, confira a resposta já criada na lista antes de tentar de
+  novo; ela pode ser completada pela edição ou removida manualmente.
+
+- **Respostas rápidas podem ser organizadas em grupos opcionais** Na tela de Respostas rápidas, quem é gerente ou administrador ganha o botão "Novo grupo" para criar grupos como "Atendimento inicial", "Follow-up" ou "Negociação". Os grupos podem ser renomeados, reordenados e excluídos. No formulário da resposta aparece o campo "Grupo (opcional)", e a lista da tela e a barra de respostas do Inbox passam a mostrar cada grupo com as respostas dele. As respostas sem grupo ficam juntas em "Sem grupo".
+
+  O recurso é opcional. Enquanto a organização não cria nenhum grupo, a tela, o formulário e a barra do Inbox continuam iguais aos de antes. Excluir um grupo não apaga nenhuma resposta: as dele voltam para a lista sem grupo. Atendentes veem os grupos e podem escolher um para a própria resposta, mas só gerente ou administrador cria, renomeia, reordena ou exclui grupos.
+
+  Para quem opera a VPS, a tabela de grupos e a coluna nova entram pela atualização normal, sem editar nenhum arquivo. Crédito: @webtecnica.
+
+- **Escolha agentes pelo telefone do remetente** Roteadores podem reservar agentes para números completos com DDI. Com regras por remetente, a escolha usa o número do chat gravado pelo canal na mensagem recebida, antes de qualquer classificação por IA; os demais contatos usam um fallback público obrigatório. Configuração inválida ou agente indisponível interrompe o turno e segue o mecanismo existente de falha/reprocessamento, sem abrir o atendimento genérico.
+
+- **Setores de atendimento na Equipe, como módulo opcional** Setores de atendimento entram como **módulo opcional da instalação, desligado por padrão**: quem administra o servidor liga em **Admin › Sistema › Setores de atendimento**. Ligado, em **Equipe › Setores** dá para cadastrar os setores da empresa (Comercial, Suporte, Financeiro…), com nome e descrição, e ver quantos atendentes há em cada um. Na aba **Atendimento**, cada atendente ganha a coluna **Setor**, onde o gerente escolhe o setor da pessoa, e um filtro para ver a equipe de um setor só. O setor organiza a equipe; ele **não** muda quem recebe as conversas, que continuam distribuídas pelo modo de atendimento de sempre. Apagar um setor não mexe em ninguém: os atendentes dele ficam "sem setor", com jornada, carga e conversas intactas. Desligar o módulo esconde a aba e a coluna e guarda os setores já cadastrados. Quem trabalha em outro fuso passa a ter o fuso indicado ao lado do horário na aba Atendimento, com ou sem o módulo. Nada muda na VPS: a atualização cria as tabelas sozinha. Crédito: @luka1601 (#3485).
+
+### Alterado
+
+- **Cada tela do sistema pergunta menos ao banco quem você é e o que pode fazer** Antes, cada navegação refazia a conferência inteira de acesso no banco: quem está logado, de quais empresas a pessoa faz parte, se é dona da instalação e se há um acompanhamento em curso. Agora o resultado vale por até 30 segundos dentro do mesmo processo, o que corta a maior parte dessas consultas (a #3696 mediu cerca de 42 mil em 17 horas de uso; a estimativa para o mesmo uso é de cerca de 11 mil). Tirar alguém da equipe, trocar o papel, suspender ou reativar a empresa pelo painel, entrar ou sair de um acompanhamento, sair da conta e ativar a verificação em duas etapas continuam valendo já na requisição seguinte. Na cobrança, também vale na hora quando a mudança sai do próprio sistema: "Já paguei", cancelar a assinatura, a rodada de hora em hora da cobrança, a troca de conexão com o provedor, dar prazo e tornar a empresa isenta. Quando a mudança chega pelo aviso do provedor de pagamento, quem a processa é o serviço de fundo (worker), que não alcança a memória do app: ali a suspensão ou a liberação pode levar até 30 segundos para valer, na tela e também nas ações: a empresa recém-suspensa ainda opera por até esse tempo, e a recém-liberada ainda vê o aviso de suspensa. O mesmo teto vale para qualquer mudança feita direto no banco, fora do sistema (psql, painel do Supabase): vínculos, idioma da pessoa e dados da empresa levam até 30 segundos para aparecer. Sair e entrar de novo na conta atualiza na hora. O papel de cada pessoa na equipe continua sendo conferido no banco a cada ação. Nada muda na VPS.
+
+  Crédito: @webtecnica.
+
+- **Curso em espanhol e manutenção com IA** O curso público ganha capturas da interface em espanhol e um procedimento de manutenção com IA acessível ao Claude e ao Codex pelo guia deskcomm-curso. O fluxo compara a fonte publicada com as mudanças do produto, identifica aulas para revisão, refaz imagens e mede novamente as áreas do simulador. Uma captura com falha bloqueia a publicação, mesmo quando existe uma imagem antiga. Não exige configuração ou atualização da VPS do cliente.
+
+- **O log do turno do agente passa a trazer a duração do turno e dos classificadores** O log `turno do agente concluído` ganha dois campos: `duracao_do_turno_ms` (o turno inteiro, do início ao fim, incluindo a pausa humana e o intervalo entre envios) e `classificadores_ms` (os classificadores auxiliares, que rodam em paralelo). O comportamento do agente não muda. A metodologia para medir a latência está em `docs/research/medicao-latencia-turno-agente.md`. Nada muda na VPS.
+
+  Crédito: @webtecnica.
+
+- **O menu pede a tela só quando alguém vai para ela** A barra lateral deixava o `<Link>` do App Router prefetchar cada item visível: medido, uma tela de `/app` disparava 37 requisições `?_rsc=` sozinha (3 a 4 depois), cada uma um render completo (verificação de sessão no proxy, `loadAuthUser` e as cinco consultas da casca) para devolver apenas o esqueleto de ~2,3 KB — e esses renders disputavam o servidor com a tela que a pessoa clicou. O prefetch do menu passa a ser por intenção: ponteiro sobre o item ou foco pelo teclado, uma vez por destino. Nada muda no que a tela mostra; muda quanto ela pede antes de alguém pedir.
+
+### Corrigido
+
+- **Agente não confirma horário sem agendar, remarcação não duplica e turno mudo se corrige** O agente deixava de confirmar horário "de cabeça": uma frase abrindo com
+  "Confirmado: …" sem a ferramenta de agenda ter sido chamada agora é vetada
+  pela cerca before-send e ele usa a agenda de verdade antes de prometer.
+  A remarcação pedida por descrição não cria mais um segundo agendamento — o
+  movimento sai com a ferramenta certa, com a receita de ferramenta alinhada ao
+  prompt publicado. Quando o turno termina sem nenhuma mensagem chegar ao
+  cliente (resposta cortada ou texto escrito fora do envio), o sistema pede uma
+  única correção, também quando um envio foi recusado por uma regra de texto,
+  e ela agora tem passos suficientes para entregar a mensagem. Quando o envio é
+  recusado porque o contato pediu para sair, é interno, está com a equipe ou
+  está anonimizado, nada é pedido de novo: o silêncio ali é a decisão certa.
+  Nada muda na VPS — a correção chega pela atualização normal.
+
+- **Devolução do atendimento, avisos do negócio e QR sem pareamento** O botão de devolver ao automático respeita o responsável da conversa, inclusive
+  quando outra pessoa assume durante a operação. Os avisos de atribuição, ganho e
+  perda consultam o registro do negócio quando a aba ainda não o conhece e usam o
+  instante exato da mudança, evitando reapresentar uma atribuição anterior.
+  Confirmações atrasadas respeitam o contexto e o responsável em vigor.
+
+  Quando um QR expira sem pareamento, a sessão é arquivada e libera a vaga do
+  plano. Se o número já conectou durante a operação, a conexão é preservada. O
+  histórico permanece disponível e o assistente pode retomar a mesma sessão.
+
+  Contribuições de @webtecnica nos PRs #3452, #3438 e #3423, incorporadas com
+  ajustes de concorrência e testes adicionais.
+
+- **A régua da cobrança e o aviso de teto de IA passam a alcançar toda empresa, mesmo depois da milésima assinatura** Numa instalação com mais de 1.000 assinaturas, a rodada horária da cobrança lia só as primeiras 1.000 linhas: as empresas além delas ficavam fora da régua de lembretes e suspensão e do aviso de gasto de IA perto do teto. A leitura agora vai página por página, em ordem fixa, sem pular nem repetir empresa, e os dados das empresas do aviso de IA são lidos em lotes, sem o mesmo corte. A "última leitura" mostrada em Cobrança › Visão geral também passa a ser a mais recente de verdade, e não a mais recente de uma fatia de 1.000 linhas. Instalação com menos de 1.000 assinaturas não vê diferença. Nada muda na VPS.
+
+  Crédito: @webtecnica.
+
+- **A comissão passa a nascer nos itens lançados pelo balcão, pelo faturamento em lote e pelo negócio ganho** Antes, o item lançado na tela de Comandas saía sem atendente e não gerava comissão, e o faturamento em lote e o negócio ganho gravavam o item com 0%. Agora o item vai para quem atendeu: no faturamento em lote, o dono do agendamento; no balcão, o dono do agendamento da comanda ou, na comanda avulsa, quem a abriu. Os três caminhos resolvem o percentual pelas regras de comissão em vigor. Também passa a aparecer o nome de quem atendeu na lista de regras de comissão e em Faturamento, que mostravam "alguém" e "Sem responsável". Comissões já geradas não mudam.
+
+- **A importação de contatos desconsidera identificadores que ficaram só na ficha mesclada** Ao importar contatos por CSV, um telefone ou e-mail que ficou apenas no cadastro absorvido por uma mesclagem deixa de ser descartado como duplicado. Se o identificador pertence a um contato ativo da organização, a importação continua pulando a linha como antes. Crédito: @samirhvbr.
+
+- **Contato criado pela ficha ou pela prospecção abre a conversa no WhatsApp, mesmo com rede social conectada antes** Ao criar um contato com telefone pela ficha ou pela prospecção, a conversa nova abria na conexão de mensagem mais antiga da empresa. Quem conectou Instagram ou Facebook antes do WhatsApp via a conversa nascer na rede social, que não alcança telefone. Agora a escolha prefere o WhatsApp quando o contato tem telefone. A importação por planilha continua sem abrir conversa, e uma falha ao abrir a conversa passa a ficar registrada no log em vez de sumir. Nada muda na VPS.
+
+  Crédito: @webtecnica.
+
+- **Três rotinas de fundo deixam de gravar no banco quando nada mudou** Numa instalação parada, três rotinas gravavam no banco a cada minuto sem mudar nada: a sincronização das agendas Google carimbava todas as conexões do lote, a verificação do agendador de pausas fechava um aviso da Central que não existia, e o vigia das sessões do WhatsApp mandava atualizar sessões que já estavam certas. Agora cada uma só grava quando há o que mudar. A agenda Google continua passando por todas as conexões em rodízio, e continua registrando a última leitura quando uma agenda é lida. Isso reduz escrita e uso de disco do banco na VPS. Nada muda na tela nem na configuração.
+
+  Crédito: @webtecnica.
+
+- **Teste da recuperação de faltas deixa de depender da lentidão das telas** O teste de ponta a ponta que confere a recuperação de faltas da agenda (envio
+  inline, retomada pelo executor e proteção de agenda além de mil compromissos)
+  passou a falhar depois que as telas ficaram mais rápidas com o cache curto da
+  autorização: o terceiro envio do mesmo número caía dentro do intervalo
+  anti-banimento e era adiado, então a corrida que o teste mede nunca acontecia.
+  O número de teste agora declara intervalo zero, como os demais testes que não
+  medem o ritmo. Nada muda no produto nem na VPS.
+
+- **O aviso de caso não abre mais conversa com o número da equipe quando o WhatsApp está em modo privacidade** Em instalações com o WhatsApp em modo privacidade, o aviso de caso enviado para o número da equipe voltava pelo WhatsApp e aparecia na Inbox como um contato novo, com uma conversa de mensagens marcadas como enviadas pelo "Celular". Agora o sistema reconhece esse eco também nesse modo e não cria contato nem conversa. Contatos e conversas que já foram criados assim não são apagados automaticamente: quem os vir pode removê-los à mão. Nada muda na VPS.
+
+  Crédito: @webtecnica.
+
+- **Entrar com Google abre a tela do Google também quando o Supabase responde no domínio do CRM** Em instalações que servem o Supabase no mesmo domínio do CRM, como a de servidor único, o botão "Entrar com Google" trocava o endereço na barra do navegador e a tela de login ficava parada até a pessoa recarregar a página. Agora o clique leva direto à tela de consentimento do Google, em qualquer forma de instalação. Crédito: @seax-trophy.
+
+- **Em espanhol, o botão de salvar e abrir a conversa deixa de misturar português** No cadastro de contato e no de negócio, o botão "Salvar e iniciar conversa" aparecia em espanhol como "Guardar e iniciar conversa", com a última palavra em português. Agora aparece como "Guardar e iniciar conversación". Não é preciso mexer em nada na VPS.
+
+- **Configurações financeiras não trava após consultar a equipe no atendimento** Ao abrir Configurações › Financeiro depois de uma tela de atendimento, a seção
+  de regras de comissão podia mostrar “Algo deu errado”. As duas telas agora
+  compartilham a mesma lista de pessoas no cache, sem exigir recarregar a página.
+
+  Comissão e Faturamento também usam o nome cadastrado da equipe nos seus rótulos,
+  mantendo a indicação existente quando a pessoa não tem nome ou não está na lista.
+
+- **As tabelas criadas pela atualização recebem permissões explícitas e continuam acessíveis depois da mudança da Supabase de 30/10** A partir de 30/10/2026 a Supabase deixa de dar permissão automática a tabela nova. As 48 tabelas que a atualização cria e que dependiam dessa permissão automática passam a recebê-la de forma explícita, só do tamanho que o sistema usa: o servidor lê e grava, a pessoa logada só faz o que as regras de acesso já permitiam, e o visitante sem login não alcança nenhuma delas. Nada muda no uso do sistema. As tabelas dos módulos opcionais (honorários e vendas) ficam para uma próxima entrega. Crédito a @webtecnica pela descoberta e pelos testes que esta entrega reaproveita.
+
+- **Guias do hub do CRM aparecem na ordem em que foram instalados** Em "Orientações instaladas", no hub do CRM, os guias ativos passam a aparecer na ordem em que foram instalados. Antes a lista vinha na ordem interna do banco, e uma trilha publicada como "Fase 1 … Fase 8" aparecia embaralhada. Quais guias cada organização vê não muda. Nada muda na VPS.
+
+  Contribuição de @disson-dev (#3629).
+
+- **O diagnóstico de saúde separa o projeto Supabase fora do ar da lentidão** Quando o projeto Supabase está fora do ar (resposta `522`, ou `503` com `PGRST002` ao carregar o cache de schema), o `/api/v1/health` agora diz `reason: projeto_indisponivel` em vez de `tempo_esgotado`, e o detalhe autenticado aponta o runbook de recuperação. O runbook de `PGRST002` ganhou o ramo de falta de memória e disco, separado do replay do gateway. Crédito: @webtecnica, a partir do diagnóstico de @DPalmercs na #3677.
+
+- **Juntar duas fichas não troca mais o nome da ficha que ficou pelo da absorvida** Ao juntar duas fichas, a que fica mantém o nome que você viu na tela ao escolhê-la. Antes, quando ela não tinha nome digitado (caso comum de quem chegou pelo WhatsApp e só tem o apelido do perfil), o nome da ficha absorvida passava a ser o título da que ficou — e as automações e campanhas que usam o nome do contato tratavam a pessoa pelo nome do outro cadastro. O nome da absorvida não se perde: fica guardado no histórico da fusão, junto com o registro do cadastro absorvido. Nada a fazer na VPS.
+
+- **O lembrete de tarefa volta a avisar quando o responsável muda ou o prazo é adiado** O lembrete de prazo de tarefa só avisava uma vez por tarefa. Se outra pessoa assumia a tarefa, ela nunca recebia o lembrete; se o prazo era adiado, o aviso da nova data não saía. Agora o lembrete vale para cada combinação de responsável e prazo: quem assume é avisado, e o prazo adiado ganha o seu próprio aviso. A mesma tarefa, com o mesmo responsável e o mesmo prazo, continua avisando uma vez só, mesmo depois de o aviso ser resolvido na Central. Na atualização, uma tarefa que já teve o prazo ou o responsável trocado pode receber esse aviso uma vez. Nada muda na instalação. Conserto de @webtecnica (#3639).
+
+- **O lembrete da agenda prefere o canal do contato: com telefone, sai pelo WhatsApp em vez de ficar parado como \"remetente ambíguo\"** Numa empresa com WhatsApp e Instagram conectados, o lembrete de um compromisso sem canal definido (nem no tipo de agendamento, nem na conversa da reserva) ficava parado com o aviso de remetente ambíguo quando o contato também tinha escrito pelo Instagram nas últimas 24 horas. Agora, quando o contato tem telefone, o lembrete sai pelo canal de telefone. A escolha só desempata entre canais que podem enviar naquele momento: se o canal de telefone estiver desligado ou fora da janela de 24 horas, o lembrete sai pelo outro canal, como antes. O canal definido no tipo de agendamento ou na conversa da reserva continua mandando. Bloqueio do contato, horário de envio e espaçamento anti-banimento continuam valendo. Nada muda na VPS.
+
+  Crédito: @webtecnica.
+
+- **A aba Lista do funil passa a respeitar os filtros de Responsável e Status** Com a aba Lista aberta, a barra de filtros aparecia mas não mudava nada: escolher uma pessoa em Responsável mostrava os mesmos negócios de antes. Agora Responsável (uma pessoa, um agente de IA, Eu ou Sem responsável) e Status (abertos, ganhos, perdidos) filtram a Lista no banco, em todas as páginas, e trocar o filtro volta para a página 1. Busca, Tag, Apenas atrasados, Motivo e Categoria ainda valem só no Quadro, e a Lista avisa quando um deles está ligado. Nada muda na VPS.
+
+  Crédito: @flaviosiq.
+
+- **Menção apagada não sobrevive dentro de um nome maior** Na nota interna, apagar uma menção a “Ana” enquanto “Ana Lima” continua no texto agora remove a escolha apagada. Escolher outra Ana depois grava o id da pessoa escolhida, sem reaproveitar a menção anterior. Crédito: @samirhvbr.
+
+- **Menção em grupo mostra o nome do contato** No Inbox, mensagem de grupo que menciona alguém passa a mostrar o nome do contato cadastrado em vez do código de privacidade do WhatsApp (`@75235009282237`). O CRM passa a guardar, junto com a mensagem, a lista de quem foi mencionado, e cada menção é resolvida pelo contato que já existe na base. A menção a quem não está no CRM continua aparecendo como número, o texto original da mensagem não é alterado, e mensagem sem menção não muda em nada. Nada muda na VPS.
+
+  Contribuição de @webtecnica (#3591).
+
+- **Áudio, foto, vídeo e documento de contato pessoal deixam de ir ao provedor de IA** Antes, a mídia de um contato marcado como pessoal era transcrita ou descrita pela IA da organização, o que gastava token e mandava conteúdo da vida privada de alguém a um terceiro. Agora ela não sai da instalação. O arquivo continua salvo e tocável na conversa, e só o texto derivado não é gerado. Contatos comuns seguem iguais e, se a consulta de quem é o contato falhar, a mídia não é enviada e a leitura é tentada de novo. Nada muda na VPS. Crédito: @webtecnica.
+
+- **Mídias recebidas voltam a tentar após falha ao consultar a conexão** Quando a consulta da conexão falha por um instante, o recebimento de mídia usa as tentativas já previstas antes de desistir, em vez de tratar a conexão como incapaz de baixar arquivos. Crédito: @samirhvbr.
+
+- **Transferir a conversa leva junto o número de WhatsApp do novo responsável** Numa empresa com um número por vendedor, transferir uma conversa trocava só o responsável: a conversa continuava no número do vendedor anterior, e o novo respondia pelo WhatsApp do colega. A mensagem saía pelo número do antigo, e a resposta do cliente chegava no celular dele. Agora a conversa passa para o número do vendedor novo, e o diálogo Transferir avisa antes de confirmar: "a conversa vai continuar pelo número de Fulano". Na transferência pelo diálogo, a auditoria registra o número antigo e o novo. Trocar a carteira do cliente (também em lote) leva junto as conversas abertas do vendedor anterior e as que estão sem dono com a IA parada (silenciada, ou com o contato marcado para atendimento humano); as que a IA está atendendo continuam com a IA. Quem tem número próprio não consegue mais responder por uma conversa que está no número de outra pessoa: recebe um aviso dizendo o que fazer. Quem não tem número próprio, como um gerente fora da lista de quem atende o número, continua respondendo como antes. Nada muda em número compartilhado, no número geral da empresa (sem lista de quem atende), em conversa de grupo, nem quando o vendedor novo não tem número conectado do mesmo canal. Conversas que já estavam no número errado antes desta versão não são mudadas sozinhas: elas trocam de número na próxima transferência. Crédito: @webtecnica, que escreveu o conserto, e @hudson-souza-mkt, que mediu o defeito (issue 3642).
+
+- **O pedido de dados sem e-mail também entrega a cópia em arquivo** Quando a exportação de LGPD não tem e-mail configurado ou o titular não tem
+  endereço, o pedido fica em revisão e quem entrega os dados é uma pessoa da
+  equipe. Nesse caminho a tela do pedido dava o link do relatório em PDF e não
+  dava o do arquivo de dados (`data.json`) — a cópia que o próprio relatório
+  resume. Agora a tela mostra os dois botões, com o mesmo prazo de 72 horas. Só
+  aparece o que existe: pedido antigo, gerado antes do arquivo, continua com o
+  botão do PDF. Nada muda para quem recebe por e-mail.
+
+- **Aviso no celular volta a tentar após falha ao consultar a Central** Se a consulta de um aviso da Central falhar, o envio ao celular volta a tentar pelo processamento de eventos existente. Antes, a falha encerrava o envio como se aquele aviso não devesse chegar ao celular. Avisos removidos ou destinados apenas à tela continuam sendo ignorados. Crédito: @samirhvbr.
+
+- **O registro do turno adiado deixa de aparecer como falha interna** Quando o agente adiava um turno (limite de envio, fora da janela de horário, envio vetado ou passagem para uma pessoa), a consulta de registros de turno da API mostrava o código `internal_error`, o mesmo de uma falha de verdade. Agora mostra `job_settled`, e dá para separar o turno adiado do defeito. Nada muda na VPS. Crédito: @webtecnica.
+
+- **Reconciliação da cobrança escolhe as assinaturas antes do corte da API** A rodada de cobrança filtra e ordena as assinaturas no banco antes de receber a lista, respeitando o lote de 50 e a prioridade de quem nunca foi relido. Em instalações com muitas assinaturas, o limite de linhas da API podia esconder quem precisava de reconciliação, deixando um pagamento sem webhook fora da releitura. Crédito: @samirhvbr.
+
+- **O agente confere a escrita antes de confirmar um registro** A confirmação de registro é recusada quando a ferramenta não confirmou nenhuma
+  escrita no turno. As formas “será registrado” e “pode ser registrado” continuam
+  permitidas, pois falam de futuro ou possibilidade.
+
+  O controle usa o resultado da ferramenta e ainda não identifica a qual item
+  cada confirmação se refere. A instalação não exige configuração adicional.
+
+  Contribuição de @webtecnica, resgatada do PR #3529 (Refs #3333).
+
+- **Renomear uma etiqueta só na caixa preserva os filtros** Ao renomear uma etiqueta mudando maiúsculas e minúsculas, os contatos continuam
+  aparecendo no filtro e a lista de etiquetas das conversas mantém uma só grafia.
+  O nome de exibição e as etiquetas dos negócios conservam a forma digitada.
+
+  Resgate da contribuição de @webtecnica (#3562, issue #3507).
+
+- **Publicar agente deixa de falhar logo depois que a assinatura do ChatGPT renova o login** Com a assinatura do ChatGPT conectada, a renovação automática do login (várias vezes por hora) apagava a lista de modelos da conta, e o "Publicar" de qualquer agente respondia "modelo não encontrado" até alguém abrir a tela do agente. Agora a renovação mantém a lista, porque a conta é a mesma. Conectar de novo, que pode trocar de conta, continua recarregando a lista. Nada muda na VPS. Crédito: @paulolimajr77.
+
+- **A versão instalada corresponde às imagens em execução** O rodapé mantém a versão instalada visível mesmo quando há uma atualização
+  oficial disponível. Instalações personalizadas mostram separadamente a base
+  oficial e sua revisão, sem confundir o checkout do monitor com o CRM no ar.
+
+  A confirmação usa os serviços do compose, metadados imutáveis e proveniência
+  Git. Ausência, divergência ou confirmação vencida ficam explícitas. Uma falha de
+  atualização não desaparece apenas porque um processo declara a versão-alvo;
+  a reinstalação bem-sucedida continua reconhecida com confirmação posterior.
+  Alterações próprias precisam ser conciliadas antes de trocar imagens por uma
+  release pública. Heartbeats antigos permanecem compatíveis, sem alegar execução
+  completa. A atualização normal do kit entrega a correção, sem novo serviço ou
+  permissão de Docker no app.
+
+- **Seletor de modelo do agente: busca, custo por milhão de tokens e sem as variantes em lote que davam erro** O seletor de modelo do agente (IA › Agentes › Modelo) agora tem um campo de busca que filtra pelo nome ou pelo identificador, e um ícone de cifrão em cada modelo: ao passar o cursor, mostra o custo de entrada e de saída por 1 milhão de tokens, em dólares. Preço que o catálogo não informa aparece como "não informado", nunca como grátis. As variantes `:batch` da OpenRouter deixaram de ser oferecidas: elas só funcionam em processamento em lote, e escolhê-las fazia o teste e o atendimento falharem com um aviso de chave ou modelo inválido, mesmo com a chave correta. Um agente que já tinha salvo uma variante em lote continua mostrando o modelo e avisa por que ele não responde. Nada muda na VPS.
+
+  Crédito: @Hefesto25.
+
+- **A etiqueta aplicada por um follow-up agora dispara as automações de etiqueta** O nó **Editar tag do lead** de um follow-up aplicava a etiqueta, mas as regras de automação com o gatilho "Quando um lead ganhar uma etiqueta" (ou "contato ganhou etiqueta") ignoravam essa etiqueta, como se ela tivesse vindo de outra regra. Agora o padrão "o follow-up classifica, etiqueta, e a regra age" funciona: uma nota baixa no NPS que vira `nps-detrator` passa a abrir o card de pós-venda. A proteção contra regra disparando regra continua igual. Nada muda na VPS.
+
+  Crédito: @webtecnica (conserto) e @aerosuiteapp (relato e causa, #3659).
+
+- **Contabilize cache e contexto longo do Terra por requisição** O custo de GPT-6.1 Terra considera as tarifas Standard de gravação de cache de 30 minutos e 12 horas e o limite de contexto longo de cada requisição. Chamadas com ferramentas não somam seus contextos para decidir a faixa. Os modelos escolhidos pelos agentes permanecem os mesmos. Crédito: @vitorlacerdadigital.
+
+- **O título das janelas não fica mais cortado quando traz um nome longo** Ao reconectar ou excluir um número de WhatsApp sem nome amigável, o título da janela mostrava o identificador inteiro da conexão numa linha só, que passava da borda e ficava cortado. Agora o título quebra em mais linhas e cabe na janela. Crédito: @seax-trophy.
+
+- **Áudios recebidos podem ser transcritos pela OpenRouter da organização** Organizações que usam OpenRouter passam a transcrever notas de voz pelo serviço
+  de áudio do próprio provedor, com a chave já cadastrada. Serviços de transcrição
+  e chaves OpenAI configurados continuam tendo precedência. O envio multipart
+  respeita o limite de 25 MB desse fornecedor; quando o serviço informa o custo,
+  ele aparece no uso de IA. Contribuição de @webtecnica, adaptada pela manutenção
+  a partir do PR #3408.
+
+- **Trocar de funil ou retomar um negócio numa etapa que exige documento não é mais recusado para sempre** A troca de funil e a retomada criam o negócio no destino, mas conferiam a etapa como se ele já existisse e cobravam o arquivo do campo exigido. Só que o anexo pertence ao negócio e só pode ser enviado depois que ele nasce, então a resposta era sempre "falta o documento", e as duas operações nunca aconteciam.
+
+  Agora elas seguem a mesma regra da criação: entram na etapa, e o documento é cobrado na primeira movimentação (mover, mover em lote, ganhar ou perder), quando já dá para anexar.
+
+  A trava em si não mudou: mover para a etapa sem o arquivo naquele campo continua recusado, um valor em "campos personalizados" com o nome do campo não substitui o anexo, e arquivo em outro campo não libera a etapa. Nada a fazer na atualização. Contribuição de @webtecnica (#3627).
+
+- **A vaga do plano não fica presa na sessão que nunca pareou** A sessão que nasceu de um QR aberto e não lido expira como `FAILED` sem número. Ela ocupava a vaga de números do plano, e a conexão do número seguinte era recusada como se a empresa já estivesse no teto. Agora só ocupa vaga a linha com número pareado e a conexão em curso; a sessão de QR (WhatsApp por QR) que morreu sem número libera a vaga sozinha, sem ninguém precisar excluir nada. Conexões de outros provedores seguem ocupando a vaga enquanto existirem. Um número conectado continua ocupando a sua vaga mesmo depois de cair, e não há nada a configurar de novo.
+
+- **Variável de campo de lista mostra o rótulo da opção, e não o código interno** Um campo personalizado de lista (seleção, múltipla escolha, lista pesquisável) guarda no negócio o código da opção — "paris-franca" — e a variável usada nas mensagens de automação, de resposta rápida e de follow-up devolvia esse código ao cliente: "Sua viagem para paris-franca está chegando". Agora o texto sai com o rótulo que a empresa cadastrou na opção ("Paris (França)"); na múltipla escolha, os rótulos saem unidos por vírgula. Valor que não corresponde a nenhuma opção da lista (uma opção removida depois de gravada) continua saindo como está, e campo de texto, número ou data não muda. O texto de reserva da variável segue valendo para campo vazio. Nada muda na instalação.
+
 ## [1.94.0] — 2026-10-27
 
 ### Adicionado
@@ -13215,7 +13529,8 @@ Primeira versão marcada do DeskcommCRM. O projeto vinha sendo desenvolvido publ
 
 - **Node 22 é obrigatório para desenvolvimento.** A suíte de invariantes instancia o cliente do Supabase, que exige o `WebSocket` global — nativo apenas a partir do Node 22. Isso não afeta quem apenas hospeda: a VPS roda a imagem pronta.
 
-[Não lançado]: https://github.com/melgarafael/DeskcommCRM/compare/v1.94.0...HEAD
+[Não lançado]: https://github.com/melgarafael/DeskcommCRM/compare/v1.95.0...HEAD
+[1.95.0]: https://github.com/melgarafael/DeskcommCRM/compare/v1.94.0...v1.95.0
 [1.94.0]: https://github.com/melgarafael/DeskcommCRM/compare/v1.93.0...v1.94.0
 [1.93.0]: https://github.com/melgarafael/DeskcommCRM/compare/v1.92.0...v1.93.0
 [1.92.0]: https://github.com/melgarafael/DeskcommCRM/compare/v1.91.0...v1.92.0
