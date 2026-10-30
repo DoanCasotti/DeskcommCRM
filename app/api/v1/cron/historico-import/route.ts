@@ -49,6 +49,7 @@ import {
   prepararRecuperacoesAguardando,
 } from "@/lib/channels/historico/quedas";
 import { rodarUmaRodada, TETO_PADRAO } from "@/lib/channels/historico/rodada";
+import { recursoOcioso } from "@/lib/cron/piso-ocioso";
 import { logger } from "@/lib/logger";
 import { STATUS_OPERANTE, ehOperante, statusDaOrgEmbutida } from "@/lib/organizacao/operante";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -81,6 +82,13 @@ async function handle(req: NextRequest): Promise<Response> {
   }
 
   const admin = createAdminClient();
+  // O PISO OCIOSO (#3731): a rodada de todo minuto lia `importacoes_de_historico`
+  // só para receber lista vazia em quem nunca importou o histórico. Com o portão,
+  // a instalação sem importação, sem queda recente do número e sem aviso aberto sai antes dessa leitura — ver
+  // lib/cron/piso-ocioso.ts para o sinal e o custo dele.
+  if (await recursoOcioso("historico")) return ok({ pulado: "recurso_ocioso" }, { requestId });
+  // O sinal do portão cobre também o que os passos de baixo fazem (quedas do número
+  // e avisos abertos): sair aqui sem olhar para eles deixaria a recuperação muda.
   const agora = new Date();
 
   // Antes das rodadas (Spec 32): abre a importação de cada queda do número, confere
