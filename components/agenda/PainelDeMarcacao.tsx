@@ -453,13 +453,20 @@ export function PainelDeMarcacao({
    * sem nenhum horário publicado nele, o painel passa ao mês seguinte. Quem
    * volta à mão (para um encaixe hoje) fica onde voltou. Sem jornada publicada
    * não há o que procurar no mês seguinte, e o aviso é o próximo passo.
+   *
+   * UMA VEZ POR TIPO, não por montagem. O painel continua montado quando a
+   * pessoa troca de tipo (ver o efeito da duração), e a tela abre no PRIMEIRO
+   * tipo — que pode não ter jornada. Com a decisão presa à montagem, a resposta
+   * desse primeiro tipo a gastava ("sem jornada, fica") e a do tipo escolhido,
+   * com outubro esgotado, chegava sem decidir nada: o mês morto de volta, em
+   * 9 specs do e2e às 16h45 de sexta 30/10/2026.
    */
   // Ajuste de estado DURANTE o render, não num efeito: o mês morto nem chega a
   // ser pintado (https://react.dev/learn/you-might-not-need-an-effect).
-  const [aberturaDecidida, setAberturaDecidida] = React.useState(false);
+  const [aberturaDecididaPara, setAberturaDecididaPara] = React.useState<string | null>(null);
   const aberturaCarregada = mesCarregado != null && dadosDoMesEmTela && isSameMonth(mes, ancora);
-  if (!aberturaDecidida && aberturaCarregada && !instanteInicial) {
-    setAberturaDecidida(true);
+  if (aberturaDecididaPara !== tipo && aberturaCarregada && !instanteInicial) {
+    setAberturaDecididaPara(tipo);
     if (publicouHorarios && !erroAoCarregar && !semanas.flat().some(temHorario)) {
       setMes(startOfMonth(addDays(startOfMonth(mes), 32)));
     }
