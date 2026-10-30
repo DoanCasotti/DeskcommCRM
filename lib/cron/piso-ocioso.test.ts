@@ -3,7 +3,7 @@
  *
  * As três promessas, uma por teste:
  *
- * 1. UMA consulta responde pelos QUATRO recursos (não uma por recurso).
+ * 1. UMA consulta responde pelos CINCO recursos (não uma por recurso).
  * 2. CEM ticks dentro da janela continuam sendo UMA consulta — o portão não pode
  *    virar a consulta por minuto que ele veio remover.
  * 3. Leitura que falha = "tem trabalho" (a rota segue), e a falha também fica em
@@ -35,7 +35,13 @@ function banco(linha: Record<string, unknown> = {}) {
   return { consultas, query, portao };
 }
 
-const TUDO_VAZIO = { prospeccao: false, campanhas: false, historico: false, agenda_google: false };
+const TUDO_VAZIO = {
+  prospeccao: false,
+  campanhas: false,
+  historico: false,
+  agenda_google: false,
+  agenda_google_push: false,
+};
 
 beforeEach(() => {
   esquecerRetrato();
@@ -43,21 +49,28 @@ beforeEach(() => {
 });
 
 describe("portão do piso ocioso", () => {
-  it("uma consulta responde pelos quatro recursos", async () => {
+  it("uma consulta responde pelos cinco recursos", async () => {
     const db = banco(TUDO_VAZIO);
     const respostas = await Promise.all(
       RECURSOS_DO_CRON.map((recurso) => recursoTemTrabalho(recurso, 1_000, db.portao)),
     );
-    expect(respostas).toEqual([false, false, false, false]);
+    expect(respostas).toEqual([false, false, false, false, false]);
     expect(db.query).toHaveBeenCalledOnce();
   });
 
   it("cada coluna vira o recurso dela (controle positivo: nem tudo é falso)", async () => {
-    const db = banco({ prospeccao: true, campanhas: false, historico: true, agenda_google: false });
+    const db = banco({
+      prospeccao: true,
+      campanhas: false,
+      historico: true,
+      agenda_google: false,
+      agenda_google_push: true,
+    });
     expect(await recursoTemTrabalho("prospeccao", 1_000, db.portao)).toBe(true);
     expect(await recursoTemTrabalho("historico", 1_000, db.portao)).toBe(true);
     expect(await recursoOcioso("campanhas", 1_000, db.portao)).toBe(true);
     expect(await recursoOcioso("agenda_google", 1_000, db.portao)).toBe(true);
+    expect(await recursoTemTrabalho("agenda_google_push", 1_000, db.portao)).toBe(true);
     expect(db.query).toHaveBeenCalledOnce();
   });
 
@@ -99,5 +112,17 @@ describe("portão do piso ocioso", () => {
     expect(
       await recursoTemTrabalho("campanhas", 1_000 + TTL_DO_RETRATO_MS + 1, comCampanha.portao),
     ).toBe(true);
+  });
+
+  it("⭐ campanha ligada logo depois de um retrato vazio: a batida do minuto seguinte já roda", async () => {
+    // O crond dispara tudo no segundo 0. Retrato lido vazio em t=0, a pessoa
+    // clica "Iniciar" em t=1 s, a batida seguinte chega em t=60 s. Com o TTL de
+    // 5 min que este portão tinha, essa batida (e as três seguintes) PULAVA.
+    const vazio = banco(TUDO_VAZIO);
+    expect(await recursoOcioso("campanhas", 0, vazio.portao)).toBe(true);
+
+    const comCampanha = banco({ ...TUDO_VAZIO, campanhas: true });
+    expect(await recursoOcioso("campanhas", 60_000, comCampanha.portao)).toBe(false);
+    expect(comCampanha.query).toHaveBeenCalledOnce();
   });
 });

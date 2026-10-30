@@ -14,10 +14,12 @@ async function executar(req: NextRequest) {
       { error: { code: "unauthenticated", message: "cron secret inválido" } },
       { status: 401 },
     );
-  // O PISO OCIOSO (#3731): sem conexão Google saudável não há para onde empurrar
-  // compromisso — a leitura de pendências volta vazia em toda instalação que
-  // nunca conectou a agenda. Sai antes dela, pelo retrato em memória.
-  if (await recursoOcioso("agenda_google")) return ok({ pulado: "recurso_ocioso" });
+  // O PISO OCIOSO (#3731): sem compromisso que `googlePushCandidates` pegaria
+  // (o mesmo `or`, sem filtro de status da conexão — a rota também não tem), a
+  // leitura de pendências volta vazia em toda instalação que nunca usou a agenda
+  // Google. Sai antes dela, pelo retrato em memória. Conexão que precisa de
+  // atenção NÃO faz pular: o compromisso dela ainda recebe o aviso do executor.
+  if (await recursoOcioso("agenda_google_push")) return ok({ pulado: "recurso_ocioso" });
   const db = createAdminClient();
   const { data, error } = await googlePushCandidates(db);
   if (error)

@@ -8,14 +8,15 @@
  * (`docker/scheduler/entrypoint.sh`) sustentam ~44 req/min enquanto ninguém usa
  * o produto. Boa parte delas é de recurso que a organização NÃO TEM LIGADO:
  * prospecção sem campanha, campanhas sem campanha, importação de histórico sem
- * importação e Google Agenda sem conexão. Cada uma dessas rotas ia ao PostgREST
+ * importação e Google Agenda sem conexão nem compromisso a empurrar. Cada uma
+ * dessas rotas ia ao PostgREST
  * a cada minuto só para descobrir que a fila está vazia — e no plano grátis do
  * Supabase isso consome o projeto até o `PGRST002` derrubar a instalação.
  *
  * ─── O SINAL: um RETRATO em memória, alimentado por UMA consulta por janela ──
  *
- * O portão lê, de uma vez só, quatro `exists` (um por recurso) e guarda o
- * resultado num mapa de PROCESSO com validade de `TTL_DO_RETRATO_MS` (5 min).
+ * O portão lê, de uma vez só, cinco `exists` (um por recurso) e guarda o
+ * resultado num mapa de PROCESSO com validade de `TTL_DO_RETRATO_MS` (30 s).
  *
  * Por que ele não custa requisição:
  *
@@ -23,16 +24,18 @@
  *   então não gasta a cota de requisições do PostgREST — é justamente a cota que
  *   o `PGRST002` estoura.
  * - **Uma por janela, não uma por rota.** As cinco rotas que consultam o portão
- *   dividem o MESMO retrato: no pior caso são 12 consultas/h para a instalação
- *   inteira (uma a cada 5 min), contra 60/h por rota que cada uma fazia antes.
- *   No caminho quente (retrato válido) a resposta é do mapa: ZERO idas ao banco.
- * - **Uma consulta, quatro recursos.** As quatro perguntas cabem num `select`
- *   só; quatro consultas separadas seriam quatro vezes o mesmo custo.
+ *   dividem o MESMO retrato: ~60 consultas/h para a instalação inteira (uma
+ *   por minuto, porque o crond dispara tudo no segundo 0 e o retrato de 30 s
+ *   vence antes da batida seguinte), contra 60/h POR ROTA que cada uma fazia
+ *   antes. Dentro da mesma batida, a resposta é do mapa.
+ * - **Uma consulta, cinco recursos.** As cinco perguntas cabem num `select`
+ *   só; consultas separadas seriam o mesmo custo multiplicado.
  *
- * O que se perde: ligar um recurso vale para o cron em até 5 min. É folgado de
- * propósito — o que este portão decide é uma varredura cuja régua conta em
- * minutos e dias, e 5 min de atraso no primeiro tick de uma campanha recém
- * ligada não muda nada para quem está usando.
+ * O que NÃO se perde: a 1ª batida depois de ligar um recurso já roda. Um TTL
+ * de minutos economizaria mais e quebraria a promessa da tela da campanha
+ * ("Envio rápido: sai tudo em cerca de {n} min.") — com 5 min, a campanha
+ * recém-ligada esperava quatro batidas paradas. 30 s dá uma leitura por
+ * minuto com folga; 55 s deixaria só ~5 s entre a batida e o vencimento.
  *
  * ─── A REGRA DE FALHA: na dúvida, RODA ──────────────────────────────────────
  *
@@ -51,16 +54,23 @@ import { getRequestPool } from "@/lib/agent-engine/db/request-pool";
 import { logger } from "@/lib/logger";
 
 /** Os recursos cujo cron pode ficar ocioso sem que a organização perca nada. */
-export const RECURSOS_DO_CRON = ["prospeccao", "campanhas", "historico", "agenda_google"] as const;
+export const RECURSOS_DO_CRON = [
+  "prospeccao",
+  "campanhas",
+  "historico",
+  "agenda_google",
+  "agenda_google_push",
+] as const;
 export type RecursoDoCron = (typeof RECURSOS_DO_CRON)[number];
 
 /**
- * Validade do retrato. 5 min = 12 consultas/h para a instalação inteira, contra
- * 60/h POR ROTA antes (as cinco rotas do portão somavam 252/h). Mais que isso
- * atrasaria demais o primeiro tick de um recurso recém-ligado; menos voltaria a
- * pesar na cota que este arquivo existe para proteger.
+ * Validade do retrato. 30 s = ~60 consultas/h para a instalação inteira (uma
+ * por batida do crond), contra 60/h POR ROTA antes. Mais que um minuto faria a
+ * batida seguinte a ligar um recurso pular — e a campanha recém-ligada ficar
+ * parada; a economia vem de as cinco rotas dividirem o retrato e de ele ir pelo
+ * pool `pg`, não de o TTL ser longo.
  */
-export const TTL_DO_RETRATO_MS = 5 * 60_000;
+export const TTL_DO_RETRATO_MS = 30_000;
 
 /**
  * Teto da consulta do retrato. Um banco que aceita conexão e não responde não
@@ -70,17 +80,28 @@ export const TTL_DO_RETRATO_MS = 5 * 60_000;
 const TETO_DA_LEITURA_MS = 2_000;
 
 /**
- * Uma linha, quatro booleanos. `exists` para na primeira linha encontrada — é o
+ * Uma linha, cinco booleanos. `exists` para na primeira linha encontrada — é o
  * predicado mais barato que responde "esta fila tem trabalho?" sem contar nada.
  *
  * As colunas de status são as mesmas que as rotas já filtram:
- * - `prospecting_campaigns`: `rascunho`/`pausada` também contam — elas têm
- *   candidatos que a rodada promove (`rascunho -> rodando`), então "só rodando"
+ * - `prospecting_campaigns`: `draft`/`paused` também contam — elas têm
+ *   candidatos que a rodada promove (`draft -> running`), então "só running"
  *   deixaria a promoção sem tick.
- * - `campaigns`: `agendada` é a fila que o worker promove para `rodando`.
+ * - `campaigns`: `scheduled` é a fila que o worker promove para `running`.
  * - `importacoes_de_historico`: o único status que esta rota anda.
  * - `calendar_connections`: só conexão saudável sincroniza; `google_calendar` é
- *   o único valor que o CHECK da coluna aceita.
+ *   o único valor que o CHECK da coluna aceita. Vale para o SYNC, que filtra
+ *   `healthy` na rota.
+ * - `calendar_appointments` (o PUSH): o mesmo `or` de `googlePushCandidates`
+ *   (lib/agenda/google/candidates.ts), SEM filtro de status da conexão — a rota
+ *   não tem: compromisso de conexão que precisa de atenção recebe o aviso
+ *   "Confira a conexão" pelo executor, e um portão por `healthy` o deixaria
+ *   pendente calado. Lê a tabela, não a view `calendar_service_google_candidates`:
+ *   sem os filtros da view (dono, publicação, anonimizado) e sem o de
+ *   `google_next_attempt_at`, o predicado é mais LARGO que o da rota, que é o
+ *   lado seguro com cache — e não depende do GRANT da view (o baseline o dá
+ *   explicitamente só ao `service_role`): uma role menor no pool sem ele
+ *   derrubaria o retrato inteiro, e as cinco rotas voltariam a rodar sempre.
  */
 const SQL_DO_RETRATO = `
 select
@@ -98,7 +119,13 @@ select
   exists (
     select 1 from calendar_connections
      where status = 'healthy' and provider = 'google_calendar'
-  ) as agenda_google
+  ) as agenda_google,
+  exists (
+    select 1 from calendar_appointments
+     where needs_google_push
+        or (google_event_id is not null and google_conflict is null)
+        or google_conflict -> 'resolution' is not null
+  ) as agenda_google_push
 `;
 
 type Retrato = { emUso: Record<RecursoDoCron, boolean>; ate: number };
@@ -123,6 +150,7 @@ function retratoCompleto(linha: Record<string, unknown> | undefined): Record<Rec
     campanhas: ligado(linha?.campanhas),
     historico: ligado(linha?.historico),
     agenda_google: ligado(linha?.agenda_google),
+    agenda_google_push: ligado(linha?.agenda_google_push),
   };
 }
 
@@ -132,6 +160,7 @@ const TUDO_EM_USO: Record<RecursoDoCron, boolean> = {
   campanhas: true,
   historico: true,
   agenda_google: true,
+  agenda_google_push: true,
 };
 
 function comTeto<T>(promessa: Promise<T>, ms: number): Promise<T> {

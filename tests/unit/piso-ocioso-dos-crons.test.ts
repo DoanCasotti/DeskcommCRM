@@ -131,8 +131,20 @@ async function chamar(rota: string): Promise<{ status: number; body: { data?: { 
   return { status: res.status, body: (await res.json()) as { data?: { pulado?: string } } };
 }
 
-const TODOS_DESLIGADOS = { prospeccao: false, campanhas: false, historico: false, agenda_google: false };
-const TODOS_LIGADOS = { prospeccao: true, campanhas: true, historico: true, agenda_google: true };
+const TODOS_DESLIGADOS = {
+  prospeccao: false,
+  campanhas: false,
+  historico: false,
+  agenda_google: false,
+  agenda_google_push: false,
+};
+const TODOS_LIGADOS = {
+  prospeccao: true,
+  campanhas: true,
+  historico: true,
+  agenda_google: true,
+  agenda_google_push: true,
+};
 
 beforeEach(() => {
   h.reqs = [];
@@ -166,5 +178,27 @@ describe.each(CASOS)("cron $rota", ({ rota, trabalho, exigeBanco, provaDoCaminho
     expect(res.body.data?.pulado).toBeUndefined();
     expect(provaDoCaminhoNormal()).toBeGreaterThan(0);
     if (exigeBanco) expect(h.reqs.length).toBeGreaterThan(0);
+  });
+});
+
+describe("cron agenda-google-push: o portão é o da rota, não o da conexão saudável", () => {
+  it("sem conexão saudável, mas com compromisso a empurrar: o push RODA", async () => {
+    // A rota não filtra o status da conexão: o compromisso de uma conexão que
+    // precisa de atenção ainda passa pelo executor e recebe o aviso "Confira a
+    // conexão". Um portão por `healthy` o deixaria pendente sem aviso.
+    semearRetrato({ ...TODOS_DESLIGADOS, agenda_google_push: true });
+    const res = await chamar("agenda-google-push");
+
+    expect(res.status).toBe(200);
+    expect(res.body.data?.pulado).toBeUndefined();
+    expect(h.candidatos).toHaveBeenCalledOnce();
+  });
+
+  it("com conexão saudável, mas sem compromisso a empurrar: o push sai cedo", async () => {
+    semearRetrato({ ...TODOS_LIGADOS, agenda_google_push: false });
+    const res = await chamar("agenda-google-push");
+
+    expect(res.body.data?.pulado).toBe("recurso_ocioso");
+    expect(h.candidatos).not.toHaveBeenCalled();
   });
 });
