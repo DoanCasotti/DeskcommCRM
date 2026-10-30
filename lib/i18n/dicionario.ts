@@ -65,6 +65,24 @@ export const DICIONARIO: Traducoes = {
   "A conversa vai continuar pelo número de {nome} ({numero}).": {
     es: "La conversación va a continuar por el número de {nome} ({numero}).",
   },
+  // #3732 — a recusa do envio diz para onde ir, e a caixa de resposta trava.
+  "Esta conversa continua no seu número, em outra conversa do mesmo contato. Abra a conversa para responder.":
+    {
+      es: "Esta conversación continúa en tu número, en otra conversación del mismo contacto. Abre la conversación para responder.",
+    },
+  "Esta conversa continua pelo número de {nome}, em outra conversa do mesmo contato. Abra a conversa para responder.":
+    {
+      es: "Esta conversación continúa por el número de {nome}, en otra conversación del mismo contacto. Abre la conversación para responder.",
+    },
+  "Esta conversa continua em outra conversa do mesmo contato, no número de outro atendente. Abra a conversa para responder.":
+    {
+      es: "Esta conversación continúa en otra conversación del mismo contacto, en el número de otro atendente. Abre la conversación para responder.",
+    },
+  "Abrir a conversa": { es: "Abrir la conversación" },
+  "A conversa continua no número em que está: o destino não tem número conectado do mesmo canal, ou o contato já tem conversa no número dele.":
+    {
+      es: "La conversación sigue en el número en el que está: el destino no tiene un número conectado del mismo canal, o el contacto ya tiene una conversación en su número.",
+    },
   "Destino inválido.": { es: "Destino inválido." },
   "Novas mensagens · Ir para o fim": { es: "Mensajes nuevos · Ir al final" },
   // Versão anterior barrada na prévia (doc de decisão 234): a moldura e as causas de `motivoDoVeto`.
