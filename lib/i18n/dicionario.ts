@@ -10719,6 +10719,12 @@ export const DICIONARIO: Traducoes = {
   "Período anterior": { es: "Período anterior" },
   "Próximo período": { es: "Período siguiente" },
   "Tipo de agendamento": { es: "Tipo de cita" },
+  // #3766 — o título livre do compromisso.
+  "Título do compromisso": { es: "Título de la cita" },
+  "OS 1234 · Atendimento fulano": { es: "OS 1234 · Atención a fulano" },
+  "É o nome que aparece na agenda. Em branco, usa o nome do tipo de agendamento.": {
+    es: "Es el nombre que aparece en la agenda. En blanco, usa el nombre del tipo de cita.",
+  },
   "Por que está cancelando?": { es: "¿Por qué estás cancelando?" },
   "O paciente pediu para remarcar por telefone": { es: "El paciente pidió reprogramar por teléfono" },
   "Sincronizar com o Google ainda não está disponível": { es: "Sincronizar con Google todavía no está disponible" },
