@@ -534,6 +534,19 @@ test.describe("filtro por marcador, pela tela", () => {
     // Com um marcador escolhido, o botão do seletor passa a se chamar
     // "Tag: <marcador>". E o segundo marcador SOMA (E na mesma caixa), então
     // desmarca-se o do contato antes, para trocar em vez de misturar caixas.
+    //
+    // O SERVIDOR LENTO É DE PROPÓSITO. Cada clique do filtro reescreve a URL, e
+    // a URL só muda depois do payload RSC da página. Com o filtro lido só dela,
+    // o segundo clique partia do filtro velho e "trocar" virava "somar" (o
+    // quadro vazio com "Tag: obra-… +1" do CI de 30/10: RSC de 118 ms, clique
+    // 43 ms depois). Atrasar o RSC torna a janela certa, e não sorte do CI.
+    await page.route(
+      (url) => url.pathname === `/app/pipelines/${funil}` && url.searchParams.has("_rsc"),
+      async (rota) => {
+        await new Promise((r) => setTimeout(r, 1_500));
+        await rota.continue();
+      },
+    );
     await page.getByRole("button", { name: `Tag: ${tagDoContato}`, exact: true }).click();
     await page.getByRole("menuitemcheckbox", { name: tagDoContato, exact: true }).click();
     await page.getByRole("menuitemcheckbox", { name: soNaConversa, exact: true }).click();
@@ -542,6 +555,12 @@ test.describe("filtro por marcador, pela tela", () => {
       timeout: 30_000,
     });
     await expect(page.getByRole("group", { name: `Lead: ${cardNeutro}` })).toHaveCount(0);
+    // A URL chegou ao último pedido e o filtro continua o mesmo: o atraso
+    // termina aqui, sem rota pendente para o fim do teste.
+    await page.unrouteAll({ behavior: "wait" });
+    await expect(page.getByRole("button", { name: `Tag: ${soNaConversa}`, exact: true })).toBeVisible();
+    await expect(page).toHaveURL(new RegExp(`[?&]tag=${soNaConversa}(&|$)`));
+    await expect(page.getByRole("group", { name: `Lead: ${cardMarcado}` })).toBeVisible();
     await captura(page, "filtro-tela-06-quadro-filtrado-pela-conversa");
   });
 });
