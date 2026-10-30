@@ -1,6 +1,7 @@
 import { expect, type Page } from "@playwright/test";
 
 import {
+  exigirMesDeAberturaComVaga,
   garantirDiaComVagaNoMes,
   irParaOMesDoPainel,
   mesDaChave,
@@ -287,6 +288,7 @@ export async function diasDesenhados(page: Page): Promise<string[]> {
  * varredura vazia 17 ms depois.
  */
 export async function escolherDiaDesenhado(page: Page, dias: readonly string[]): Promise<string> {
+  await exigirMesDeAberturaComVaga(page);
   expect(
     dias.length,
     "a semana desenhada veio vazia — sem ela não há como escolher um dia que a grade mostre",
@@ -339,26 +341,11 @@ export async function escolherDiaDesenhado(page: Page, dias: readonly string[]):
  * a `main` reprovar duas vezes com contagens DIFERENTES no mesmo commit: 9
  * horários às 15:27 UTC e 7 às 16:37, porque o dia escolhido era hoje.
  */
-/**
- * Os dias que o painel oferece DEPOIS de hoje — a jornada inteira, em vez do
- * resto de um dia já gasto. Ordenados, `yyyy-MM-dd`.
- *
- * ⚠️ NÃO PASSA PELA GRADE, e é por isso que existe ao lado de
- * `escolherDiaDesenhado`. Quem só quer um dia com a lista de horários COMPLETA
- * (a spec de geometria do painel mede a coluna em cinco larguras, algumas
- * abaixo de `lg`, onde a grade nem desenha colunas de dia) não pode depender de
- * a grade ter sido navegada. As duas rotas resolvem a mesma classe — "não deixe
- * o período ser escolhido pelo relógio" — e moram juntas para que a próxima
- * pessoa encontre a regra inteira num arquivo só.
- *
- * Veio de `agenda-painel-cabe-na-tela.spec.ts` (PR #402), onde nasceu depois de
- * a `main` reprovar duas vezes com contagens DIFERENTES no mesmo commit: 9
- * horários às 15:27 UTC e 7 às 16:37, porque o dia escolhido era hoje.
- */
 async function diasCheios(
   page: Page,
   opcoes: { teto?: number; meses?: number } = {},
 ): Promise<string[]> {
+  await exigirMesDeAberturaComVaga(page);
   const hoje = await page.evaluate(() => {
     // Calculado DENTRO do browser de propósito: é o mesmo relógio e o mesmo
     // fuso que formatam o `data-testid` de cada dia. Comparar com a data do
@@ -400,10 +387,7 @@ function exigirDia(cheios: readonly string[], qual: string): string {
 /**
  * O PRIMEIRO dia cheio que o painel oferece. Clica nele e devolve a chave.
  *
- * `opcoes` existe pelo mesmo motivo do `teto` de `aguardarGradeHidratada`: o
- * guarda `agenda-painel-no-mes-que-acabou.spec.ts` reproduz um mês MORTO de
- * propósito, e com o teto de produção pagaria dois tetos de espera para provar o
- * mesmo que prova em milissegundos.
+ * `opcoes` repassa `teto`/`meses` a `garantirDiaComVagaNoMes`.
  */
 export async function escolherPrimeiroDiaCheio(
   page: Page,

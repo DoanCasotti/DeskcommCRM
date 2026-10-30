@@ -39,20 +39,18 @@ import { expect, type Page } from "@playwright/test";
  * (`agenda-semana-integra`) já tinha aprendido a resolver isso navegando para a
  * semana seguinte; o MÊS ficou dependente de uma única tentativa do produto.
  *
- * ═══ Por que não basta o painel "abrir no mês com vaga" ══════════════════════
+ * ═══ A abertura no mês com vaga é AFIRMADA, não contornada ═══════════════════
  *
- * O produto TEM essa regra (`components/agenda/PainelDeMarcacao.tsx`, "A
- * ABERTURA NÃO CAI NUM MÊS QUE ACABOU"), e há teste de unidade para ela. Ela
- * decide UMA vez, com os horários da primeira resposta — e é exatamente aí que
- * ela erra o passo no fim do dia: às 16:28 BRT de 30/10 a resposta ainda trazia
- * as 17:00 e 17:30, então a abertura concluiu "este mês tem vaga" e não avançou.
- * Vinte minutos depois a mesma janela devolve zero (as duas caíram no aviso
- * mínimo de 60 min) e o mês em tela fica morto pelo resto do caso. Medido no
- * trace: os nove casos que passaram abriram o painel depois das 17h (e viram
- * novembro de primeira); os nove que reprovaram abriram antes.
+ * O produto TEM a regra (`components/agenda/PainelDeMarcacao.tsx`: "A ABERTURA
+ * NÃO CAI NUM MÊS QUE ACABOU" — mês de abertura sem nenhum horário publicado,
+ * com jornada publicada, passa ao mês seguinte). Em 30/10 ela FALHAVA: a decisão
+ * era tomada uma vez por montagem, a tela abre no primeiro tipo (que pode não ter
+ * jornada) e a resposta dele gastava a decisão; o tipo escolhido depois chegava
+ * com outubro esgotado e ficava nele. Defeito de produto, consertado no #3771.
  *
- * Ou seja: não é só "fim do mês". É **qualquer dia útil depois das ~16:30 BRT**,
- * e é por isso que dez PRs compartilharam o mesmo shard vermelho.
+ * Um helper que só NAVEGASSE até o mês com vaga teria deixado a suíte verde por
+ * cima desse defeito. Por isso `exigirMesDeAberturaComVaga` é o primeiro passo de
+ * quem escolhe dia: se a regra regredir, o caso reprova dizendo qual regra.
  *
  * ═══ A regra que estas funções encarnam ═════════════════════════════════════
  *
@@ -143,6 +141,24 @@ export async function diasComVagaNoMes(page: Page): Promise<string[]> {
     .locator('[data-testid^="dia-"][data-disponivel="true"]')
     .evaluateAll((els) => els.map((el) => el.getAttribute("data-testid")!.slice("dia-".length)));
   return acesos.filter((chave) => mesDaChave(chave) === mes).sort();
+}
+
+/**
+ * AFIRMA a regra de abertura do painel: o mês em que ele abriu tem ao menos um
+ * dia com vaga. Chame logo depois de abrir o painel (ou de trocar de tipo), antes
+ * de navegar — navegar primeiro esconderia exatamente o defeito do #3771.
+ */
+export async function exigirMesDeAberturaComVaga(page: Page): Promise<void> {
+  await expect
+    .poll(() => diasComVagaNoMes(page), {
+      timeout: ESPERA_DA_CONSULTA,
+      message:
+        "o painel abriu num mês sem nenhum dia com vaga. A regra de `PainelDeMarcacao.tsx` " +
+        '("A ABERTURA NÃO CAI NUM MÊS QUE ACABOU") manda passar ao mês seguinte quando o mês ' +
+        "de abertura não tem horário publicado e a jornada existe — inclusive depois de trocar " +
+        "de tipo (#3771). Se o seed publica jornada, isto é defeito de PRODUTO, não do teste.",
+    })
+    .not.toEqual([]);
 }
 
 /**
