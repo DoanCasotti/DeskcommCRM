@@ -25,7 +25,7 @@ export interface SintetizarVozInput {
 
 export interface SintetizarVozResultado {
   audio: Buffer;
-  /** `audio/mpeg` no formato padrão (`mp3_44100_128`) — o que o adapter do canal converte para OGG/OPUS ao mandar nota de voz. */
+  /** `audio/mpeg` no formato padrão (`mp3_44100_128`). Só canal `server-convert` o entrega como nota de voz — ver `voz-do-turno.ts`. */
   mimeType: string;
   /** Caracteres de `texto` — a unidade de cobrança (`custoDeVozCents` em pricing.ts). */
   caracteres: number;

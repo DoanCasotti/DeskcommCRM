@@ -1,6 +1,13 @@
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it } from "vitest";
 
-import { porExtenso, textoFalavel, TETO_DE_CARACTERES_FALADOS } from "@/lib/ai/voz/texto-falavel";
+import {
+  porExtenso,
+  textoFalavel,
+  textoParaFalar,
+  TETO_DE_CARACTERES_FALADOS,
+} from "@/lib/ai/voz/texto-falavel";
 
 describe("porExtenso", () => {
   it.each([
@@ -115,5 +122,40 @@ describe("textoFalavel — teto de caracteres", () => {
 
   it("texto dentro do teto não é tocado", () => {
     expect(textoFalavel("oi")).toBe("oi");
+  });
+});
+
+// O que a #491 aprovou: o que não cabe em áudio sai em TEXTO, inteiro. Antes, o
+// link sumia ("pague por este link: .") e a resposta longa era cortada no teto —
+// no áudio E no texto de reserva da síntese que falha, que é o mesmo `body`.
+describe("textoParaFalar — quando a resposta NÃO vira voz", () => {
+  it("resposta com link sai em texto (o link não pode sumir)", () => {
+    expect(
+      textoParaFalar("Pronto! Pague por este link: https://pag.exemplo.com/abc123 . Qualquer dúvida me chama."),
+    ).toBeNull();
+  });
+
+  it("link markdown também sai em texto, mesmo sem http", () => {
+    expect(textoParaFalar("Agende [aqui](wa.me/5511999999999).")).toBeNull();
+  });
+
+  it("resposta acima do teto falado sai em texto, nunca cortada", () => {
+    const longa = `${"Explico cada etapa com calma. ".repeat(25)}Seu horário está confirmado para quinta às 15h.`;
+    expect(textoFalavel(longa, Infinity).length).toBeGreaterThan(TETO_DE_CARACTERES_FALADOS);
+    expect(textoParaFalar(longa)).toBeNull();
+  });
+
+  it("resposta que fica vazia depois da limpeza (só emoji) sai em texto", () => {
+    expect(textoParaFalar("🎉✨")).toBeNull();
+  });
+
+  it("resposta curta e sem link vira o texto falado", () => {
+    expect(textoParaFalar("**Custa** R$100 no pix 😍")).toBe("Custa cem reais no pix");
+  });
+
+  it("o turno do agente decide a voz por textoParaFalar, não pelo textoFalavel que corta", () => {
+    const fonte = readFileSync("lib/agent-engine/agent/inbound-turn.ts", "utf8");
+    expect(fonte).toMatch(/textoParaFalar\(texto\)/);
+    expect(fonte).not.toMatch(/textoFalavel\(/);
   });
 });

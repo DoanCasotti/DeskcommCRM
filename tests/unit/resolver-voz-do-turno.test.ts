@@ -26,7 +26,7 @@ function pool(settings: Record<string, unknown> | null = { voz: { voice_id: "v1"
   return { query: vi.fn(async () => ({ rows: [{ settings }] })) } as never;
 }
 
-const base = { pool: pool(), tenantId: "org1", cfg: {} };
+const base = { pool: pool(), tenantId: "org1", cfg: {}, voiceNote: "server-convert" as const };
 
 beforeEach(() => {
   resolveOrgLlmConfigMock.mockReset();
@@ -42,6 +42,20 @@ describe("resolverVozDoTurno", () => {
       ...base,
       pool: db,
       vozEnabled: false,
+      vozQuando: "sempre",
+      inboundType: "audio",
+    });
+    expect(r).toBeNull();
+    expect((db as { query: ReturnType<typeof vi.fn> }).query).not.toHaveBeenCalled();
+  });
+
+  it("canal que só aceita opus: não fala (o mp3 chegaria como anexo), nem consulta o banco", async () => {
+    const db = pool();
+    const r = await resolverVozDoTurno({
+      ...base,
+      pool: db,
+      voiceNote: "opus-only",
+      vozEnabled: true,
       vozQuando: "sempre",
       inboundType: "audio",
     });

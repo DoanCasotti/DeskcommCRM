@@ -17,6 +17,7 @@ import type pg from 'pg';
 import { resolveOrgLlmConfig, type LlmEdgeConfig } from '../edge/llm/credentials';
 import { aplicarOrcamento, LlmBudgetExceededError, type RastroDaChamada } from '../edge/llm/run-model-call';
 import { logger } from '@/lib/logger';
+import type { ChannelCapabilities } from '@/lib/channels/types';
 
 export type VozQuando = 'nunca' | 'espelhar' | 'sempre';
 
@@ -25,6 +26,12 @@ export interface ResolverVozDoTurnoInput {
   tenantId: string;
   vozEnabled: boolean;
   vozQuando: VozQuando;
+  /**
+   * O que o canal da conversa faz com áudio. A síntese grava mp3, e só o canal
+   * que CONVERTE o entrega como nota de voz — no `opus-only` ele chegaria como
+   * anexo de música (`lib/channels/capabilities.ts`). Lá, a resposta segue em texto.
+   */
+  voiceNote: ChannelCapabilities['voiceNote'];
   /** `messages.type` da mensagem inbound que disparou o turno — `null` quando não há (ex.: follow-up proativo). */
   inboundType: string | null;
   /**
@@ -64,6 +71,7 @@ export async function resolverVozDoTurno(
   input: ResolverVozDoTurnoInput,
 ): Promise<VozResolvidaDoTurno | null> {
   if (!input.vozEnabled) return null;
+  if (input.voiceNote !== 'server-convert') return null;
   if (!deveFalar(input.vozQuando, input.inboundType)) return null;
 
   try {

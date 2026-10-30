@@ -5,8 +5,10 @@
  * voz alta por um TTS isso sai "asterisco asterisco promoção", "R cifrão mil
  * duzentos e trinta e quatro vírgula cinquenta e seis", ou pior, cada símbolo
  * soletrado. Esta função limpa o texto para FALAR, nunca o texto que vai para
- * a tela — a mensagem de texto equivalente continua saindo como sempre (ver
- * `docs/superpowers/plans/2026-10-29-voz-elevenlabs.md` §4.3/§4.4).
+ * a tela. O texto original fica na thread do CRM (`media_derived_text`), mas ao
+ * CLIENTE sai só a nota de voz — não há mensagem de texto equivalente. Por isso
+ * `textoParaFalar` devolve `null` (a resposta sai em texto) quando o áudio
+ * perderia alguma coisa: um link, ou o fim de uma resposta longa.
  *
  * Pura e determinística de propósito: quem decide SE fala é outra camada (a
  * regra de `voz_quando`); esta decide só o COMO, e precisa ser testável sem
@@ -158,4 +160,24 @@ export function textoFalavel(texto: string, teto: number = TETO_DE_CARACTERES_FA
   t = t.replace(RESIDUO_DE_EMOJI, "");
   t = t.replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n").trim();
   return truncar(t, teto);
+}
+
+/** Link cru ou markdown: em áudio os dois somem. Sem `g` — `.test` global guarda `lastIndex`. */
+const TEM_LINK = /https?:\/\/\S|\[[^\]]+\]\([^)]+\)/i;
+
+/**
+ * O texto que vira nota de voz, ou `null` quando a resposta tem de sair em TEXTO.
+ *
+ * As duas razões vêm do desenho aprovado na #491:
+ *  - tem link: falado, ele some — o cliente que pediu o link de pagamento fica sem ele;
+ *  - passa do teto: acima de `TETO_DE_CARACTERES_FALADOS` a resposta sai em texto, nunca cortada.
+ *
+ * Decidir ANTES do envio também protege a reserva: quando a síntese falha,
+ * `send-message.ts` manda `body` como texto, e `body` é o que esta função devolveu.
+ */
+export function textoParaFalar(texto: string): string | null {
+  if (TEM_LINK.test(texto)) return null;
+  const falado = textoFalavel(texto, Infinity);
+  if (falado.length === 0 || falado.length > TETO_DE_CARACTERES_FALADOS) return null;
+  return falado;
 }

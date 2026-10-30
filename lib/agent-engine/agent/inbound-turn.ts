@@ -67,7 +67,7 @@ import { WahaChannelAdapter } from '../edge/channel/waha-adapter';
 // egress de canal — o envio em si vai pelo adapter (ChannelAdapter). Ver F2-25.
 import { applySendOutcome } from '../edge/crm/send-message';
 import { resolverVozDoTurno } from './voz-do-turno';
-import { textoFalavel } from '@/lib/ai/voz/texto-falavel';
+import { textoParaFalar } from '@/lib/ai/voz/texto-falavel';
 import {
   LlmBudgetExceededError,
   runModelCall,
@@ -2866,6 +2866,7 @@ async function executarTurnoDoAgente(
           agentId: agentConfig.agentId,
           vozEnabled: agentConfig.vozEnabled,
           vozQuando: agentConfig.vozQuando,
+          voiceNote: capabilitiesOf(await loadChannelProvider(pool, tenantId, input.channelSessionId)).voiceNote,
           inboundType:
             input.inboundMessageId === undefined
               ? null
@@ -4156,7 +4157,9 @@ async function executarTurnoDoAgente(
           // aí esta função devolve `null` e o texto segue em bolhas.
           const enviarVoz = (texto: string): Promise<ChannelSendResult> | null => {
             const voz = vozParaEsteTurno;
-            if (!voz) return null;
+            // Link ou resposta longa: `null` e o texto segue em bolhas (ver `textoParaFalar`).
+            const falado = voz ? textoParaFalar(texto) : null;
+            if (!voz || falado === null) return null;
             seq += 1;
             const seqDesteEnvio = seq;
             return liveChannel().send({
@@ -4170,7 +4173,7 @@ async function executarTurnoDoAgente(
               // `body` continua sendo o texto FALADO — é ele que entra no
               // hash de idempotência do ledger (ver o comentário de
               // `SendMessageInput.voz` em send-message.ts).
-              body: textoFalavel(texto),
+              body: falado,
               voz: {
                 textoOriginal: texto,
                 apiKey: voz.apiKey,
