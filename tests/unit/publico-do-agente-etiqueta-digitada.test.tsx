@@ -39,4 +39,25 @@ describe("público do agente: campo de etiquetas", () => {
     expect(campo.value).toBe("cliente ativo, contrato");
     expect(ultimo.filters.exclude_tags).toEqual(["cliente ativo", "contrato"]);
   });
+
+  it("'Descartar alterações' (o pai volta o valor) faz o campo voltar a mostrar o salvo", () => {
+    const SALVO: TriggerValue = {
+      ...INICIAL,
+      filters: { ...INICIAL.filters, exclude_tags: ["cliente ativo", "contrato"] },
+    };
+    let atual = SALVO;
+    const { rerender } = render(
+      <TriggerEditor value={atual} onChange={(n) => { atual = n; }} />,
+    );
+    const campo = screen.getByLabelText("Não atender quem tem estas etiquetas") as HTMLInputElement;
+    expect(campo.value).toBe("cliente ativo, contrato");
+    for (const ch of ", vip") {
+      fireEvent.change(campo, { target: { value: campo.value + ch } });
+      rerender(<TriggerEditor value={atual} onChange={(n) => { atual = n; }} />);
+    }
+    expect(campo.value).toBe("cliente ativo, contrato, vip");
+    // Descartar: o pai devolve o valor salvo.
+    rerender(<TriggerEditor value={SALVO} onChange={(n) => { atual = n; }} />);
+    expect(campo.value).toBe("cliente ativo, contrato");
+  });
 });

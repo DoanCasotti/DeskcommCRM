@@ -98,10 +98,17 @@ function CampoDeEtiquetas({
   disabled?: boolean;
 }) {
   const [texto, setTexto] = React.useState(() => valor.join(", "));
+  // O pai pode trocar a lista por fora (o "Descartar alterações" volta ao
+  // salvo): se o texto já não descreve `valor`, a tela mostra `valor`, senão
+  // ela exibiria o digitado enquanto o salvar grava outra coisa.
+  const exibido =
+    JSON.stringify(listaDeEtiquetas(texto)) === JSON.stringify(valor)
+      ? texto
+      : valor.join(", ");
   return (
     <Input
       id={id}
-      value={texto}
+      value={exibido}
       onChange={(e) => {
         setTexto(e.target.value);
         onChange(listaDeEtiquetas(e.target.value));
