@@ -2208,6 +2208,76 @@ export const DICIONARIO: Traducoes = {
   // aqui mudaria a tela de quem usa em portugues — que e o unico jeito de
   // esta feature piorar alguma coisa.
   "Buscar...": { es: "Buscar..." },
+  // ─── Busca do painel do administrador (⌘K) ─────────────────────────────────
+  // Mesma paleta do app, outra fonte: os destinos de `lib/admin/navegacao.ts`.
+  // As descrições existem para a busca achar por INTENÇÃO ("smtp" → E-mail,
+  // "chave" → Credenciais), não só pelo nome da tela — quem não sabe o nome
+  // continua sem achar sem elas.
+  //
+  // Os rótulos de grupo reaproveitam chaves que já existiam ("Clientes",
+  // "Canais", "Plataforma"); só "Operação" era nova.
+  Operação: { es: "Operación" },
+  "Buscar telas da instalação": { es: "Buscar pantallas de la instalación" },
+  "Telas da instalação": { es: "Pantallas de la instalación" },
+  "Buscar telas da instalação (ex: credenciais, smtp, módulos, lgpd)...": {
+    es: "Buscar pantallas de la instalación (ej.: credenciales, smtp, módulos, lgpd)...",
+  },
+  "Visão geral da instalação: números do dia e saúde dos serviços": {
+    es: "Visión general de la instalación: números del día y salud de los servicios",
+  },
+  "Conversas de todas as empresas da instalação numa caixa só": {
+    es: "Conversaciones de todas las empresas de la instalación en una sola bandeja",
+  },
+  "Incidentes da plataforma e o que foi feito em cada um": {
+    es: "Incidentes de la plataforma y lo que se hizo en cada uno",
+  },
+  "Trilha de auditoria: quem fez o quê e quando": {
+    es: "Rastro de auditoría: quién hizo qué y cuándo",
+  },
+  "Pedidos de titular: exportar, anonimizar e prazos": {
+    es: "Solicitudes de titular: exportar, anonimizar y plazos",
+  },
+  "Empresas da instalação: criar, listar e abrir cada uma": {
+    es: "Empresas de la instalación: crear, listar y abrir cada una",
+  },
+  "Usuários da instalação e os papéis de cada um": {
+    es: "Usuarios de la instalación y los roles de cada uno",
+  },
+  "Quem tem poder de plataforma nesta instalação": {
+    es: "Quién tiene poder de plataforma en esta instalación",
+  },
+  "Consumo de IA e de mensagens por empresa": {
+    es: "Consumo de IA y de mensajes por empresa",
+  },
+  "App OAuth do Google: cliente e segredo para a agenda": {
+    es: "App OAuth de Google: cliente y secreto para la agenda",
+  },
+  "App da Meta: chave secreta e token do webhook do WhatsApp oficial": {
+    es: "App de Meta: clave secreta y token del webhook del WhatsApp oficial",
+  },
+  "Servidor SMTP: host, porta, remetente e senha": {
+    es: "Servidor SMTP: host, puerto, remitente y contraseña",
+  },
+  "Endereços da rede interna liberados para a instalação": {
+    es: "Direcciones de la red interna liberadas para la instalación",
+  },
+  "Nome, logo e cores da instalação": {
+    es: "Nombre, logo y colores de la instalación",
+  },
+  "Quem pode criar conta nesta instalação": {
+    es: "Quién puede crear cuenta en esta instalación",
+  },
+  "Chaves e segredos guardados da instalação": {
+    es: "Claves y secretos guardados de la instalación",
+  },
+  "Ligar e desligar módulos e comportamentos da instalação": {
+    es: "Activar y desactivar módulos y comportamientos de la instalación",
+  },
+  "Catálogo de extensões do servidor": { es: "Catálogo de extensiones del servidor" },
+  "Instalar e ligar módulos opcionais (honorários, cobrança…)": {
+    es: "Instalar y activar módulos opcionales (honorarios, cobro…)",
+  },
+  "Planos e cobrança do revendedor": { es: "Planes y cobro del revendedor" },
   "Menu do usuário": { es: "Menú del usuario" },
   Sair: { es: "Cerrar sesión" },
   "Central de avisos": { es: "Central de avisos" },
