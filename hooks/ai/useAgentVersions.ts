@@ -32,6 +32,8 @@ export interface AgentVersionRow {
   split_messages: boolean;
   split_max_chars: number;
   followup: { enabled: boolean; flow_pointer_ids: string[] };
+  voz_enabled: boolean;
+  voz_quando: "nunca" | "espelhar" | "sempre";
   status: "draft" | "published" | "superseded" | "archived";
   published_at: string | null;
   superseded_at: string | null;

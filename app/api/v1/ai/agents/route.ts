@@ -47,7 +47,7 @@ const AGENT_COLUMNS_COM_VERSAO =
   ", versao_publicada:ai_agent_versions!ai_agents_published_version_id_fkey(provider, model)";
 
 const VERSION_COLUMNS =
-  "id, organization_id, agent_id, version_number, system_prompt, provider, model, credential_id, tool_ids, trigger_config, channel_session_id, max_steps, token_budget, cost_budget_cents, history_message_window, history_token_window, handoff_keywords, handoff_tool_enabled, cases_enabled, split_messages, split_max_chars, followup, operator_enabled, operator_model, operator_tool_ids, status, published_at, superseded_at, created_at, created_by,pipeline_ids,knowledge_source_ids,provisioning_origin";
+  "id, organization_id, agent_id, version_number, system_prompt, provider, model, credential_id, tool_ids, trigger_config, channel_session_id, max_steps, token_budget, cost_budget_cents, history_message_window, history_token_window, handoff_keywords, handoff_tool_enabled, cases_enabled, split_messages, split_max_chars, followup, voz_enabled, voz_quando, operator_enabled, operator_model, operator_tool_ids, status, published_at, superseded_at, created_at, created_by,pipeline_ids,knowledge_source_ids,provisioning_origin";
 
 // ---------------------------------------------------------------------------
 // GET — list
@@ -175,6 +175,8 @@ export async function POST(req: NextRequest): Promise<Response> {
         split_messages: v.split_messages,
         split_max_chars: v.split_max_chars,
         followup: v.followup,
+        voz_enabled: v.voz_enabled,
+        voz_quando: v.voz_quando,
         // O corpo ACEITAVA estes quatro e o INSERT os descartava: criar um
         // agente pela API com papel Operador ligado, escopo de funil e acervo
         // marcado produzia uma versão com todos eles no default do banco —

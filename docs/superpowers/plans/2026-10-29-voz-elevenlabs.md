@@ -237,7 +237,7 @@ vai de carona nesta frente.
 | 5 — `texto-falavel.ts` + `sintetizar.ts` | ✅ feito, **deliberadamente ÓRFÃOS** | commit `d58e399d0` |
 | 6a — `sendTurnMessage` aprende a mandar voz (idempotente, com custo) | ✅ feito | commit `ccf267718`, migration 0252 |
 | 6b — o AGENTE decide falar (`inbound-turn.ts` + `ai_agent_versions`) | ✅ feito | migration 0253, ver "o que foi construído" abaixo |
-| 7 — tela de configuração (ligar voz, escolher voice_id, ouvir prévia) | ⬜ não iniciado | é o ÚNICO motivo de `voz_enabled` ainda não poder ser ligado por ninguém |
+| 7 — tela de configuração (ligar voz, escolher voice_id, ouvir prévia) | ✅ feito | ver "Fase 7" abaixo |
 
 **Por que a Fase 5 está "órfã" de propósito.** `sintetizarVoz()` e `custoDeVozCents()` são reais,
 testados e chamáveis — mas **nada no runtime do agente os chama ainda**, e o ponto `sintese_de_voz`
@@ -332,10 +332,39 @@ direta do código, e com confirmação explícita do usuário antes de editar o 
   existem no momento em que ela corre. `tests/unit/varredura-anon-e-o-ultimo-bloco.test.ts` pegou
   isso antes de qualquer commit; o apêndice de 0252/0253 foi movido para ANTES da varredura.
 
-**O que NÃO foi feito, de propósito — e é só isso que falta para a voz funcionar de ponta a
-ponta:** não há tela. `voz_enabled` só pode ser ligado por quem edita o banco direto, e essa
-pessoa precisa TAMBÉM configurar `organizations.settings.voz.voice_id` e cadastrar a credencial
-ElevenLabs (Fase 1) — sem os três, o agente responde em texto, sempre.
+**Achados da revisão de código, corrigidos antes da Fase 7** (ver `.changes/` — pendente — e o
+commit `fix(ai-voz)`): `uploadDeVoz` usava `upsert:false`, travando para sempre o retry de um envio
+que sintetizou mas falhou no transporte (path determinístico colidia com o antigo). Erro de
+síntese que não é um desfecho terminal do ledger derrubava o TURNO INTEIRO em vez de cair para
+texto. `registrarCustoDeVoz` não gravava `job_id`, cegando o rollup de custo por execução.
+
+**Fase 7 — a tela, feita:**
+
+1. Editor do agente (`AgentForm.tsx`): `voz_enabled` + `voz_quando` ao lado de "Estilo de
+   resposta" (mesmo padrão de `split_messages`) — é POR VERSÃO, porque é aí que `video_frames_
+   enabled` também mora. A lista de colunas de `ai_agent_versions` está copiada em SEIS arquivos
+   (`tests/unit/agent-version-columns-drift.test.ts` existe por causa disso — achado por esse
+   teste: faltavam duas cópias, `app/app/ai/agents/[id]/page.tsx` e `lib/ai/agents/duplicate.ts`,
+   que meu primeiro grep não alcançou por procurar só em `app/` com `--include=*.ts`, perdendo
+   `.tsx` e `lib/`).
+2. `app/api/v1/ai/voz/route.ts` (novo) — GET devolve a voz atual da organização +
+   `vozesDisponiveis` (lidas de `models_available` da credencial ElevenLabs — são `voice_id`, não
+   nomes; é o botão de prévia que diz qual voz é cada um) + se há credencial validada. PATCH
+   grava em `organizations.settings.voz` com o MESMO merge-nunca-sobrescrita do PATCH irmão
+   (`settings.llm`). `voice_id`/`model_id` são da ORGANIZAÇÃO (recurso contratado uma vez), não da
+   versão — por isso rota própria, fora do editor de agente.
+3. `app/api/v1/ai/voz/preview/route.ts` (novo) — sintetiza uma frase curta com a voz escolhida e
+   devolve o áudio inline em base64 (nunca Storage, nunca `llm_calls` — prévia é descartável, não
+   é mensagem real). A tela toca num `<audio>` oculto.
+4. `CartaoDeVoz` no painel de Provedores — sibling de `CartaoDoPadrao`, com o seletor de voz,
+   "Ouvir prévia" e "Salvar voz".
+
+**O que ficou de fora, de propósito:** escolher `model_id` (Turbo/Flash) na UI — `custoDeVozCents`
+ainda cobra uma taxa fixa, então expor a escolha sem ajustar o preço repetiria o achado #4 da
+revisão (cobrança ~2x errada). Fragmento em `.changes/` para o release — achado #8 da revisão,
+ainda não escrito. Os outros 4 achados (pacing/digitando ausente na voz, exceção para estado
+rotineiro do ledger, duplicação no worker de transcrição e no painel, ida dupla ao ledger por
+envio) também continuam em aberto.
 
 ---
 

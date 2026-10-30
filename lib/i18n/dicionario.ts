@@ -1781,6 +1781,30 @@ export const DICIONARIO: Traducoes = {
   "Serviços de voz": { es: "Servicios de voz" },
   Vozes: { es: "Voces" },
   Serviço: { es: "Servicio" },
+  "Responder falando": { es: "Responder hablando" },
+  "Enviar nota de voz, não só texto": { es: "Enviar nota de voz, no solo texto" },
+  "Precisa de uma credencial do ElevenLabs cadastrada e de uma voz escolhida em Agente de IA → Provedores. Sem os dois, o agente continua respondendo em texto — ligar aqui não quebra nada.":
+    {
+      es: "Necesita una credencial de ElevenLabs registrada y una voz elegida en Agente de IA → Proveedores. Sin los dos, el agente sigue respondiendo en texto — activar esto no rompe nada.",
+    },
+  "Quando falar": { es: "Cuándo hablar" },
+  "Só quando o cliente mandar áudio": { es: "Solo cuando el cliente envíe audio" },
+  "Nunca (desligado, sem apagar a configuração)": {
+    es: "Nunca (desactivado, sin borrar la configuración)",
+  },
+  "Voz salva:": { es: "Voz guardada:" },
+  "Voz do agente": { es: "Voz del agente" },
+  "Qual voz sai quando um agente responde em áudio — ligado por versão, no editor do agente. Precisa de uma credencial do ElevenLabs validada.":
+    {
+      es: "Qué voz se usa cuando un agente responde en audio — se activa por versión, en el editor del agente. Necesita una credencial de ElevenLabs validada.",
+    },
+  "Sem credencial do ElevenLabs validada ainda.": {
+    es: "Aún no hay una credencial de ElevenLabs validada.",
+  },
+  "Cadastrar em Credenciais": { es: "Registrar en Credenciales" },
+  "Voice ID": { es: "Voice ID" },
+  "Ouvir prévia": { es: "Escuchar vista previa" },
+  "Salvar voz": { es: "Guardar voz" },
   "Para o agente ouvir o áudio que o cliente manda com mais precisão (inclusive diferenciando quem fala) e para responder falando, em nota de voz, quando fizer sentido.":
     {
       es: "Para que el agente escuche el audio que el cliente envía con más precisión (incluso diferenciando quién habla) y para responder hablando, en nota de voz, cuando tenga sentido.",

@@ -90,6 +90,8 @@ function buildFieldChanges(a: AgentVersionRow, b: AgentVersionRow): FieldChange[
     ["cases_enabled", "cases_enabled"],
     ["split_messages", "split_messages"],
     ["split_max_chars", "split_max_chars"],
+    ["voz_enabled", "voz_enabled"],
+    ["voz_quando", "voz_quando"],
   ];
   return fields
     .filter(([k]) => a[k] !== b[k])
