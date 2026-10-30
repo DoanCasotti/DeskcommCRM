@@ -20,9 +20,9 @@
  *
  *   1. `full_name` com conteúdo depois do `trim` — o nome cadastrado, como está;
  *   2. `email` com conteúdo — quem não tem nome ainda é reconhecível pelo
- *      endereço; é a decisão de produto registrada na #3023 (o fork do produto
- *      usa e-mail como fallback, e o próprio mantenedor pediu o e-mail como
- *      decisão dele, não inventada pelo rótulo);
+ *      endereço. Só aparece onde a tela JÁ recebe o e-mail (`/api/v1/team`);
+ *      `/api/v1/team/assignable` segue omitindo-o, e expô-lo ali continua
+ *      pergunta de LGPD em aberto na #3023;
  *   3. `"Atendente" + sufixo curto e ESTÁVEL` — hash do `user_id`, não um pedaço
  *      dele. Dois membros sem nome e sem e-mail continuam distinguíveis na lista,
  *      e o sufixo não deixa ninguém reconstruir o uuid lendo a tela;
