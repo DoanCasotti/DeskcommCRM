@@ -516,18 +516,11 @@ export async function resolveTurnAgent(
     });
     // Erro de identidade não pode abrir o atendimento genérico com ferramentas.
     if (!roteadorCarregado || temRegrasDeRemetente) throw err;
-    // #3722: aqui já estamos no caminho de erro; a escolha do número (com
-    // público) é tentada uma vez e, se ela também falhar, o turno segue no
-    // fluxo sem agente como antes — um segundo throw dentro do catch mataria o
-    // job sem log útil.
-    let escolha: EscolhaDoNumero = { config: null, motivo: 'sem_agente' };
-    try {
-      escolha = await agenteDoNumero();
-    } catch {
-      deps.log.warn('resolve-turn-agent: escolha do agente do número falhou no caminho de erro — turno cai no fluxo sem agente', {
-        conversationId: input.conversationId,
-      });
-    }
+    // #3722: a escolha do número (com público) erra para FORA, como a leitura
+    // de antes: engolir o erro aqui devolveria `config: null`, e o turno cairia
+    // no agente genérico — que responde exatamente o contato que o público
+    // barra. Sem agente decidido, a fila re-tenta o job.
+    const escolha = await agenteDoNumero();
     return {
       config: escolha.config,
       routerId: null, intentName: null, confidence: null, outcome: 'classifier_failed',
