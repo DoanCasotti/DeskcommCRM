@@ -14617,6 +14617,12 @@ export const DICIONARIO: Traducoes = {
   "Campo de data": { es: "Campo de fecha" },
   "Escolha o campo": { es: "Elige el campo" },
   "Faltam N dias": { es: "Faltan N días" },
+  // #3726 — o gatilho de aniversário passou a ter N de antecedência; sem estas
+  // duas linhas o campo sairia em português para quem escolheu espanhol.
+  "Dias de antecedência": { es: "Días de antelación" },
+  "O aviso sai N dias antes da data de nascimento, sempre às 9h no fuso da organização. Deixe 0 para avisar no próprio dia. Cada contato recebe um aviso por ano, por automação.": {
+    es: "El aviso se envía N días antes de la fecha de nacimiento, siempre a las 9 h en la zona horaria de la organización. Deja 0 para avisar el mismo día. Cada contacto recibe un aviso por año, por automatización.",
+  },
   "O aviso sai no dia em que faltarem N dias para a data, uma vez por negócio. Para avisar DEPOIS da data, use N negativo — -60 confirma a entrega 60 dias após o casamento.": {
     es: "El aviso se envía cuando faltan N días para la fecha, una sola vez por negocio. Para avisar DESPUÉS de la fecha, usa un N negativo: con -60 se confirma la entrega 60 días después de la boda.",
   },
@@ -18633,6 +18639,31 @@ export const DICIONARIO: Traducoes = {
   "Grupo não encontrado.": { es: "Grupo no encontrado." },
   "Grupo que não pertence a esta organização.": {
     es: "Grupo que no pertenece a esta organización.",
+  },
+  // Frases de `lib/erros/para-operador.ts` (#3747): o que a tela diz quando o
+  // banco recusa. O texto do Postgres não passa daqui — ele nomeia constraint,
+  // relação e coluna, e é assunto do log, não do toast.
+  "Sua conta não tem permissão para salvar esta configuração.": {
+    es: "Tu cuenta no tiene permiso para guardar esta configuración.",
+  },
+  "Já existe um registro com esses dados.": { es: "Ya existe un registro con esos datos." },
+  "O registro referenciado não existe mais. Atualize a página.": {
+    es: "El registro referenciado ya no existe. Actualiza la página.",
+  },
+  "Falta um campo obrigatório. Preencha e salve de novo.": {
+    es: "Falta un campo obligatorio. Complétalo y guarda de nuevo.",
+  },
+  "Um dos valores enviados não é aceito pelo servidor.": {
+    es: "Uno de los valores enviados no es aceptado por el servidor.",
+  },
+  "A gravação demorou mais que o esperado e nada foi salvo. Tente de novo.": {
+    es: "La grabación tardó más de lo esperado y no se guardó nada. Inténtalo de nuevo.",
+  },
+  "A cor da marca precisa ser um hexadecimal de seis dígitos, como #1a2b3c.": {
+    es: "El color de la marca debe ser un hexadecimal de seis dígitos, como #1a2b3c.",
+  },
+  "O caminho do logo não é aceito. Envie a imagem de novo.": {
+    es: "La ruta del logo no es aceptada. Vuelve a subir la imagen.",
   },
 };
 
