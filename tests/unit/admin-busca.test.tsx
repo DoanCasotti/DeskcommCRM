@@ -21,6 +21,7 @@ import userEvent from "@testing-library/user-event";
 
 import { AdminCommandPalette } from "@/components/admin/AdminCommandPalette";
 import { BuscaDoAdmin } from "@/components/admin/BuscaDoAdmin";
+import { destinosDoAdmin } from "@/lib/admin/navegacao";
 
 const push = vi.fn();
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push }) }));
@@ -37,10 +38,12 @@ function abrir(modulosLigados: readonly ("cobranca")[] = []) {
 }
 
 describe("busca do painel do administrador", () => {
-  it("sem digitar nada, mostra o catálogo inteiro (as 20 telas do menu)", () => {
+  it("sem digitar nada, mostra o catálogo inteiro (as telas do menu)", () => {
     abrir();
-    // O menu tem 20 entradas; a de Cobrança é condicional e fica de fora aqui.
-    expect(screen.getAllByRole("option").length).toBe(19);
+    // Conta a partir da lista do menu, não de um número colado: tela nova de
+    // admin entra em ADMIN_DESTINATIONS (a completude cobra) e não pode
+    // reprovar este caso. Cobrança é condicional e fica de fora sem módulo.
+    expect(screen.getAllByRole("option").length).toBe(destinosDoAdmin([]).length);
     expect(screen.getByRole("option", { name: /Dashboard/ })).toBeTruthy();
     expect(screen.getByRole("option", { name: /Módulos/ })).toBeTruthy();
   });
