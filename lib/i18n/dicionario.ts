@@ -18441,6 +18441,38 @@ export const DICIONARIO: Traducoes = {
   "Parâmetro inválido.": {
     es: "Parámetro no válido.",
   },
+  // Setores de atendimento (migration 0801) — Equipe › Setores e a coluna Setor.
+  "Nome do setor": { es: "Nombre del sector" },
+  "Ex.: Comercial, Suporte, Financeiro": { es: "Ej.: Ventas, Soporte, Finanzas" },
+  "Novo setor": { es: "Nuevo sector" },
+  "Agrupe os atendentes por área. Depois de criar, escolha o setor de cada atendente na aba Atendimento.": { es: "Agrupa a los asesores por área. Después de crearlo, elige el sector de cada asesor en la pestaña Atención." },
+  "Criar setor": { es: "Crear sector" },
+  "Setores": { es: "Sectores" },
+  "Erro ao carregar os setores.": { es: "Error al cargar los sectores." },
+  "Nenhum setor cadastrado ainda.": { es: "Todavía no hay sectores registrados." },
+  "1 atendente": { es: "1 asesor" },
+  "atendentes": { es: "asesores" },
+  "Editar setor": { es: "Editar sector" },
+  "Apagar setor": { es: "Eliminar sector" },
+  "Os atendentes deste setor ficam sem setor. Jornada, carga e conversas deles não mudam.": { es: "Los asesores de este sector quedan sin sector. Su jornada, carga y conversaciones no cambian." },
+  "Sem setor": { es: "Sin sector" },
+  "Cadastre setores na aba Setores": { es: "Registra sectores en la pestaña Sectores" },
+  "Setor de": { es: "Sector de" },
+  "Setor": { es: "Sector" },
+  "Filtrar por setor": { es: "Filtrar por sector" },
+  "Todos os setores": { es: "Todos los sectores" },
+  "Nenhum atendente neste setor.": { es: "Ningún asesor en este sector." },
+  "Setor criado.": { es: "Sector creado." },
+  "Setor atualizado.": { es: "Sector actualizado." },
+  "Setor apagado.": { es: "Sector eliminado." },
+  "Setor do atendente atualizado.": { es: "Sector del asesor actualizado." },
+  "Já existe um setor com este nome.": { es: "Ya existe un sector con este nombre." },
+  "Setor não encontrado.": { es: "Sector no encontrado." },
+  // O módulo opcional dos setores (doc 213) em /admin/sistema e em Recursos opcionais.
+  "Setores de atendimento": { es: "Sectores de atención" },
+  "Agrupa os atendentes da Equipe por área e filtra a aba Atendimento por setor. Não muda quem recebe as conversas.": { es: "Agrupa a los asesores del Equipo por área y filtra la pestaña Atención por sector. No cambia quién recibe las conversaciones." },
+  "Ligado, cada empresa ganha na Equipe a aba Setores, para agrupar os atendentes por área, e a aba Atendimento passa a mostrar e filtrar o setor de cada um. O setor não muda quem recebe as conversas. Desligado, a aba e a coluna somem; os setores já cadastrados ficam guardados.": { es: "Activado, cada empresa obtiene en Equipo la pestaña Sectores, para agrupar a los asesores por área, y la pestaña Atención pasa a mostrar y filtrar el sector de cada uno. El sector no cambia quién recibe las conversaciones. Desactivado, la pestaña y la columna desaparecen; los sectores ya registrados quedan guardados." },
+  "Não cria porta no menu do CRM: ele libera uma aba em": { es: "No crea entrada en el menú del CRM: habilita una pestaña en" },
   'Para não depender do dado, ponha um texto de reserva: {{primeiro_nome|"aluno"}}.': {
     es: 'Para no depender del dato, pon un texto de respaldo: {{primeiro_nome|"alumno"}}.',
   },
@@ -18503,6 +18535,34 @@ export const DICIONARIO: Traducoes = {
   },
   "Botões no card do negócio que abrem outro sistema com o dado do cliente já preenchido. Aceitam tel:, http:// e https://. Marcadores: {{telefone}}, {{nome}}, {{primeiro_nome}}, {{email}} e {{documento}}; campos personalizados entram como {{chave}}, {{lead.chave}} ou {{contact.chave}}.": {
     es: "Botones en la tarjeta del negocio que abren otro sistema con el dato del cliente ya rellenado. Aceptan tel:, http:// y https://. Marcadores: {{telefone}}, {{nome}}, {{primeiro_nome}}, {{email}} y {{documento}}; los campos personalizados entran como {{chave}}, {{lead.chave}} o {{contact.chave}}.",
+  },
+
+  // ─── Grupos de respostas rápidas (#3245) ─────────────────────────────────
+  "Novo grupo": { es: "Nuevo grupo" },
+  "Sem grupo": { es: "Sin grupo" },
+  "Nenhuma resposta neste grupo.": { es: "Ninguna respuesta en este grupo." },
+  "Renomear grupo": { es: "Renombrar grupo" },
+  "Excluir grupo": { es: "Eliminar grupo" },
+  "Mover grupo para cima": { es: "Mover grupo hacia arriba" },
+  "Mover grupo para baixo": { es: "Mover grupo hacia abajo" },
+  "Grupos organizam as respostas por etapa da venda. Eles são opcionais.": {
+    es: "Los grupos organizan las respuestas por etapa de la venta. Son opcionales.",
+  },
+  "Nome do grupo": { es: "Nombre del grupo" },
+  "Atendimento inicial": { es: "Atención inicial" },
+  "Grupo criado.": { es: "Grupo creado." },
+  "Grupo renomeado.": { es: "Grupo renombrado." },
+  "Grupo excluído. As respostas dele continuam na lista.": {
+    es: "Grupo eliminado. Sus respuestas siguen en la lista.",
+  },
+  "Grupo (opcional)": { es: "Grupo (opcional)" },
+  "Organize as respostas por etapa da venda. Sem grupo, ela continua na lista de sempre.": {
+    es: "Organiza las respuestas por etapa de la venta. Sin grupo, sigue en la lista de siempre.",
+  },
+  "Já existe um grupo com esse nome.": { es: "Ya existe un grupo con ese nombre." },
+  "Grupo não encontrado.": { es: "Grupo no encontrado." },
+  "Grupo que não pertence a esta organização.": {
+    es: "Grupo que no pertenece a esta organización.",
   },
 };
 
