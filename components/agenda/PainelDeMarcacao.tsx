@@ -468,7 +468,9 @@ export function PainelDeMarcacao({
    * resposta sem jornada ou com erro deixa a decisão pendente. No MESMO tipo a
    * consulta é refeita — a duração entra na chave dela, e uma falha pode passar
    * —, e a resposta seguinte, com jornada e o mês esgotado, ainda precisa
-   * poder levar ao mês seguinte.
+   * poder levar ao mês seguinte. Quem navega pelas setas decide por si: a
+   * decisão pendente não sobrevive a elas (senão a resposta que chega depois
+   * jogaria a pessoa de volta ao mês seguinte contra a volta à mão).
    */
   // Ajuste de estado DURANTE o render, não num efeito: o mês morto nem chega a
   // ser pintado (https://react.dev/learn/you-might-not-need-an-effect).
@@ -848,7 +850,10 @@ export function PainelDeMarcacao({
               size="icon"
               aria-label={t("Mês anterior")}
               data-testid="mes-anterior"
-              onClick={() => setMes((m) => startOfMonth(addDays(startOfMonth(m), -1)))}
+              onClick={() => {
+                setAberturaDecidida(true);
+                setMes((m) => startOfMonth(addDays(startOfMonth(m), -1)));
+              }}
             >
               <CaretLeft size={16} weight="bold" aria-hidden />
             </Button>
@@ -857,7 +862,10 @@ export function PainelDeMarcacao({
               size="icon"
               aria-label={t("Próximo mês")}
               data-testid="mes-seguinte"
-              onClick={() => setMes((m) => startOfMonth(addDays(startOfMonth(m), 32)))}
+              onClick={() => {
+                setAberturaDecidida(true);
+                setMes((m) => startOfMonth(addDays(startOfMonth(m), 32)));
+              }}
             >
               <CaretRight size={16} weight="bold" aria-hidden />
             </Button>
