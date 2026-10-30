@@ -73,6 +73,7 @@ export function PainelDeMarcacao({
   agora,
   responsavel,
   tipo = "Consulta",
+  tipoId,
   duracaoMin = 30,
   permiteEscolherDuracao = true,
   onDuracaoMudar,
@@ -97,6 +98,8 @@ export function PainelDeMarcacao({
   agora: Date;
   responsavel: Pessoa;
   tipo?: string;
+  /** Identidade do tipo para a decisão de abertura (o nome não é único). */
+  tipoId?: string;
   /**
    * A DURAÇÃO PADRÃO deste atendimento — a do serviço, e ela CONTINUA sendo o
    * padrão (issue #3709). Deixou de ser a única opção.
@@ -454,20 +457,41 @@ export function PainelDeMarcacao({
    * volta à mão (para um encaixe hoje) fica onde voltou. Sem jornada publicada
    * não há o que procurar no mês seguinte, e o aviso é o próximo passo.
    *
-   * ⚠️ E "UMA vez" só conta quando a resposta DECIDE. O painel abre no primeiro
-   * tipo da lista (ordem alfabética), e esse pode não ter jornada nem
-   * responsável: a rota responde `publicou_horarios: false`, e gastar a decisão
-   * nessa resposta deixava o painel parado num mês morto quando a pessoa
-   * trocava para o tipo que tem jornada. Foi o que reprovou o e2e da agenda na
-   * `main` na sexta 30/10/2026, último dia útil do mês, depois das 17h BRT: a
-   * spec abre o painel no tipo "Atendimento" (sem jornada) e só então escolhe
-   * "Consulta E2E". Resposta sem jornada ou com erro não consome a decisão.
+   * UMA VEZ POR TIPO, não por montagem. O painel continua montado quando a
+   * pessoa troca de tipo (ver o efeito da duração), e a tela abre no PRIMEIRO
+   * tipo — que pode não ter jornada. Com a decisão presa à montagem, a resposta
+   * desse primeiro tipo a gastava ("sem jornada, fica") e a do tipo escolhido,
+   * com outubro esgotado, chegava sem decidir nada: o mês morto de volta, em
+   * 9 specs do e2e às 16h45 de sexta 30/10/2026.
+   *
+   * E só uma resposta que DECIDE gasta a decisão (#3777, @paulolimajr77):
+   * resposta sem jornada ou com erro deixa a decisão pendente. No MESMO tipo a
+   * consulta é refeita — a duração entra na chave dela, e uma falha pode passar
+   * —, e a resposta seguinte, com jornada e o mês esgotado, ainda precisa
+   * poder levar ao mês seguinte.
    */
   // Ajuste de estado DURANTE o render, não num efeito: o mês morto nem chega a
   // ser pintado (https://react.dev/learn/you-might-not-need-an-effect).
+  // A chave é o ID do tipo: o nome não é único (só o slug é), e dois tipos de
+  // mesmo nome não podem dividir a decisão. Na troca, a decisão só reabre se o
+  // mês em tela ainda é o de abertura — quem já foi para o mês seguinte e volta
+  // à mão para hoje (um encaixe) não pode ser jogado de volta.
+  const chaveDoTipo = tipoId ?? tipo;
   const [aberturaDecidida, setAberturaDecidida] = React.useState(false);
+  const [tipoDaDecisao, setTipoDaDecisao] = React.useState(chaveDoTipo);
+  if (tipoDaDecisao !== chaveDoTipo) {
+    setTipoDaDecisao(chaveDoTipo);
+    setAberturaDecidida(!isSameMonth(mes, ancora));
+  }
   const aberturaCarregada = mesCarregado != null && dadosDoMesEmTela && isSameMonth(mes, ancora);
-  if (!aberturaDecidida && aberturaCarregada && !instanteInicial && publicouHorarios && !erroAoCarregar) {
+  if (
+    tipoDaDecisao === chaveDoTipo &&
+    !aberturaDecidida &&
+    aberturaCarregada &&
+    !instanteInicial &&
+    publicouHorarios &&
+    !erroAoCarregar
+  ) {
     setAberturaDecidida(true);
     if (!semanas.flat().some(temHorario)) {
       setMes(startOfMonth(addDays(startOfMonth(mes), 32)));
