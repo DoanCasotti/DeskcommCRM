@@ -482,6 +482,22 @@ const acoesFixas = [
       plano_id: z.string().trim().min(1).max(64),
     }),
   }),
+  // #3727 — a PONTE para o gatilho de data do funil (#989): grava a data do
+  // atendimento num campo de DATA do negócio, e é a regra "Quando faltarem N
+  // dias para uma data do funil" (com N negativo) que manda a mensagem N dias
+  // depois. Dois campos e nada mais: o `pipeline_id` é o funil dono do campo (é
+  // ele que a varredura consulta) e o `campo` é a CHAVE em
+  // `pipelines.settings.fields`, nunca o rótulo — o mesmo par que o
+  // `trigger_config` do gatilho de data guarda. Quem espera NÃO é esta ação:
+  // ela grava e sai na hora do comparecimento, e por isso não segura a vaga de
+  // "um follow-up vivo por contato".
+  z.object({
+    type: z.literal("set_lead_date_field"),
+    config: z.object({
+      pipeline_id: z.string().uuid(),
+      campo: z.string().trim().min(1).max(80),
+    }),
+  }),
   // #2642 — a ação que avisa a EQUIPE na virada para ganho. O recorte do
   // mantenedor no PR #2834 deixou UM caminho: o WhatsApp para o número que o
   // ADMIN já registrou em Avisos. Por isso a configuração é só isto — não tem

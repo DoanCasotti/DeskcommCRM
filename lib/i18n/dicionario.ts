@@ -6364,6 +6364,24 @@ export const DICIONARIO: Traducoes = {
   "vence em": { es: "vence en" },
   "Escolha o que dispara a automação": { es: "Elige qué dispara la automatización" },
   "Escolha o funil e o campo de data": { es: "Elige el embudo y el campo de fecha" },
+  "A data do atendimento não foi gravada: o evento que disparou a regra não trouxe um compromisso. Use esta ação no gatilho “Quando alguém comparecer ao compromisso”.": {
+    es: "No se guardó la fecha de la cita: el evento que activó la regla no trajo una cita. Usa esta acción con el disparador «Cuando alguien asista a la cita».",
+  },
+  "A data do atendimento não foi gravada: o horário do compromisso veio num formato que não deu para ler.": {
+    es: "No se guardó la fecha de la cita: el horario de la cita llegó en un formato que no se pudo leer.",
+  },
+  "A data do atendimento não foi gravada: o compromisso não está ligado a um contato, então não havia negócio onde gravar.": {
+    es: "No se guardó la fecha de la cita: la cita no está vinculada a un contacto, así que no había negocio donde guardarla.",
+  },
+  "A data do atendimento não foi gravada: o contato não tem negócio aberto no funil escolhido. Esta ação não cria negócio.": {
+    es: "No se guardó la fecha de la cita: el contacto no tiene un negocio abierto en el embudo elegido. Esta acción no crea negocios.",
+  },
+  "A data do atendimento não foi gravada: o campo escolhido não é mais um campo de data do negócio neste funil. Abra a automação e escolha o campo de novo.": {
+    es: "No se guardó la fecha de la cita: el campo elegido ya no es un campo de fecha del negocio en este embudo. Abre la automatización y elige el campo de nuevo.",
+  },
+  "A data do atendimento não foi gravada: o negócio não existe mais nesta organização.": {
+    es: "No se guardó la fecha de la cita: el negocio ya no existe en esta organización.",
+  },
   "Nenhuma condição completa: roda em todo evento": { es: "Ninguna condición completa: se ejecuta en todo evento" },
   "A IA decide": { es: "La IA decide" },
   "Hoje este passo só se edita pela API": { es: "Hoy este paso solo se edita por la API" },
@@ -17555,6 +17573,22 @@ export const DICIONARIO: Traducoes = {
   "Cada aplicação cria as tarefas do plano na ordem e não duplica — a marca da aplicação é a prova.": {
     es: "Cada aplicación crea las tareas del plan en orden y no duplica — la marca de la aplicación es la prueba.",
   },
+
+  // ─── Gravar a data do atendimento no card (#3727) ───
+  // A ação nasce colada no gatilho de data do funil (#989): a frase de apoio do
+  // formulário cita o rótulo daquele gatilho como ele aparece na tela, para o
+  // operador reconhecer a segunda regra que vai montar.
+  "Gravar a data do atendimento num campo do negócio": {
+    es: "Guardar la fecha de la cita en un campo del negocio",
+  },
+  "Data do atendimento": { es: "Fecha de la cita" },
+  "Grava a data do atendimento neste campo. Quem conta os dias é a regra “Quando faltarem N dias para uma data do funil”, com N negativo para agir depois do atendimento.": {
+    es: "Guarda la fecha de la cita en este campo. Quien cuenta los días es la regla «Cuando falten N días para una fecha del embudo», con N negativo para actuar después de la cita.",
+  },
+  "Este funil não tem campo de data do negócio. Crie um nas configurações do funil para usar esta ação.": {
+    es: "Este embudo no tiene campo de fecha del negocio. Crea uno en la configuración del embudo para usar esta acción.",
+  },
+  "Escolha o campo de data": { es: "Elige el campo de fecha" },
 
   // ─── Seletor de canal ao iniciar conversa nova (#2382) ───
   "Escolha o canal para iniciar a conversa": { es: "Elige el canal para iniciar la conversación" },
