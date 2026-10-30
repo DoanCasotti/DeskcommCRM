@@ -873,7 +873,8 @@ export function AgendaClient({
 
                 Sem texto, o corpo do POST sai sem `title` e a rota grava o
                 nome do tipo, como sempre. Com texto, é ELE o título do
-                compromisso na grade, no histórico e no evento do Google.
+                compromisso na grade, no histórico, no evento do Google e
+                no lembrete que vai ao cliente (`montarLembrete` usa `title`).
               */
               <div className="lg:col-span-2">
                 <label className="block" htmlFor="titulo-do-compromisso">
@@ -895,7 +896,7 @@ export function AgendaClient({
                   aria-describedby="ajuda-do-titulo"
                 />
                 <p id="ajuda-do-titulo" className="mt-1 text-xs text-text-muted">
-                  {t("É o nome que aparece na agenda. Em branco, usa o nome do tipo de agendamento.")}
+                  {t("Aparece na agenda e também para o cliente, no lembrete e no convite. Em branco, usa o nome do tipo de agendamento.")}
                 </p>
               </div>
             ) : null}

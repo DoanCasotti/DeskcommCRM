@@ -10722,8 +10722,8 @@ export const DICIONARIO: Traducoes = {
   // #3766 — o título livre do compromisso.
   "Título do compromisso": { es: "Título de la cita" },
   "OS 1234 · Atendimento fulano": { es: "OS 1234 · Atención a fulano" },
-  "É o nome que aparece na agenda. Em branco, usa o nome do tipo de agendamento.": {
-    es: "Es el nombre que aparece en la agenda. En blanco, usa el nombre del tipo de cita.",
+  "Aparece na agenda e também para o cliente, no lembrete e no convite. Em branco, usa o nome do tipo de agendamento.": {
+    es: "Aparece en la agenda y también para el cliente, en el recordatorio y en la invitación. En blanco, usa el nombre del tipo de cita.",
   },
   "Por que está cancelando?": { es: "¿Por qué estás cancelando?" },
   "O paciente pediu para remarcar por telefone": { es: "El paciente pidió reprogramar por teléfono" },

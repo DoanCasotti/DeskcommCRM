@@ -250,7 +250,7 @@ describe("o título livre é o nome do compromisso na agenda", () => {
     // `undefined`, e não `""`: `marcarSchema.title` é `min(1)`, e a string vazia
     // viraria 422 no caminho de quem não usou o campo. Na serialização do
     // `apiClient` (JSON) a chave com `undefined` não existe.
-    expect(corposDoPost[0].title).toBeUndefined();
+    expect(corposDoPost[0]?.title).toBeUndefined();
   });
 
   it("só espaços também não manda `title` — branco é branco", async () => {
@@ -262,7 +262,7 @@ describe("o título livre é o nome do compromisso na agenda", () => {
     fireEvent.click(screen.getByTestId("confirmar-marcacao"));
 
     await waitFor(() => expect(corposDoPost).toHaveLength(1));
-    expect(corposDoPost[0].title).toBeUndefined();
+    expect(corposDoPost[0]?.title).toBeUndefined();
   });
 });
 
