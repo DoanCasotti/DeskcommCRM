@@ -6,7 +6,6 @@ import { format } from "date-fns";
 import { useT } from "@/hooks/i18n/useT";
 import { ClockCountdown } from "@/lib/ui/icons";
 import type { AuditTrailEntry } from "@/hooks/useLgpdRequest";
-import { rotuloDoMembro } from "@/lib/users/rotulo-do-atendente";
 
 interface AuditTrailProps {
   entries: AuditTrailEntry[];
@@ -39,7 +38,7 @@ export function AuditTrail({ entries }: AuditTrailProps) {
                 {format(new Date(entry.created_at), "dd/MM/yyyy HH:mm:ss", { locale: localeDaData })}
                 {entry.actor_user_id && (
                   <span className="ml-2 opacity-60">
-                    {t("por")} {rotuloDoMembro({ user_id: entry.actor_user_id }, t)}…
+                    {t("por")} {entry.actor_user_id.slice(0, 8)}…
                   </span>
                 )}
               </p>

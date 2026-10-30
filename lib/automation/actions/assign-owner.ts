@@ -42,7 +42,7 @@ async function executarRodizio(ctx: ActionCtx, leadId: string): Promise<ActionRe
   const desfecho = data as DesfechoDoRodizio | null;
   if (desfecho && "user_id" in desfecho) {
     const { data: pessoa } = await ctx.admin.auth.admin.getUserById(desfecho.user_id);
-    // ponytail: sem nome no perfil, o começo do id — o dono já foi gravado, e a
+    // ponytail: sem nome no perfil, o rótulo da régua (#3023) — o dono já foi gravado, e a
     // frase é informação: falhar aqui esconderia uma atribuição que aconteceu.
     const nome = rotuloDoMembro({
       full_name: pessoa?.user?.user_metadata?.full_name as string | undefined,

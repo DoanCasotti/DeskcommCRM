@@ -13,7 +13,6 @@ import { useAdminLgpdRequest } from "@/hooks/useAdminLgpdRequest";
 import type { AdminLgpdStatus, AdminLgpdRequestType } from "@/hooks/useAdminLGPDRequests";
 import { diasAtePrazo, prazoEmBr, progressoDoPrazo } from "@/lib/lgpd/sla";
 import { useT } from "@/hooks/i18n/useT";
-import { rotuloDoMembro } from "@/lib/users/rotulo-do-atendente";
 
 // ---------------------------------------------------------------------------
 // Inline SLA Timeline (simplified — no approve button, admin observe-only)
@@ -163,7 +162,7 @@ function AuditTrailInline({ entries }: { entries: AuditEntry[] }) {
                 {format(new Date(entry.created_at), "dd/MM/yyyy HH:mm:ss", { locale: localeDaData })}
                 {entry.actor_user_id && (
                   <span className="ml-2 opacity-60">
-                    {t("por")} {rotuloDoMembro({ user_id: entry.actor_user_id }, t)}…
+                    {t("por")} {entry.actor_user_id.slice(0, 8)}…
                   </span>
                 )}
               </p>
