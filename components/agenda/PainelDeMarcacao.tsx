@@ -453,14 +453,23 @@ export function PainelDeMarcacao({
    * sem nenhum horário publicado nele, o painel passa ao mês seguinte. Quem
    * volta à mão (para um encaixe hoje) fica onde voltou. Sem jornada publicada
    * não há o que procurar no mês seguinte, e o aviso é o próximo passo.
+   *
+   * ⚠️ E "UMA vez" só conta quando a resposta DECIDE. O painel abre no primeiro
+   * tipo da lista (ordem alfabética), e esse pode não ter jornada nem
+   * responsável: a rota responde `publicou_horarios: false`, e gastar a decisão
+   * nessa resposta deixava o painel parado num mês morto quando a pessoa
+   * trocava para o tipo que tem jornada. Foi o que reprovou o e2e da agenda na
+   * `main` na sexta 30/10/2026, último dia útil do mês, depois das 17h BRT: a
+   * spec abre o painel no tipo "Atendimento" (sem jornada) e só então escolhe
+   * "Consulta E2E". Resposta sem jornada ou com erro não consome a decisão.
    */
   // Ajuste de estado DURANTE o render, não num efeito: o mês morto nem chega a
   // ser pintado (https://react.dev/learn/you-might-not-need-an-effect).
   const [aberturaDecidida, setAberturaDecidida] = React.useState(false);
   const aberturaCarregada = mesCarregado != null && dadosDoMesEmTela && isSameMonth(mes, ancora);
-  if (!aberturaDecidida && aberturaCarregada && !instanteInicial) {
+  if (!aberturaDecidida && aberturaCarregada && !instanteInicial && publicouHorarios && !erroAoCarregar) {
     setAberturaDecidida(true);
-    if (publicouHorarios && !erroAoCarregar && !semanas.flat().some(temHorario)) {
+    if (!semanas.flat().some(temHorario)) {
       setMes(startOfMonth(addDays(startOfMonth(mes), 32)));
     }
   }

@@ -214,3 +214,21 @@ describe("os dias acendem só com os horários do mês em tela", () => {
     expect(acesos()).toEqual([]);
   });
 });
+
+describe("a resposta sem jornada não gasta a decisão de abertura", () => {
+  it("abre num tipo sem jornada e, ao trocar para o que tem, no último dia útil à tarde, vai ao mês seguinte", () => {
+    // Sexta 30/10/2026, 17h em São Paulo: outubro não tem mais horário.
+    congelar("2026-10-30T20:00:00Z");
+    const { rerender } = render(<Agenda hoje="2026-10-30" publicou={false} />);
+    expect(screen.getByTestId("sem-jornada-publicada")).toBeInTheDocument();
+
+    // A pessoa escolhe o tipo que tem jornada: a consulta responde publicada.
+    rerender(<Agenda hoje="2026-10-30" publicou />);
+
+    expect(
+      acesos(),
+      "o painel ficou em outubro: a resposta sem jornada gastou a decisão de abertura",
+    ).toContain("2026-11-02");
+    expect(screen.queryByTestId("motivo-do-bloqueio")).toBeNull();
+  });
+});
