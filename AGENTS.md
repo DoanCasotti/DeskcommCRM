@@ -22,7 +22,7 @@ Stack canônica (major; a versão exata é o `package.json`):
 
 Next.js 16 (App Router, Turbopack) · React 19 · TypeScript 6 estrito · Tailwind 4 (config em CSS) ·
 shadcn/ui (`new-york`) · Supabase (Postgres + Auth + Realtime + Storage) · Zod 4 · Vitest 4 ·
-Playwright 1 · Sentry 10 · WAHA 2026.7.2 (engine NOWEB) · Upstash Redis · Vercel AI Gateway
+Playwright 1 · Sentry 11 · WAHA 2026.7.2 (engine NOWEB) · Upstash Redis · Vercel AI Gateway
 (`@ai-sdk/anthropic|openai|google`).
 
 > As majors acima são verificadas contra o `package.json` por
@@ -48,7 +48,7 @@ Playwright 1 · Sentry 10 · WAHA 2026.7.2 (engine NOWEB) · Upstash Redis · Ve
   `lib/auth/politica-mfa.ts`.
 - **Filas** — event sourcing leve: `event_log` + workers drenados por cron. Trigger Postgres
   **nunca** faz HTTP.
-- **IA** — Vercel AI Gateway (Anthropic primário, OpenAI para embeddings), RAG por tenant,
+- **IA** — Vercel AI Gateway (Anthropic primário; embeddings pela OpenAI ou pelo Google, escolha da organização), RAG por tenant,
   guardrails before-send.
 - **Tempo real** — Supabase Realtime (`postgres_changes` para inbox/kanban, `broadcast` para
   sinais leves). **Storage** — bucket privado `whatsapp-media`, URL assinada.
@@ -67,9 +67,13 @@ flowchart LR
 ```
 
 Superfícies **não-cookie** (cada uma com guard próprio, nunca o cookie de sessão):
-`app/api/v1/cron/` (Bearer `INTERNAL_CRON_SECRET`, fail-closed), `app/api/internal/`
-(`x-internal-secret`), `app/api/mcp/` (Bearer `tok_...` contra `api_tokens`), `app/api/v1/webhooks/`
-(HMAC + path token). Inventário e superfície de ataque: [`docs/threat-model.md`](docs/threat-model.md).
+`app/api/v1/cron/` (Bearer `INTERNAL_CRON_SECRET`, fail-closed),
+`app/api/mcp/` (Bearer `dsk_...` contra `api_tokens`), `app/api/v1/webhooks/`
+(HMAC + path token), e **parte de `app/api/v1/`** — rotas que aceitam cookie OU bearer pelo helper
+`lib/api/auth-dual.ts`. Esta última cresce rota por rota (decisão do dono em 17/09/2026: converter
+o que cada integração precisar), então o inventário é um comando e não uma lista:
+`git grep -ln "auth-dual" -- app/api/v1`. Rota com o helper **também** precisa de entrada em
+`lib/auth/public-paths.ts`, senão o `proxy.ts` devolve 401 antes do handler. Inventário e superfície de ataque: [`docs/threat-model.md`](docs/threat-model.md).
 
 Turno do agente de IA: inbound WhatsApp → HMAC + idempotência → `event_log` → worker →
 `runAgentTurn` (RAG + tools MCP) → guardrails → adapter WAHA → handoff humano se o gatilho
@@ -79,7 +83,7 @@ disparar. Entrada do turno em `lib/agent-engine/agent/inbound-turn.ts`; diagrama
 | Path | O quê |
 |---|---|
 | `app/api/v1/` | Route handlers REST (versionado por path) — **reconte, não cite**: `git ls-files 'app/api/v1/**/route.ts' \| wc -l` (e `git ls-files 'app/api/**/route.ts' \| wc -l` para o total de `app/api/**`) |
-| `app/api/internal/`, `app/api/mcp/`, `app/api/v1/cron/` | superfícies não-cookie (secret/bearer próprio) |
+| `app/api/mcp/`, `app/api/v1/cron/` | superfícies não-cookie (secret/bearer próprio) |
 | `app/app/` | UI autenticada do tenant · `app/admin/` UI de plataforma |
 | `app/actions/` | Server Actions (auth, onboarding, team, settings) |
 | `lib/agent-engine/`, `lib/ai/` | runtime do agente, guardrails, RAG, dispatcher |
@@ -109,7 +113,7 @@ Contrato completo em [`docs/specs/07-spec-events-workers.md`](docs/specs/07-spec
 | `lib/branding/`         | Marca própria (white-label) — resolve do banco, nunca do .env                                                   |
 | `workers/`              | Workers de `event_log` + crons                                                                                  |
 | `components/`, `hooks/` | React compartilhado; convenções nos README de cada pasta                                                        |
-| `supabase/migrations/`  | Schema versionado + `MANIFEST.md`; `supabase/baseline.sql` é o que o self-host aplica                           |
+| `supabase/migrations/`  | Schema versionado (`MANIFEST.md` = histórico); `supabase/baseline.sql` é o que o self-host aplica              |
 | `hostgator-setup-kit/`  | Kit de instalação/atualização da VPS (`install.sh`, `update.sh`, `diagnostico.sh`, `healthcheck.sh`)            |
 | `scripts/`              | CLIs de operação e QA — ver `scripts/README.md`                                                                 |
 | `tests/`                | `unit/`, `invariants/`, `e2e/`, `shell/`, `journeys/`, `fixtures/`                                              |
@@ -123,7 +127,7 @@ pnpm install          # deps (frozen-lockfile no CI)
 pnpm dev              # dev server
 pnpm build            # next build
 pnpm lint             # eslint
-pnpm typecheck        # tsc --noEmit (estrito)
+pnpm typecheck        # tsc --noEmit -p tsconfig.typecheck.json (inclui tests/)
 pnpm test:unit        # vitest — EXCLUI tests/invariants, tests/e2e e tests/journeys (lista viva em vitest.config.ts → exclude)
 pnpm test:db          # invariantes de banco + gate do baseline (PRECISA de Docker)
 pnpm test:e2e         # Playwright (PRECISA de app rodando + banco semeado)
@@ -139,6 +143,15 @@ pnpm test:shell       # scripts do kit self-host (bash)
 pnpm gov:verify       # typecheck + lint + lint:channels + lint:role-rank + test:unit
 ```
 
+Um teste só:
+
+```bash
+pnpm vitest run lib/foo/bar.test.ts         # um arquivo unit
+pnpm vitest run -t "nome do caso"           # um caso pelo nome
+pnpm test:db tests/invariants/x.test.ts     # um invariante (o script repassa os args ao vitest)
+pnpm playwright test tests/e2e/x.spec.ts    # uma spec e2e
+```
+
 ⚠️ **`pnpm gov:verify` não cobre tudo.** Ele omite `test:db`, `test:e2e` **e** `test:shell`.
 Se a mudança toca schema/RLS/tabela tenant-aware, rode `pnpm test:db`. Se toca UI ou fluxo de
 usuário, rode `pnpm test:e2e` com evidência visual. Se toca `Dockerfile*`, `docker-compose*` ou
@@ -147,9 +160,10 @@ usuário, rode `pnpm test:e2e` com evidência visual. Se toca `Dockerfile*`, `do
 **O que o CI cobre.** `.github/workflows/ci.yml`: `verify` = os passos do job, na ordem —
 typecheck, lint, `lint:channels`, `test:unit` e `test:shell` hoje, e `pnpm lint` sozinho **não**
 cobre os dois últimos (liste em vez de acreditar nesta linha:
-`awk '/^  verify:/,/^  invariants:/' .github/workflows/ci.yml | grep -A1 'name:'`);
-`invariants` = `pnpm test:db` (isolamento RLS + invariantes de governança contra Postgres
-efêmero pg15). `.github/workflows/perf.yml`: `build-and-size` = `pnpm build`.
+`awk '/^  verify:/,/^  invariants-majors:/' .github/workflows/ci.yml | grep -A1 'name:'`);
+`invariants` = fachada sobre a matriz `invariants-majors`, que roda `pnpm test:db` (isolamento
+RLS + invariantes de governança) e `pnpm test:db:update` (atualizar banco COM dados) uma vez por
+major de Postgres suportado. `.github/workflows/perf.yml`: `build-and-size` = `pnpm build`.
 `.github/workflows/e2e.yml` roda as specs Playwright contra um Supabase local de verdade com
 o `baseline.sql` aplicado — o mesmo banco que o self-hoster tem. **É check obrigatório** — a
 data de ativação não é auditável pelo repositório, e a lista viva está logo abaixo, com o
@@ -164,8 +178,10 @@ gh api repos/melgarafael/DeskcommCRM/branches/main/protection \
   --jq '.required_status_checks.contexts|join(", ")'
 ```
 
-`e2e` roda três partes em paralelo; as specs de fora estão declaradas, **com motivo escrito**, em
-`FORA_DO_CI` dentro de `.github/workflows/e2e.yml`. Leia em vez de supor:
+`e2e` roda as partes da sua matrix em paralelo (quantas:
+`git show origin/main:.github/workflows/e2e.yml | grep -E '^ +parte: \['` — esta linha dizia
+"três" até o PR #983 acrescentar a quarta); as specs de fora estão declaradas, **com motivo
+escrito**, em `FORA_DO_CI` dentro de `.github/workflows/e2e.yml`. Leia em vez de supor:
 
 ```bash
 git show origin/main:.github/workflows/e2e.yml | grep -A4 'FORA_DO_CI:'
@@ -182,10 +198,14 @@ cite cada um:
 | Situação                                                                            | Guia                    |
 | ----------------------------------------------------------------------------------- | ----------------------- |
 | Instalar, atualizar ou consertar a instalação numa VPS; domínio, Supabase, WhatsApp | `deskcomm-instalar`     |
+| Usar o CRM no dia a dia; encontrar telas, fluxos e configurações pela interface     | `deskcomm-operacao`     |
+| Atualizar aulas, traduções e capturas do curso com as mudanças do produto           | `deskcomm-curso`        |
 | Configurar o CRM para um cliente ou nicho: agentes, roteadores, follow-ups, base    | `deskcomm-cliente-novo` |
+| Revender como SaaS: planos, cobrança pela Stripe ou Asaas, régua, contrato          | `deskcomm-saas`         |
 | Desempenho, conversão, custo de IA, funil, relatório                                | `deskcomm-metricas`     |
 | O agente responde errado, passa tudo para humano, não usa a agenda; afinar o prompt | `deskcomm-prompt`       |
 | Contribuir: corrigir bug, abrir ou atualizar PR, migration, conflito com a `main`   | `deskcomm-contribuir`   |
+| Criar extensão/plugin/módulo de nicho, ou transformar um PR de nicho em pacote      | `deskcomm-extensao`     |
 | Escrever ou revisar código aqui                                                     | `deskcomm-doutrina`     |
 
 O gate de arquitetura de qualquer peça que atende pessoas é a skill `sistema-vivo` (lei em
@@ -198,6 +218,8 @@ O gate de arquitetura de qualquer peça que atende pessoas é a skill `sistema-v
 1. Zod valida **todo** input externo (body, query, path).
 2. Guard canônico: `requireRole()` de `lib/auth/require-role.ts`,
    `requirePlatformAdmin`, ou secret/HMAC. Nunca reimplemente a comparação de rank na mão.
+   Handler **mutante** de `app/api/v1` declara ainda `requireSupportWrite(` (`lib/impersonate/support.ts`)
+   antes do efeito: barra escrita em `support_readonly` e não substitui RBAC/MFA.
 3. `organization_id` resolvido de **fonte confiável** (cookie/JWT/webhook secret/path token) —
    **nunca do body**.
 4. Query: RLS pelo client de sessão, ou filtro manual de `organization_id` quando usa service role.
@@ -225,10 +247,16 @@ em toda tabela tenant-aware. `lib/supabase/admin.ts` **bypassa RLS**: toda query
 filtra `organization_id` manualmente. Sem gate automático para isso — a responsabilidade é sua.
 
 **Migrations** — mudança de schema sai **sempre** como tripla: migration versionada em
-`supabase/migrations/`, apêndice idempotente em `supabase/baseline.sql` e linha em
-`supabase/migrations/MANIFEST.md`. Nunca edite migration já aplicada; corrija com uma nova.
+`supabase/migrations/` com uma linha `-- manifest: <o quê e por quê>` no cabeçalho, e apêndice
+idempotente em `supabase/baseline.sql`. **Não** acrescente linha no `MANIFEST.md`: ele é histórico,
+e era o arquivo que fazia todo PR com migration conflitar no GitHub. Nunca edite migration já
+aplicada; corrija com uma nova.
 Função nova em `public` precisa de `revoke execute ... from public, anon` **e** `grant` — são
 duas origens de `EXECUTE`.
+⚠️ E **não leia o baseline com `grep` no arquivo inteiro**: ele é dump + apêndice, a mesma
+função aparece várias vezes, e quem vale é a **última**. Pergunte ao banco depois de aplicar
+(`pg_get_functiondef`) ou ancore no último `create or replace` (`rfind`, nunca `find`).
+Contar no arquivo responde "o arquivo menciona", não "o banco faz".
 
 **Marca própria (white-label)** — o produto é revendido e o nome não é seu. **Nunca** escreva
 "Deskcomm"/"DeskcommCRM" em código que alcança o usuário: `tests/unit/branding.test.ts` varre
@@ -278,6 +306,7 @@ server; segredo em query string; `throw` cru na borda da API.
 | `workers/agent-worker/main.ts`             | Entry point do worker de agente                                              |
 | `docker-compose.prod.yml`                  | Topologia de produção (imagens publicadas)                                   |
 | `docker-compose.traefik.yml`               | Labels de roteamento para VPS que já tem proxy próprio                       |
+| `docker-compose.cloudflared.yml`           | Cloudflare Tunnel (VPS atrás de NAT): sobe `cloudflared`, desliga o Caddy    |
 | `instrumentation.ts`, `sentry.*.config.ts` | Boot de observabilidade                                                      |
 
 ## Runtime/Tooling Preferences
@@ -286,11 +315,12 @@ server; segredo em query string; `throw` cru na borda da API.
   **pnpm 9.15.9** (`packageManager`). Não use npm/yarn.
 - **TypeScript estrito** via `tsconfig.typecheck.json`; `strict`, `noUncheckedIndexedAccess`,
   `isolatedModules`, alias `@/*` → raiz. `pnpm typecheck` é a régua.
-- **ESLint flat config** (`eslint.config.mjs`, ESLint 9): `next/core-web-vitals`,
+- **ESLint flat config** (`eslint.config.mjs`, ESLint 10): `next/core-web-vitals`,
   `react-hooks`, `typescript-eslint`. `next lint` foi removido no Next 16 — o script chama o CLI.
 - **Prettier** com `prettier-plugin-tailwindcss`; classes Tailwind em ordem canônica.
 - **Tailwind 4** — configuração em CSS (`app/globals.css`), não em `tailwind.config.js`.
-- **Sentry** — `beforeSend` higieniza PII; `tunnelRoute: "/monitoring"` evita ad-blocker.
+- **Sentry** — coleta restrita (`dataCollection`) + scrub num ponto só, `lib/sentry/privacidade.ts`,
+  provado pelo envelope do SDK em `privacidade.sdk.test.ts`; `tunnelRoute: "/monitoring"` evita ad-blocker.
 - **Packaging (não-negociável; lei em [`docs/doctrine/packaging.md`](docs/doctrine/packaging.md))** —
   nenhum serviço de `docker-compose.prod.yml` constrói na máquina do cliente: todo serviço declara
   `image:` de imagem publicada, e `build:` existe só ao lado, como escape. Serviço `build:`-only é
@@ -304,6 +334,12 @@ server; segredo em query string; `throw` cru na borda da API.
   Esquecer o segundo `-f` recria o contêiner sem labels: o domínio inteiro responde `404` com o
   contêiner `healthy` (o healthcheck é um probe TCP interno). Runbook:
   [`docs/runbooks/deploy.md`](docs/runbooks/deploy.md).
+- **VPS atrás de NAT** — `REVERSE_PROXY=cloudflared` entra o
+  `docker-compose.cloudflared.yml`: desliga o Caddy e sobe o `cloudflared` (túnel
+  *remotely-managed*, só `CLOUDFLARE_TUNNEL_TOKEN` no `.env`; rotas no painel da Cloudflare).
+  Sem porta publicada. O webhook global do WAHA perde o 403 do Caddy; quem recusa o que chega
+  pela borda é o próprio app (`chegouPelaBorda`). Não é suportado no single-server (o instalador recusa). Ver
+  `docs/runbooks/deploy.md` §5.
 - **Env vars** — nova variável entra em `.env.example` **e** em `lib/env.ts`. Nunca leia nem logue
   valor de `.env*`; só `.env.example` é template. Segredo/token só em header, nunca em query string.
 - **Gerados — não edite** — `lib/database.types.ts`, `graphify-out/`, `pnpm-lock.yaml`, `.next/`.
@@ -327,6 +363,23 @@ dentro do include do unit. Fixtures em `tests/fixtures/`, helpers em `tests/help
 em `tests/setup/vitest.setup.ts`. Determinismo é regra: teste que depende de ordem ou de rede
 quebra a suíte inteira.
 
+**Locator de tela compartilhada é contrato da suíte, não detalhe do teste.** `getByRole("button",
+{ name: "Entrar" })` casa por **substring** — e `/entrar/i`, que era a forma do login, também: um
+segundo botão com essa palavra na mesma tela ("Entrar com Google") torna o locator ambíguo, e o
+Playwright **recusa clicar** (`strict mode violation`) em vez de escolher. O alcance não fica na
+tela: `/login` é a porta de quase toda spec. Medido em 2026-09-21, um botão a mais ali pôs as 5
+partes do `e2e` vermelhas — 320 violações do mesmo erro em 306 casos, 140 specs citadas no log.
+Quem acrescenta botão ou link numa tela já coberta assume os locators que já existem: ancore com
+`{ name: "Entrar", exact: true }`, forma que a suíte já usa 282× para outros rótulos, e meça antes
+de empurrar:
+
+```bash
+git grep -nE "name: *(\"Entrar\"|'Entrar'|/entrar)" -- tests scripts | grep -vE 'exact: *true'
+```
+
+O conserto é no locator, **nunca** no produto: esconder um botão real para agradar regex de teste
+troca um defeito de teste por um defeito de tela.
+
 O `.env.e2e` é obrigatório e é recusado se apontar para Supabase que não seja `127.0.0.1`/
 `localhost` — a proteção existe porque sem ela a suíte rodaria contra produção (`pnpm e2e:env`
 gera o arquivo).
@@ -334,7 +387,9 @@ gera o arquivo).
 **QA visual com recursos reais (doutrina).** O produto é self-host: a experiência de quem instala
 numa VPS **é** o produto. Toda feature nova, ou fix de comportamento visível, deve ser provada
 pela tela como um usuário leigo faria, em ambiente fresco estilo VPS, com evidência visual.
-`curl` não conta como prova de UX. Mapa de jornadas:
+`curl` não conta como prova de UX. Quando o caminho passa por um agente de IA, o caso de aceite
+mede o **par** (tela pelo agente + ferramenta chamada direto, com o mesmo texto cru) e só conta
+quando os dois concordam: [`docs/doctrine/prova-em-par.md`](docs/doctrine/prova-em-par.md). Mapa de jornadas:
 [`docs/testing/user-journey-map.md`](docs/testing/user-journey-map.md).
 
 Cada linha abaixo traz o comando que a mede — **rode o comando em vez de citar número**. Este
@@ -345,7 +400,9 @@ cabeçalho passava a mentir por todos eles.
 - Arquivos de invariante de banco em `tests/invariants/` — RLS/isolamento cross-tenant, RBAC,
   governança (G1–G6). Excluídos do `test:unit` de propósito; rodam via `pnpm test:db` **e no job
   `invariants` do CI**. Quantos: `git ls-files 'tests/invariants/*.test.ts' | wc -l`.
-- Specs Playwright em `tests/e2e/`, quase todas no CI (via `e2e.yml`, **obrigatório**). As que
+- Specs Playwright em `tests/e2e/`, quase todas no CI (via `e2e.yml`, **obrigatório**), em todo PR que
+  alcança o que elas medem — PR só de documentação/teste de outra suíte pula as partes
+  (`scripts/pr-alcanca-o-e2e.sh`), e ali o `e2e` verde não prova tela. As que
   ficam de fora estão declaradas em `FORA_DO_CI`, **com o motivo escrito ao lado**. Esta linha
   já afirmou "menos uma" depois de deixarem de ser uma — por isso não conta mais. A issue #63,
   que originou a discussão, está **fechada** e o título dela descreve um estado que já não vale.
@@ -360,7 +417,7 @@ sed -n '/^## Definition of Done/,/^Um staff engineer/p' CLAUDE.md | grep -cE '^[
 
 Em resumo: typecheck/lint zerados, testes relevantes verdes, RLS testada se tocou tabela
 tenant-aware, `audit()` se houve mutação, Zod em todo input externo, migration + baseline +
-MANIFEST de tripla se mudou schema, prova visual se mudou UI, `pnpm test:shell` se tocou packaging,
+`-- manifest:` da tripla se mudou schema, prova visual se mudou UI, `pnpm test:shell` se tocou packaging,
 Living System Checklist respondido (lei em `docs/doctrine/sistema-vivo.md`) e mapa vivo em
 `docs/architecture/` atualizado para peça nova.
 
@@ -372,15 +429,25 @@ itens envelhecem em ritmos diferentes, e o cabeçalho passava a mentir por todos
 (O SHA `789dfa6`, que ficava aqui, ficou para trás — meça com
 `git rev-list --count 789dfa6..origin/main`.)
 
-- **As specs E2E fora do CI são exatamente as declaradas em `FORA_DO_CI`** — hoje
-  `vps-fresh-onboarding` é a P0 entre elas —, e o `e2e` **é** check obrigatório. Ou seja: um PR
-  que quebre o `e2e` não entra — mas a jornada de
-  instalação fresca, que é o produto que se vende, continua sem gate. Se você mexeu nela, a
-  prova é sua. O número e a contagem que ficavam aqui eram de uma fotografia de agosto, e o
-  disco já tinha mudado desde então.
+- **As specs E2E fora do CI são exatamente as declaradas em `FORA_DO_CI`**, e o `e2e` **é**
+  check obrigatório — um PR que quebre o `e2e` não entra. **Quais estão de fora é pergunta de
+  comando, não de leitura:** esta linha já afirmou por semanas que a jornada de instalação
+  fresca seguia sem gate, e em 2026-09-19 o #983 pôs `vps-fresh-onboarding.spec.ts` no CI.
+
+  ```bash
+  git show origin/main:.github/workflows/e2e.yml | python3 -c "import sys,re; y=sys.stdin.read(); print(sorted({s for _,c in re.findall(r'(FORA_DO_CI):\s*>-\n((?:[ ]{8,}.*\n)+)',y) for s in re.findall(r'[a-z0-9-]+\.spec\.ts',c)}))"
+  ```
+
+  Gate não substitui prova: se você mexeu numa jornada, a prova pela tela continua sendo sua
+  (DoD 12). E o gate só vale em PR que alcança o `e2e` (regra em `scripts/pr-alcanca-o-e2e.sh`):
+  o que pula as partes sai com `e2e` verde sem ter provado tela nenhuma, a da instalação fresca
+  inclusive. O número e a contagem que ficavam aqui eram de uma fotografia de agosto.
 - Rate limit HTTP: `lib/auth/rate-limit.ts` cobre **login, signup, recuperação de senha e
   aceite de convite** (contando por IP **e** por identificador hasheado); `checkRateLimit` cobre
-  o webhook de captação e o dispatcher de IA. **Crons e MCP seguem sem.** Meça antes de agir:
+  o webhook de captação e outros pontos de `app/` e `lib/` (a régua abaixo lista). **Crons seguem sem.** O MCP conta em dois pontos:
+  a recusa de token, antes da autenticação (`lib/mcp/auth.ts`, #1449), e o teto de chamadas de
+  token válido — por token, por organização e de escrita, Spec 11 §7 (`lib/mcp/rate-limit.ts`,
+  #1446). Meça antes de agir:
   `grep -rln 'authRateLimited\|checkRateLimit(' app lib --include='*.ts' --include='*.tsx'`.
   Esta linha dizia "existe em 2 pontos; login e signup estão sem" — era o estado anterior à
   issue #64, e o `docs/threat-model.md` ainda carrega a versão velha, com nota de reauditoria.
@@ -392,9 +459,10 @@ itens envelhecem em ritmos diferentes, e o cabeçalho passava a mentir por todos
   implementações com recibo (`lgpd/requests/[id]/approve` e `admin/tenants`) e, desde este
   commit, uma reutilizável em `lib/api/idempotency.ts`, aplicada em `message-templates`.
   Reconte antes de citar: `grep -rln 'Idempotency-Key' app/api/v1 --include='route.ts'`.
-  **A corrida entre duas requisições simultâneas com a mesma chave segue aberta** —
-  `idempotency_keys.status_code` e `.response_body` são `NOT NULL`, então não há onde gravar
-  "em curso"; fechar exige mudança de schema. Ver issue #778.
+  No helper reutilizável, **a corrida entre duas requisições simultâneas com a mesma chave
+  está fechada** (issue #778, migration 0321): a chave é reservada ANTES do efeito e quem
+  perde recebe 409 `idempotency_in_progress`. Isso vale para quem usa `comIdempotencia` —
+  hoje só `message-templates`; as outras rotas mantêm o recibo delas.
 - **`.env.example` está completo** — medido em 2026-08-14: das 45 chaves de `lib/env.ts`, a
   única ausente é `NODE_ENV`, que não é configuração do operador. Esta linha dizia que faltavam
   6, "incluindo 3 secrets"; os três (`IMPERSONATE_COOKIE_SECRET`, `INTERNAL_CRON_SECRET`,
@@ -418,6 +486,10 @@ itens envelhecem em ritmos diferentes, e o cabeçalho passava a mentir por todos
 - Nunca logue segredo, token, CPF, telefone ou e-mail. Sentry tem `beforeSend` que
   higieniza — não confie nele como única camada.
 - Não commite screenshot/dump com dado real de cliente.
+- Descadastro (STOP): quem bloqueia é só a regra de `lib/opt-out/deteccao.ts`, quando o próprio cliente
+  manda o STOP (não há bloqueio à mão no produto — `lib/channels/pos-entrada.ts` é o único escritor); o Jev
+  (`lib/ai/decisao/pedidos.ts`) só é perguntado onde ela disse não, e nunca bloqueia ninguém — no
+  máximo abre um aviso na Central ("Avisar a equipe").
 
 ## Packaging — se você tocou `Dockerfile*`, `docker-compose*.yml` ou `hostgator-setup-kit/`
 
@@ -427,7 +499,7 @@ Lei completa em [`docs/doctrine/packaging.md`](docs/doctrine/packaging.md). O n�
   declara `image:` de uma imagem publicada; `build:` só existe **ao lado**, como escape.
   Serviço `build:`-only é pulado por `docker compose pull` e imune a `up -d` sem `--build` —
   ele não é só caro de instalar, ele **nunca é atualizado**.
-- **Publicação é ato do CI**, nunca da sua máquina: build ARM local não roda na VPS amd64.
+- **Publicação é ato do CI**, nunca da sua máquina: as imagens publicadas atendem linux/amd64 e linux/arm64.
 - **Instalação de cliente aponta para número de versão**, nunca para tag móvel. Aqui `latest`
   significa **topo da `main`**, não última release — quem quer a última release usa `stable`.
 - **Dependência upstream é referenciada com tag fixa, nunca republicada** (WAHA é licenciado).
@@ -435,11 +507,31 @@ Lei completa em [`docs/doctrine/packaging.md`](docs/doctrine/packaging.md). O n�
 
 `pnpm test:shell` é o único gate que exercita o kit. Rode-o.
 
+## Extensões — se sua mudança muda comportamento
+
+Lei completa em [`docs/doctrine/extensoes.md`](docs/doctrine/extensoes.md); contrato vigente em
+[`docs/specs/extensoes-declarativas-v1.md`](docs/specs/extensoes-declarativas-v1.md). Declare o
+destino (núcleo, extensão, ambos ou infraestrutura) respondendo: **se nenhuma organização ativar
+isto, a operação comum continua inteira?** O não-negociável:
+
+- **O núcleo continua útil com zero extensões.** Nenhuma jornada do núcleo depende de extensão ativa.
+- **Extensão pede capacidade nomeada** e não importa código interno, não lê o banco e não recebe
+  cliente Supabase, ambiente ou dados do CRM. Instalar não concede autoridade.
+- **A instância decide o pacote; a organização decide o uso.** A plataforma não reativa decisão da
+  organização.
+- **Toda operação é recibo idempotente com saída pela tela; toda troca de ponteiro exige a revisão
+  que a tela viu.** Remover é lógico e preserva dados e configuração.
+- **Não anuncie SDK, código isolado ou marketplace público**, e não extraia do núcleo recurso já
+  distribuído sem equivalência e migração.
+- **Módulo oficial com dados não põe tabela no baseline para todos**
+  ([ADR-0002](docs/adr/0002-tabelas-de-modulo-num-banco-so.md)): um banco só, `public`, tabelas criadas
+  por função provisionadora fixa quando o módulo é instalado na instância.
+
 ## Critério de conclusão
 
-Vale a **Definition of Done em [`CLAUDE.md`](CLAUDE.md)** — conte lá em vez de confiar num número aqui (`sed -n '/^## Definition of Done/,/^Um staff engineer/p' CLAUDE.md | grep -cE '^[0-9]+\. '`; esta linha já disse 15 e o DoD tem 16). A régua tem que DELIMITAR a seção: a primeira versão desta linha oferecia `grep -c '^[0-9]\+\. \*\*' CLAUDE.md`, que devolve **25** — casa toda linha numerada em negrito do arquivo (anti-patterns, packaging, higiene de branches, migrations) e perde os itens 1–10 do próprio DoD, que não são negrito. Trocar o número pelo comando só ajuda se o comando responder à pergunta. Não declare pronto
+Vale a **Definition of Done em [`CLAUDE.md`](CLAUDE.md)** — conte lá em vez de confiar num número aqui (`sed -n '/^## Definition of Done/,/^Um staff engineer/p' CLAUDE.md | grep -cE '^[0-9]+\. '`; esta linha já disse 15 quando o DoD tinha 16). A régua tem que DELIMITAR a seção: a primeira versão desta linha oferecia `grep -c '^[0-9]\+\. \*\*' CLAUDE.md`, que devolve **25** — casa toda linha numerada em negrito do arquivo (anti-patterns, packaging, higiene de branches, migrations) e perde os itens 1–10 do próprio DoD, que não são negrito. Trocar o número pelo comando só ajuda se o comando responder à pergunta. Não declare pronto
 sem: typecheck/lint zerados, testes relevantes verdes, RLS testada se tocou tabela
-tenant-aware, migration + baseline + MANIFEST se mudou schema, prova visual se mudou UI, e a
+tenant-aware, migration (com `-- manifest:`) + baseline se mudou schema, prova visual se mudou UI, e a
 regra de packaging acima se mudou o artefato que o self-hoster instala.
 
 ## Guias do assistente (skills embutidas)
@@ -447,16 +539,25 @@ regra de packaging acima se mudou o artefato que o self-hoster instala.
 O repositório embute guias em `.agents/skills/` — lidos por Codex, Cursor, OpenCode e
 Antigravity; o Claude Code lê o espelho em `.claude/skills/` (`pnpm skills:sync` regrava, e
 `tests/unit/skills-embutidas.test.ts` reprova divergência). Carregue o guia quando o pedido
-casar, mesmo que a pessoa não saiba que ele existe:
+casar, mesmo que a pessoa não saiba que ele existe. Fora de um clone (ou num clone antigo),
+`bash scripts/instalar-guias.sh` liga os guias nas pastas globais dos cinco CLIs:
 
 | situação | guia |
 |---|---|
 | instalar, atualizar ou consertar a instalação numa VPS; domínio, Supabase, WhatsApp que não conecta | `deskcomm-instalar` |
 | configurar o CRM para um cliente ou nicho: agentes, roteadores, follow-ups, base de conhecimento | `deskcomm-cliente-novo` |
+| revender como SaaS: painel do dono, planos, cobrança pela Stripe ou pelo Asaas, régua, contrato com o cliente final | `deskcomm-saas` |
 | desempenho, conversão, custo de IA, funil, relatório | `deskcomm-metricas` |
+| atualizar aulas, traduções e capturas do curso com as mudanças do produto | `deskcomm-curso` |
 | o agente responde errado, passa tudo para humano, não usa a agenda; melhorar o prompt | `deskcomm-prompt` |
 | contribuir: corrigir bug, abrir ou atualizar PR, migration, conflito com a `main` | `deskcomm-contribuir` — que fica quieto quando `bash .agents/skills/deskcomm-contribuir/scripts/quem-sou.sh` responde `mantenedor` |
 | escrever ou revisar código aqui | `deskcomm-doutrina` (as três regras que mais custam) e `sistema-vivo` (o gate de arquitetura) |
+
+Os guias têm vitrine pública em [deskcomm.com.br/guias](https://www.deskcomm.com.br/guias) (pt-BR,
+en, es), escrita à mão no repositório `deskcomm-site` (`conteudo/guias.ts`). Guia criado,
+renomeado ou com comando novo → o PR avisa que aquela página precisa acompanhar. Ela sai do mesmo
+PR do `deskcomm-site` que a página de changelog; quem quiser saber se já está no ar usa o `curl` da
+seção "A vitrine" em [`docs/doctrine/versionamento.md`](docs/doctrine/versionamento.md).
 
 ## Regra final — não invente
 
@@ -472,6 +573,11 @@ nunca o número. O número é calculado a partir do conjunto; confira com `pnpm 
 corte com `pnpm release:cortar`. Régua e porquê: [`docs/doctrine/versionamento.md`](docs/doctrine/versionamento.md).
 Quem instalou lê o [`CHANGELOG.md`](CHANGELOG.md) antes de rodar `update.sh` — mudança que exige
 ação manual aparece sob "⚠️ Requer atenção".
+Toda versão publicada aparece também em [deskcomm.com.br/changelog](https://www.deskcomm.com.br/changelog)
+(pt-BR, en, es): a LP lê o `CHANGELOG.md` da `main`, ninguém escreve release no site, e o último
+passo do corte reprova se a versão não chegou lá. Mudar o cabeçalho `## [X.Y.Z] — AAAA-MM-DD` quebra
+essa página — ver "A vitrine" em `docs/doctrine/versionamento.md`. Enquanto as três páginas não
+responderem 200, esse passo reprova TODO corte; o `curl` que mede isso abre aquela seção.
 
 **Regra final — não invente.** Este repositório tem PRDs, specs, regras de negócio e doutrina
 escritos. Nunca invente regra de negócio, número, SLA ou comportamento de produto. Se a regra não

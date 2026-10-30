@@ -59,8 +59,61 @@ export function ehIdentificadorTecnico(valor: string): boolean {
 }
 
 /**
- * O rótulo. Primeiro o que uma pessoa escolheu, depois o que o canal informou,
- * depois o número — e só então a admissão de que não se sabe o nome.
+ * O nome de gente: primeiro o que uma pessoa escolheu (`name` — "Editar
+ * contato", proposta de dado aprovada), depois o que o canal informou
+ * (`display_name` — o perfil do WhatsApp, gravado pela ingestão). `null` quando
+ * não há nome apresentável; quem chama decide o fallback. Quem FALA com a
+ * pessoa (prompt, lembrete) não pode cair no telefone, por isso esta metade
+ * existe separada do rótulo.
+ *
+ * ─── POR QUE `name` VEM PRIMEIRO, e o que teria de mudar para inverter ──────
+ *
+ * A revisão da issue #906 deixou a pergunta aberta: "e se `display_name` for o
+ * nome escolhido?". Ele não é, e quem responde é onde cada coluna é ESCRITA.
+ *
+ *  - `name` é a coluna editável pela pessoa: "Novo contato" e "Editar contato"
+ *    gravam nela, o CSV a preenche pela coluna `nome`, e é ela que
+ *    `lib/contacts/proposta-de-dado.ts` escreve quando um humano APROVA uma
+ *    proposta (`CAMPOS_PROPONIVEIS = ["email", "name", "phone_number",
+ *    "birthdate"]` — `display_name` não está na lista).
+ *  - `display_name` é escrito pela INGESTÃO (`fn_upsert_wa_contact`, a partir do
+ *    `pushName` do aparelho). Nenhum formulário do produto o edita: a única
+ *    aparição dele nas telas de contato é um `<dd>` de exibição em
+ *    `app/app/contacts/[id]/_client.tsx` e um cabeçalho de ordenação.
+ *
+ * ⚠️ UMA RESSALVA, porque "nenhuma tela escreve `display_name`" seria FALSO: o
+ * import de CSV escreve, pela coluna `apelido`/`nome_de_exibicao`
+ * (lib/contacts/csv.ts). Isso não muda a ordem — reforça: quem digitou um
+ * APELIDO numa planilha não pediu que ele vencesse o nome do cadastro.
+ *
+ * Inverter a ordem aqui, portanto, não é trocar uma linha: pediria antes dar
+ * editor a `display_name`, e aí a ficha teria dois campos chamados "nome".
+ *
+ * ─── A RESSALVA DO pushName (issue #1546) ──────
+ *
+ * Quando `name` está vazio, o que sobra é o `display_name` — o pushName do
+ * aparelho, que nem sempre é nome de gente: nome de empresa, apelido,
+ * "Máquina do Zé". Quem TRATA a pessoa pelo nome (o agente, na saudação e no
+ * lembrete) tem de PEDIR o nome completo antes de usá-lo como se fosse o dele.
+ *
+ * O fallback, aqui, continua o mesmo — e de propósito: inverter a ordem ou
+ * descartar o pushName "por segurança" apagaria o nome que a própria pessoa
+ * escolheu no perfil, e apagar identidade de gente é pior do que chamar alguém
+ * por apelido. Quem decide o que fazer com o rótulo é quem chama; este módulo
+ * só diz como a pessoa aparece na tela.
+ */
+export function nomeDoContato(c: ContatoNomeavel | null | undefined): string | null {
+  if (!c) return null;
+  for (const bruto of [c.name, c.display_name]) {
+    const v = (bruto ?? "").trim();
+    if (v !== "" && !ehIdentificadorTecnico(v)) return v;
+  }
+  return null;
+}
+
+/**
+ * O rótulo. O nome de gente (`nomeDoContato`), depois o número — e só então a
+ * admissão de que não se sabe o nome.
  *
  * Celular BR aparece COM o nono dígito: `+553284793302` e `+5532984793302` são
  * a mesma pessoa, e o 9 é o que o atendente espera copiar.
@@ -71,14 +124,34 @@ export function rotuloDoContato(
 ): string {
   if (!c) return t(SEM_NOME);
 
-  const candidatos = [c.display_name, c.name];
-  for (const bruto of candidatos) {
-    const v = (bruto ?? "").trim();
-    if (v !== "" && !ehIdentificadorTecnico(v)) return v;
-  }
+  const nome = nomeDoContato(c);
+  if (nome) return nome;
 
   const tel = (c.phone_number ?? "").trim();
   if (tel !== "") return phoneForDisplay(tel);
 
   return t(SEM_NOME);
+}
+
+/**
+ * O rótulo que SÓ A EQUIPE vê: o de `rotuloDoContato`, com o nome salvo na
+ * agenda do celular (`address_book_name`) entre o nome escolhido no CRM e o
+ * apelido do perfil.
+ *
+ * Função separada, e não um campo a mais em `ContatoNomeavel`, porque
+ * `rotuloDoContato` e `nomeDoContato` também alimentam o que SAI para o
+ * cliente (o PDF da proposta, o `{{nome}}` da campanha, o prompt do agente). O
+ * nome da agenda é o rótulo que alguém da empresa escreveu no celular — pode
+ * ser "Maria caloteira" — e nunca vai em mensagem (decisão do mantenedor no PR
+ * #2439). Use esta função só em tela da equipe: caixa de entrada, ficha, lista.
+ */
+export function rotuloParaAEquipe(
+  c: (ContatoNomeavel & { address_book_name?: string | null }) | null | undefined,
+  t: (texto: string) => string = (texto) => texto,
+): string {
+  const escolhido = (c?.name ?? "").trim();
+  if (escolhido !== "" && !ehIdentificadorTecnico(escolhido)) return escolhido;
+  const agenda = (c?.address_book_name ?? "").trim();
+  if (agenda !== "" && !ehIdentificadorTecnico(agenda)) return agenda;
+  return rotuloDoContato(c, t);
 }

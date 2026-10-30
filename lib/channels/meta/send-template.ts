@@ -23,16 +23,34 @@ import {
   type TemplateBinding,
 } from "./template-binding";
 import { deriveTemplateContract } from "./template-contract";
+import { graphBaseUrl } from "./graph-base";
 
 export interface SendTemplateInput {
   phoneNumberId: string;
   token: string;
   graphVersion: string;
+  /**
+   * Base da API, quando o canal NÃO é a Meta direta. Um parceiro
+   * Graph-compatível usa a MESMA Cloud API com outro host/token; sem este campo
+   * o envio de modelo sairia pelo host da Meta com o token errado.
+   *
+   * `undefined` = a base da instalação (`graphBaseUrl({graphVersion})`), que é
+   * onde o `META_GRAPH_BASE_URL` entra. Os dois eixos continuam independentes: um
+   * campo por sessão (o parceiro) e um knob de instalação (o receiver de prova).
+   */
+  graphBase?: string;
   /** Destinatário em dígitos E.164, sem `+` — é o que a Graph API aceita. */
   to: string;
   binding: TemplateBinding;
-  /** A linha do espelho local. `null` = template não existe mais na Meta. */
-  current: (CurrentTemplate & { components: unknown }) | null;
+  /**
+   * A linha do espelho local. `null` = template não existe mais na Meta.
+   *
+   * `parameter_format` (`#2659`): a Meta declara se o template é `NAMED` ou
+   * `POSITIONAL`, e isso muda o payload — nomeado exige `parameter_name` em
+   * cada parâmetro textual. Sem o campo aqui, a derivação assume POSITIONAL e
+   * o envio nomeado falha com `meta_100: Parameter name is missing or empty`.
+   */
+  current: (CurrentTemplate & { components: unknown; parameter_format?: string | null }) | null;
 }
 
 /**
@@ -62,6 +80,12 @@ export async function sendTemplate(input: SendTemplateInput): Promise<SendTempla
   const contrato = deriveTemplateContract({
     name: input.binding.name,
     language: input.binding.language,
+    // `parameter_format` do espelho (#2659): é ele que liga o `parameter_name`
+    // nos parâmetros textuais de um template NAMED. Ausente = POSITIONAL, o
+    // contrato legado — comportamento preservado para quem não declara o campo.
+    ...(input.current!.parameter_format
+      ? { parameter_format: input.current!.parameter_format }
+      : {}),
     components: input.current!.components as never,
   });
 
@@ -90,7 +114,8 @@ export async function sendTemplate(input: SendTemplateInput): Promise<SendTempla
     };
   }
 
-  const url = `https://graph.facebook.com/${input.graphVersion}/${input.phoneNumberId}/messages`;
+  const base = input.graphBase ?? graphBaseUrl(input.graphVersion);
+  const url = `${base}/${input.phoneNumberId}/messages`;
   const res = await fetch(url, {
     method: "POST",
     headers: {

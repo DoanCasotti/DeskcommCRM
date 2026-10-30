@@ -15,6 +15,8 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import type { Conversation } from "@/lib/types/messaging";
 import { traduzir } from "@/lib/i18n/dicionario";
+import { ApiError } from "@/lib/api/types";
+import { exigirControleDaConversa } from "@/lib/inbox/controle-da-conversa";
 
 export const dynamic = "force-dynamic";
 
@@ -42,17 +44,28 @@ export async function POST(req: NextRequest, ctx: RouteCtx): Promise<Response> {
   const user = authz.user;
 
   const { data: visible, error: readError } = await supabase.from("conversations")
-    .select("id, organization_id, service_revision").eq("id", id)
+    .select("id, organization_id, assigned_to_user_id, service_revision").eq("id", id)
     .eq("organization_id", authz.org.orgId).maybeSingle();
   if (readError) return fail("internal_error", readError.message, 500, { requestId });
   if (!visible) return fail("not_found", t("Conversa não encontrada."), 404, { requestId });
+  try {
+    await exigirControleDaConversa(supabase, {
+      organization_id: authz.org.orgId, actor: { type: "user", id: user.id }, requestId,
+      idioma: user.idioma,
+    }, visible);
+  } catch (erro) {
+    if (erro instanceof ApiError) return fail(erro.code, erro.message, erro.status, { requestId });
+    throw erro;
+  }
   const { data, error } = await createAdminClient().rpc("fn_service_status", {
     p_org: visible.organization_id, p_conversation: id, p_status: "closed",
     p_expected: parsed.data.expected_revision ?? visible.service_revision,
   });
-  if (error) return fail(error.code === "40001" ? "conflict" : "internal_error",
-    error.code === "40001" ? t("O atendimento mudou. Atualize e tente novamente.") : error.message,
-    error.code === "40001" ? 409 : 500, { requestId });
+  // PT409: revisão obsoleta (migration 0514). 40001: contato trocou no meio, ou banco anterior à 0514.
+  const conflito = error?.code === "PT409" || error?.code === "40001";
+  if (error) return fail(conflito ? "conflict" : "internal_error",
+    conflito ? t("O atendimento mudou. Atualize e tente novamente.") : error.message,
+    conflito ? 409 : 500, { requestId });
   const conv = data as unknown as Conversation;
 
   await audit({

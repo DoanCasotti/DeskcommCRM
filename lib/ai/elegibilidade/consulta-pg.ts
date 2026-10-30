@@ -16,11 +16,17 @@ import {
 
 interface LinhaDeElegibilidade {
   channel_metadata: Record<string, unknown> | null;
-  force_human: boolean | null;
+  force_human: boolean;
+  ai_opt_out: boolean;
   assignee_kind: string | null;
   bot_silenced_until: Date | string | null;
   ai_authorized_at: Date | string | null;
   phone_number: string | null;
+  org_status: string | null;
+  /** `contacts.tags` — a régua de contato interno (#2353). */
+  contact_tags: string[] | null;
+  /** `organizations.settings` — a lista interna mora em `.crm.internal_contact_tags`. */
+  org_settings: unknown;
 }
 
 /**
@@ -35,11 +41,16 @@ export async function decidirElegibilidadeDaConversa(
     `select
        cs.metadata                  as channel_metadata,
        ct.force_human               as force_human,
+       ct.ai_opt_out                as ai_opt_out,
        cv.assignee_kind             as assignee_kind,
        cv.bot_silenced_until        as bot_silenced_until,
        ct.ai_authorized_at          as ai_authorized_at,
-       ct.phone_number              as phone_number
+       ct.phone_number              as phone_number,
+       ct.tags                      as contact_tags,
+       o.status                     as org_status,
+       o.settings                   as org_settings
      from conversations cv
+     join organizations o on o.id = cv.organization_id
      join contacts ct
        on ct.id = cv.contact_id and ct.organization_id = cv.organization_id
      join channel_sessions cs
@@ -52,11 +63,16 @@ export async function decidirElegibilidadeDaConversa(
 
   return decidirElegibilidade(
     montarEstadoDeElegibilidade({
+      orgStatus: r.org_status,
+      canalDesativado: r.channel_metadata?.disabled,
       aiGate: r.channel_metadata?.ai_gate,
       aiGateMode: r.channel_metadata?.ai_gate_mode,
       aiTestPhoneNumbers: r.channel_metadata?.ai_test_phone_numbers,
       contactPhoneNumber: r.phone_number,
       forceHuman: r.force_human,
+      contactTags: r.contact_tags,
+      orgSettings: r.org_settings,
+      aiOptOut: r.ai_opt_out,
       assigneeKind: r.assignee_kind,
       botSilencedUntil: r.bot_silenced_until,
       aiAuthorizedAt: r.ai_authorized_at,

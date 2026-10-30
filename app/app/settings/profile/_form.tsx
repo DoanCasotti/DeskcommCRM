@@ -15,20 +15,16 @@ import {
 } from "@/components/ui/select";
 import { updateProfile } from "@/app/actions/settings/updateProfile";
 import { useT } from "@/hooks/i18n/useT";
+import { IDIOMAS_VISIVEIS } from "@/lib/i18n/registro";
 import {
   profileSchema,
   SEM_PREFERENCIA_DE_IDIOMA,
   type Locale,
 } from "@/lib/schemas/settings";
+import { FUSOS_OFERECIDOS } from "@/lib/tempo/fusos";
 
-const TIMEZONES = [
-  "America/Sao_Paulo",
-  "America/Manaus",
-  "America/Belem",
-  "America/Recife",
-  "America/Fortaleza",
-  "UTC",
-];
+// A mesma lista de toda tela de fuso — ver `lib/tempo/fusos.ts`.
+const TIMEZONES = FUSOS_OFERECIDOS.map((f) => f.codigo);
 
 interface Props {
   email: string;
@@ -101,13 +97,15 @@ export function ProfileForm({
                 <SelectItem value={SEM_PREFERENCIA_DE_IDIOMA}>
                   {t("Seguir o idioma da empresa")}
                 </SelectItem>
-                <SelectItem value="pt-BR">Português (BR)</SelectItem>
-                {/* Espanhol entrou quando passou a MUDAR alguma coisa. Enquanto
-                    o campo era guardado e ninguém o lia, oferecer um idioma a
-                    mais era prometer o que a tela não cumpre — e o operador
-                    conclui que o sistema está quebrado.
-                    `en-US` saiu pela mesma razão: nunca teve tradução. */}
-                <SelectItem value="es">Español</SelectItem>
+                {/* A lista vem do registro, e só com o que o nível deixa
+                    aparecer. Oferecer um idioma que não muda a tela é prometer
+                    o que ela não cumpre — `en-US` saiu por isso, e um idioma
+                    em construção fica fora pela mesma razão. */}
+                {IDIOMAS_VISIVEIS.map(({ codigo, nomeNativo }) => (
+                  <SelectItem key={codigo} value={codigo}>
+                    {nomeNativo}
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
           </div>

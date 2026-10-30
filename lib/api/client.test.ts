@@ -187,6 +187,38 @@ describe("apiClient", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it("t11b: 503 com Retry-After num POST também repete, esperando o que o servidor pediu", async () => {
+    // Contrato do discador: `POST /api/v1/voice/calls` responde 503
+    // `wacalls_not_connected` + `Retry-After` quando o WaCalls diz "websocket
+    // not connected" (o erro nasce ANTES de qualquer <call> sair, então repetir
+    // é seguro). O comportamento do cliente já existia; este caso o PRENDE,
+    // para a rota não depender de um retry que alguém poderia tirar.
+    //
+    // `Retry-After: "1"`, e não "0": `parseRetryAfterSeconds` descarta zero e
+    // cai no backoff, e o caminho que honra o valor do servidor ficaria sem
+    // medida.
+    vi.useFakeTimers();
+    fetchMock
+      .mockResolvedValueOnce(
+        jsonResponse(
+          503,
+          { error: { code: "wacalls_not_connected", message: "sem conexão" } },
+          { "Retry-After": "1" },
+        ),
+      )
+      .mockResolvedValueOnce(jsonResponse(201, { data: { id: "c1" } }));
+
+    const pendente = apiClient.post<{ data: { id: string } }>("/api/v1/voice/calls", {
+      contactId: "x",
+    });
+
+    await vi.advanceTimersByTimeAsync(900);
+    expect(fetchMock, "repetiu antes do Retry-After").toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(await pendente).toEqual({ data: { id: "c1" } });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   /**
    * O ORÇAMENTO DE ESPERA DA ESCRITA (o vermelho de `followup-dossie:190`).
    *
@@ -334,5 +366,70 @@ describe("apiClient — quando a organização some debaixo da tela", () => {
     fetchMock.mockResolvedValue(semOrganizacao());
     await expect(cliente.get("/api/v1/conversations")).rejects.toThrow();
     expect(reload).toHaveBeenCalledTimes(2);
+  });
+});
+
+/**
+ * A EMPRESA FOI SUSPENSA COM A TELA ABERTA (acabamentos do PR 1, itens 6 e 23).
+ *
+ * As rotas de API respondem 403 `org_suspended`; sem o cliente encaminhar, a
+ * pessoa ficava com listas vazias e erros até recarregar à mão.
+ */
+describe("apiClient — quando a empresa é suspensa com a tela aberta", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+  let assign: ReturnType<typeof vi.fn>;
+  let reload: ReturnType<typeof vi.fn>;
+  let pathname: string;
+
+  const suspensa = () =>
+    jsonResponse(403, {
+      error: { code: "org_suspended", message: "A conta desta empresa está suspensa." },
+    });
+
+  beforeEach(() => {
+    vi.resetModules();
+    fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    assign = vi.fn();
+    reload = vi.fn();
+    pathname = "/app/inbox";
+    vi.stubGlobal("window", {
+      location: { assign, reload, get pathname() { return pathname; } },
+      sessionStorage: { getItem: () => null, setItem: () => undefined, removeItem: () => undefined },
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("leva a janela ao hub /account-suspended, e quem chamou termina com o erro", async () => {
+    fetchMock.mockResolvedValue(suspensa());
+    const { apiClient: cliente } = await import("@/lib/api/client");
+
+    await expect(cliente.get("/api/v1/conversations")).rejects.toThrow(
+      "A conta desta empresa está suspensa.",
+    );
+    expect(assign).toHaveBeenCalledWith("/account-suspended");
+    expect(reload).not.toHaveBeenCalled();
+  });
+
+  it("já no hub, não navega de novo (sem laço)", async () => {
+    pathname = "/account-suspended";
+    fetchMock.mockResolvedValue(suspensa());
+    const { apiClient: cliente } = await import("@/lib/api/client");
+
+    await expect(cliente.get("/api/v1/conversations")).rejects.toThrow();
+    expect(assign).not.toHaveBeenCalled();
+  });
+
+  it("CONTROLE — outro 403 não navega", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(403, { error: { code: "forbidden", message: "sem permissão" } }),
+    );
+    const { apiClient: cliente } = await import("@/lib/api/client");
+
+    await expect(cliente.get("/api/v1/conversations")).rejects.toThrow();
+    expect(assign).not.toHaveBeenCalled();
   });
 });

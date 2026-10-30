@@ -8,10 +8,17 @@
  * ali, e o motivo era uma coluna faltando no `OR` da busca.
  *
  * Contato que entra pelo WhatsApp nasce só com `display_name` (o pushName do
- * aparelho); `name` fica nulo até alguém editar à mão. A UI inteira prefere
- * `display_name` (ver `resolveContactName`). A busca olhava só `name`, `email` e
- * `phone_number` — ou seja, ignorava justamente o nome que a pessoa lê na tela e
- * digita no campo de busca.
+ * aparelho); `name` fica nulo até alguém editar à mão. A busca olhava só `name`,
+ * `email` e `phone_number` — ou seja, ignorava justamente o nome que a pessoa lê
+ * na tela e digita no campo de busca.
+ *
+ * ⚠️ O QUE ESTE ARQUIVO NÃO AFIRMA. Esta linha já dizia "a UI inteira prefere
+ * `display_name` (ver `resolveContactName`)", e a afirmação envelheceu inteira
+ * na issue #906, que inverteu a precedência: quem decide o nome exibido é
+ * `nomeDoContato` (lib/contacts/rotulo-do-contato.ts), e a ordem em vigor se lê
+ * ali, não aqui. O que justifica `display_name` no OR não é a ordem — é o DADO:
+ * ela é a única coluna preenchida em 15 dos 33 contatos desta instalação, e essa
+ * razão continua verdadeira com a ordem invertida.
  *
  * O teste é sobre o FILTRO montado, não sobre o resultado do banco: é a decisão
  * que estava errada, e é ela que precisa ficar vigiada.
@@ -50,14 +57,30 @@ function supabaseEspiao() {
   return { client: { from: () => chain } as never, filtros, colunasIs };
 }
 
-async function filtroDaBusca(termo: string): Promise<string> {
+async function filtroDaBusca(termo: string, soContato?: string): Promise<string> {
   const { client, filtros } = supabaseEspiao();
   await listContactsHandler(
     client,
     { organization_id: ORG, actor: { type: "user", id: "u-1" }, requestId: "req" },
     { search: termo, limit: 20 },
+    soContato,
   );
   return filtros[0] ?? "";
+}
+
+/**
+ * O `imatch` (regex) das colunas de NOME casado como o Postgres casa (`~*`).
+ *
+ * O padrão sai em regex desde a F2 da #1835 — as letras com grafias viram
+ * classe (`C l [íîï…] n t [éêè…]`) —, então afirmar a string do padrão por
+ * inteiro não diz mais nada sobre o comportamento. O que se afirma aqui é o
+ * que o filtro FAZ, e o tradutor tem controle no arquivo irmão
+ * (`busca-de-contatos-normaliza-termo.test.ts`).
+ */
+function casaNoNome(filtro: string, nome: string): boolean {
+  return [...filtro.matchAll(/(\w+)\.imatch\.([^,]+)/g)]
+    .filter((m) => m[1] === "name" || m[1] === "display_name")
+    .some((m) => new RegExp(m[2]!, "i").test(nome));
 }
 
 /** As colunas que a listagem exige serem NULL. */
@@ -73,30 +96,57 @@ async function colunasComIsNull(): Promise<string[]> {
 
 describe("busca de contatos", () => {
   it("procura no display_name — o nome que a tela mostra e o WhatsApp preenche", async () => {
+    // O espaço do termo virou curinga na #1835 (a mesma régua da busca de
+    // conversas); o que este caso vigia é a COLUNA estar no OR, e por isso a
+    // asserção cita `display_name` por inteiro, com o padrão que hoje sai.
     const filtro = await filtroDaBusca("Cliente Retorno");
-    expect(filtro).toContain("display_name.ilike.%Cliente Retorno%");
+    expect(filtro).toContain("display_name.imatch.");
+    expect(casaNoNome(filtro, "Cliente Retorno E2E"), `filtro=${filtro}`).toBe(true);
+  });
+
+  it("procura no nome da agenda do celular — a tela o mostra quando não há nome no CRM (#2439)", async () => {
+    const filtro = await filtroDaBusca("João obra");
+    expect(filtro).toContain("address_book_name.imatch.");
+  });
+
+  it("a busca do agente durante a conversa NÃO olha o nome da agenda — ele é só da equipe (#2439)", async () => {
+    // Com o contato do turno (`crm_search_contacts` em atendimento), casar na
+    // agenda faria a ferramenta responder ao modelo se o rótulo interno contém
+    // o termo — o mesmo vazamento que a guarda SO_DA_EQUIPE fecha no template.
+    const filtro = await filtroDaBusca("caloteira", "22222222-2222-4222-8222-222222222222");
+    expect(filtro).not.toContain("address_book_name");
+    expect(filtro).toContain("display_name.imatch.");
   });
 
   it("continua procurando nas colunas que já procurava", async () => {
     // A adição não pode custar as outras: quem cadastrou o contato à mão tem
     // `name`, e quem digita telefone espera achar por telefone.
     const filtro = await filtroDaBusca("Maria");
-    for (const coluna of ["name.ilike", "email.ilike", "phone_number.ilike"]) {
+    for (const coluna of ["name.imatch", "email.imatch", "phone_number.imatch"]) {
       expect(filtro).toContain(coluna);
     }
   });
 
   it("nome com vírgula não injeta condição extra no filtro", async () => {
-    // `,` separa condições no DSL do `.or()`. Sem escape, "Silva, Maria" vira
-    // duas condições e a busca devolve gente que ninguém pediu.
+    // `,` separa condições no `.or()`. Sem saneamento, "Silva, Maria" viraria
+    // duas condições e a busca devolveria gente que ninguém pediu — e depois da
+    // #1835 a vírgula não some: ela vira o MESMO curinga do espaço, que é o que
+    // faz "Silva Maria" achar o cadastro "Silva, Maria" (a asserção de baixo é a
+    // catraca da normalização; a de cima é a da gramática).
     const filtro = await filtroDaBusca("Silva, Maria");
     expect(filtro).not.toContain("Silva,");
-    expect(filtro).toContain("Silva  Maria");
+    // Os dois sentidos: quem DIGITA a vírgula acha o cadastro que a tem, e quem
+    // não digita também — é o curinga que a normalização põe no lugar dela.
+    expect(casaNoNome(filtro, "Silva, Maria"), `filtro=${filtro}`).toBe(true);
+    expect(casaNoNome(await filtroDaBusca("Silva Maria"), "Silva, Maria")).toBe(true);
   });
 
   it("curinga do LIKE digitado pelo usuário é literal, não coringa", async () => {
+    // Em regex `%` e `_` não são curinga nenhum de natureza — o que se prova é
+    // o casamento nos dois sentidos: com o `%` de verdade e sem ele.
     const filtro = await filtroDaBusca("100%");
-    expect(filtro).toContain("100\\%");
+    expect(casaNoNome(filtro, "Plano 100%"), `filtro=${filtro}`).toBe(true);
+    expect(casaNoNome(filtro, "Plano 1000"), `filtro=${filtro}`).toBe(false);
   });
 
   it("busca o celular também pela grafia com o nono — senão o cadastro some", async () => {

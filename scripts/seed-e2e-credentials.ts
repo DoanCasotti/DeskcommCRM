@@ -220,7 +220,6 @@ async function ensureAgent(orgId: string): Promise<string> {
         context_message_window: 20,
         rag_top_k: 5,
         rag_similarity_threshold: 0.72,
-        confidence_threshold: 0.6,
       },
       guardrails: [],
     } as never)
@@ -339,7 +338,19 @@ async function main(): Promise<void> {
   const adminTotp = await garantirTotp(users.admin!.id, users.admin!.email, "admin_totp");
   const donoTotp = await garantirTotp(users.dono!.id, users.dono!.email, "dono_totp");
 
+  // Os outros seeds (`seed-e2e-escalacao`, `seed-e2e-queue`, ...) gravam os
+  // blocos deles NESTE arquivo. Reescrevê-lo do zero apagava esses blocos para
+  // toda spec que roda depois na mesma parte — medido no PR #2520: o
+  // `inbox-tempo-real` reseeda no `beforeAll` e o `passagem-com-contexto`
+  // caiu com "falta o bloco `passagem`". Preserva só se a org é a MESMA: um
+  // banco recriado tem outro `org_id`, e aí os blocos velhos apontam para nada.
+  const gravado: Record<string, unknown> = fs.existsSync(".e2e-creds.json")
+    ? (JSON.parse(fs.readFileSync(".e2e-creds.json", "utf8")) as Record<string, unknown>)
+    : {};
+  const anteriores = gravado.org_id === orgId ? gravado : {};
+
   const creds = {
+    ...anteriores,
     org_id: orgId,
     org_slug: ORG_SLUG,
     org_name: ORG_NAME,

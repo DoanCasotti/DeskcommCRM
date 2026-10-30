@@ -45,6 +45,7 @@
 
 import { DEFAULT_APP_NAME } from "@/lib/branding";
 import { env } from "@/lib/env";
+import { valorDaInstalacao } from "@/lib/instalacao/config";
 import { logger } from "@/lib/logger";
 import { createAdminClient } from "@/lib/supabase/admin";
 
@@ -65,6 +66,7 @@ export type MarcaDeSaida = {
    * (`app/(public)/layout.tsx`).
    */
   readonly logoUrl: string | null;
+  readonly logoDarkUrl?: string | null;
   /** `#hex` sempre — o formato que cliente de e-mail e @react-pdf entendem. */
   readonly accent: string;
   /** Preto ou branco, já com o piso de contraste aplicado. */
@@ -178,10 +180,15 @@ async function settingsDaOrganizacao(organizationId: string): Promise<unknown> {
  * `lib/event-log/register-handlers.ts:12` é importado só por
  * `app/api/v1/cron/event-log-drain/route.ts:21`; `Dockerfile.worker` roda
  * `workers/agent-worker/main.ts`, que não importa e-mail nenhum).
+ *
+ * `semMemo` é só de quem envia: a fachada mantém seu memo de leitura.
  */
-export async function marcaDaSaida(organizationId: string | null): Promise<MarcaDeSaida> {
+export async function marcaDaSaida(
+  organizationId: string | null,
+  opcoes: { semMemo?: boolean } = {},
+): Promise<MarcaDeSaida> {
   try {
-    const linha = await marcaDaInstalacao();
+    const linha = await marcaDaInstalacao({ semMemo: opcoes.semMemo });
     const marca =
       organizationId === null
         ? resolverMarca([camadaDaInstalacao(linha), camadaDoAmbiente(env)], REGUA_DO_PRODUTO)
@@ -197,6 +204,7 @@ export async function marcaDaSaida(organizationId: string | null): Promise<Marca
     return {
       nome: marca.name,
       logoUrl: marca.logoUrl,
+      ...(marca.logoDarkUrl ? { logoDarkUrl: marca.logoDarkUrl } : {}),
       accent,
       // Nunca `#ffffff` fixo: `melhorFrenteSobre` (`contraste.ts:79`) já
       // decide preto ou branco pelo contraste real. Uma marca amarela colada
@@ -228,12 +236,16 @@ export async function marcaDaSaida(organizationId: string | null): Promise<Marca
  * de conta suspensa, quem suspendeu foi o revendedor — mandar o cliente dele
  * escrever para nós entrega o cliente e não resolve o problema dele.
  *
- * Só o `.env` por enquanto. A coluna que permitiria trocar isto pela tela
- * (`platform_branding.support_email`) exige migration + apêndice no
- * `baseline.sql`, e schema não entra nesta mudança — está declarado no handoff
- * desta fase. Quando entrar, esta função ganha a linha do banco ACIMA do
- * ambiente, na mesma ordem que a marca já usa.
+ * O que a nota anterior aqui pedia — "quando a coluna entrar, esta função ganha
+ * a linha do banco ACIMA do ambiente, na mesma ordem que a marca já usa" — é o
+ * que esta versão faz. A migration 0341 trouxe `platform_config`, que guarda uma
+ * linha por variável em vez de uma coluna por campo, e o resolvedor devolve a
+ * ordem certa: banco acima, arquivo de instalação embaixo.
+ *
+ * Virou `async` porque o banco exige espera. O alcance foi medido antes: são
+ * duas páginas de servidor, ambas já assíncronas.
  */
-export function emailDeSuporte(): string {
-  return env.SUPPORT_EMAIL.trim();
+export async function emailDeSuporte(): Promise<string> {
+  const { valor } = await valorDaInstalacao("SUPPORT_EMAIL");
+  return (valor ?? "").trim();
 }

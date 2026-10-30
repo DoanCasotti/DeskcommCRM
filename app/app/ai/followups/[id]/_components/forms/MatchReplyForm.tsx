@@ -89,7 +89,7 @@ export function MatchReplyForm({
                 value={branch.op}
                 onValueChange={(v) => atualizar(index, { op: v as MatchReplyBranch["op"] })}
               >
-                <SelectTrigger aria-label={`Comparação da regra ${index + 1}`}>
+                <SelectTrigger aria-label={`${t("Comparação da regra")} ${index + 1}`}>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -101,7 +101,7 @@ export function MatchReplyForm({
                 aria-label={`Texto da regra ${index + 1}`}
                 value={branch.pattern}
                 onChange={(e) => atualizar(index, { pattern: e.target.value })}
-                placeholder="texto a casar"
+                placeholder={t("texto a casar")}
               />
               <Button
                 type="button"
@@ -135,12 +135,12 @@ export function MatchReplyForm({
               commit({ branches: next, graceMin, saveTo, ifExists });
             }}
           >
-            <Plus size={14} aria-hidden className="mr-1" /> Adicionar regra
+            <Plus size={14} aria-hidden className="mr-1" /> {t("Adicionar regra")}
           </Button>
         )}
       </div>
       <div className="space-y-2">
-        <Label htmlFor="match-reply-grace">{ESPERA_PELA_RESPOSTA.rotulo}</Label>
+        <Label htmlFor="match-reply-grace">{t(ESPERA_PELA_RESPOSTA.rotulo)}</Label>
         <Input
           id="match-reply-grace"
           type="number"
@@ -152,7 +152,7 @@ export function MatchReplyForm({
             commit({ branches, graceMin: v, saveTo, ifExists });
           }}
         />
-        <p className="text-xs text-text-muted">{ESPERA_PELA_RESPOSTA.ajuda}</p>
+        <p className="text-xs text-text-muted">{ESPERA_PELA_RESPOSTA.ajuda(t)}</p>
       </div>
       <div className="space-y-2">
         <Label htmlFor="match-reply-save">{t("Gravar a resposta em")}</Label>
@@ -203,7 +203,7 @@ export function MatchReplyForm({
         )}
         {saveTo && (
           <div className="space-y-2">
-            <Label htmlFor="match-reply-if-exists">{SE_INFORMACAO_JA_EXISTIR.rotulo}</Label>
+            <Label htmlFor="match-reply-if-exists">{t(SE_INFORMACAO_JA_EXISTIR.rotulo)}</Label>
             <Select
               value={ifExists}
               onValueChange={(v) => {
@@ -216,12 +216,12 @@ export function MatchReplyForm({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="skip">{SE_INFORMACAO_JA_EXISTIR.skip}</SelectItem>
-                <SelectItem value="overwrite">{SE_INFORMACAO_JA_EXISTIR.overwrite}</SelectItem>
-                <SelectItem value="confirm">{SE_INFORMACAO_JA_EXISTIR.confirm}</SelectItem>
+                <SelectItem value="skip">{t(SE_INFORMACAO_JA_EXISTIR.skip)}</SelectItem>
+                <SelectItem value="overwrite">{t(SE_INFORMACAO_JA_EXISTIR.overwrite)}</SelectItem>
+                <SelectItem value="confirm">{t(SE_INFORMACAO_JA_EXISTIR.confirm)}</SelectItem>
               </SelectContent>
             </Select>
-            <p className="text-xs text-text-muted">{SE_INFORMACAO_JA_EXISTIR.ajuda}</p>
+            <p className="text-xs text-text-muted">{t(SE_INFORMACAO_JA_EXISTIR.ajuda)}</p>
           </div>
         )}
         <p className="text-xs text-text-muted">

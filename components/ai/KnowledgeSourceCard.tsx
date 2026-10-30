@@ -12,10 +12,19 @@ import { useT } from "@/hooks/i18n/useT";
  * sobre uma API que já existia e nunca foi ligada à tela.
  *
  * Agora cada cartão é um material de verdade, com as ações que ele aceita: ver
- * o que o agente aprendeu, editar (quando é texto colado), preparar de novo, e
- * arquivar. O que o cartão NÃO oferece é o que aquele tipo de material não
- * aceita — controle que não controla nada gasta a confiança de quem clicou.
+ * o que o agente aprendeu, editar (quando o tipo do material guarda pergunta e
+ * resposta), preparar de novo, e arquivar. O que o cartão NÃO oferece é o que
+ * aquele tipo de material não aceita — controle que não controla nada gasta a
+ * confiança de quem clicou.
+ *
+ * A ação nasce do TIPO, não do que ele aceita de entrada. `documento` aceita
+ * texto colado (é `arquivo_ou_texto`) mas o conteúdo dele é texto corrido: não
+ * existe pergunta/resposta para editar ali, e a pergunta certa é
+ * `ePerguntaEResposta(tipo)`. Com `aceitaTextoColado` o cartão oferecia
+ * "Editar conteúdo" para quem cadastrou um documento e abria o editor de FAQ
+ * vazio — um controle que promete conteúdo que aquele material não tem.
  */
+import Link from "next/link";
 import { useState } from "react";
 import {
   BookOpen,
@@ -35,7 +44,7 @@ import { EditarFaqDialog } from "@/components/ai/EditarFaqDialog";
 import {
   TIPO_DE_FONTE_POR_ID,
   canonizarTipoDeFonte,
-  aceitaTextoColado,
+  ePerguntaEResposta,
 } from "@/lib/ai/rag/tipos-de-fonte";
 import type { SourceRow } from "@/hooks/ai/useKnowledgeSources";
 
@@ -50,6 +59,13 @@ interface Props {
   source: SourceRow;
   /** Nomes dos assistentes que consultam este material. */
   usadoPor: string[];
+  /**
+   * Endereço da LEITURA do material (`/app/ai/knowledge/sources/[id]`).
+   *
+   * Opcional de propósito: o cartão é usado em telas que não são o acervo, e
+   * controle que não leva a lugar nenhum gasta a confiança de quem clicou.
+   */
+  href?: string;
   onReindex: () => void;
   onArquivar: () => void;
   onMudou: () => void;
@@ -77,6 +93,7 @@ function formatRelative(
 export function KnowledgeSourceCard({
   source,
   usadoPor,
+  href,
   onReindex,
   onArquivar,
   onMudou,
@@ -103,7 +120,21 @@ export function KnowledgeSourceCard({
         <div className="flex items-start justify-between gap-2">
           <div className="flex items-center gap-2">
             <Icon className="h-5 w-5 shrink-0 text-accent" aria-hidden />
-            <CardTitle className="text-base">{source.name}</CardTitle>
+            <CardTitle className="text-base">
+              {/* O nome é a porta mais óbvia para ler o material: quem olha a
+                  grade clica no título antes de procurar um botão. */}
+              {href ? (
+                <Link
+                  href={href}
+                  className="hover:text-accent focus-visible:underline"
+                  data-testid={`material-abrir-nome-${source.id}`}
+                >
+                  {source.name}
+                </Link>
+              ) : (
+                source.name
+              )}
+            </CardTitle>
           </div>
           <SourceStatusBadge source={source} />
         </div>
@@ -160,6 +191,18 @@ export function KnowledgeSourceCard({
           {isReindexing ? t("Preparando…") : t("Preparar de novo")}
         </Button>
 
+        {/* ABRIR O MATERIAL — ler o que está guardado nele. Fica ANTES de "Ver o
+            que ele aprendeu" porque a pergunta da tela é "o que tem neste
+            material?", e os trechos do índice respondem outra pergunta. */}
+        {href ? (
+          <Button variant="ghost" size="sm" asChild>
+            <Link href={href} data-testid={`material-abrir-${source.id}`}>
+              <FileText className="mr-2 h-3.5 w-3.5" aria-hidden />
+              {t("Ler o material")}
+            </Link>
+          </Button>
+        ) : null}
+
         {temTrechos ? (
           <>
             <Button
@@ -184,7 +227,9 @@ export function KnowledgeSourceCard({
           </>
         ) : null}
 
-        {aceitaTextoColado(tipo) && !arquivado ? (
+        {/* A ação nasce do TIPO: só quem guarda pergunta/resposta tem o que
+            editar no editor de FAQ. Um documento (texto corrido) não tem. */}
+        {ePerguntaEResposta(tipo) && !arquivado ? (
           <>
             <Button
               variant="ghost"

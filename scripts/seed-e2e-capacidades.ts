@@ -57,7 +57,8 @@ async function main(): Promise<void> {
   let fixtures = creds.followup_agent_fixtures;
   if (!fixtures) {
     // RODA o pré-requisito em vez de mandar rodar. As fixtures moram no mesmo
-    // `.e2e-creds.json` que `seed-e2e-credentials.ts` reescreve por inteiro —
+    // `.e2e-creds.json` que `seed-e2e-credentials.ts` reescrevia por inteiro (hoje
+    // ele preserva os blocos quando a org é a mesma, mas um banco recriado os descarta) —
     // e ele é chamado de dentro do login quando o fator TOTP foi rotacionado
     // por outra sessão. O resultado é este bloco sumir no meio de uma execução
     // do Playwright, onde ninguém pode "rodar antes" coisa nenhuma: a bateria
@@ -113,24 +114,38 @@ async function main(): Promise<void> {
     "crm_get_lead",
     "crm_move_lead_stage",
     "crm_list_leads",
-    // ⚠️ AS CINCO ABAIXO ENTRARAM COM O TETO INDO DE 20 PARA 25, e não são enfeite.
+    // ⚠️ AS OITO ABAIXO NÃO SÃO ENFEITE: elas existem para o cenário ESTOURAR.
     //
-    // A jornada do teto (issue #162) só existe se o cenário ESTOURAR: eram 3 do
-    // seed + 18 de "Atender" = 21 contra teto 20, e a tela recusava dizendo
+    // A jornada do teto (issue #162) só existe se a soma passar do teto: eram 3
+    // do seed + 18 de "Atender" = 21 contra teto 20, e a tela recusava dizendo
     // "faltam 1 vaga". Com teto 25 essas mesmas 21 passam, a recusa nunca acontece
     // e o caso vira um clique que sempre dá certo — verde sem medir nada.
     //
-    // Oito reproduzem a MESMA aritmética no teto novo: 8 + 18 = 26 > 25, recusa
-    // por 1 vaga; desligar uma deixa 7 + 18 = 25, que é o teto exato e passa.
+    // A cada subida do teto a aritmética ameaçava caber de novo. Com teto 27
+    // (a proposta comercial entrou no `vender` e o teto subiu com ela) as oito
+    // reproduzem a MESMA conta: com os 3 do seed, 11 + 17 = 28 > 27, recusa por
+    // 1 vaga; desligar uma das oito deixa 10 + 17 = 27, que é o teto exato e
+    // passa. O que segura o caso é essa soma estourar por exatamente UMA vaga —
+    // estourar por 2 muda o texto da tela e o caso morre, caber no teto faz a
+    // recusa sumir e o caso virar verde sem medir nada.
+    //
+    // Os 17 são o pacote "Atender" DEPOIS da #528, e foi ela que mudou o número:
+    // a crítica que o pacote contava (o envio de WhatsApp, que o motor descarta
+    // em todo turno) deixou de ser oferecida, e com ela saiu uma vaga da conta.
     //
     // As escolhidas ficam FORA do pacote "Atender" de propósito — se alguma
     // estivesse dentro, a união seria menor que a soma e a conta acima não valeria.
-    // Quatro são a família de agenda, que é o assunto do defeito que subiu o teto.
+    // Quatro são a família de agenda, que é o assunto do defeito que subiu o teto
+    // pela primeira vez; as quatro últimas são leitura pura de outros pacotes,
+    // para a aritmética continuar estourando a cada subida.
     "crm_find_free_slots",
     "crm_list_appointments",
     "crm_book_appointment",
     "crm_reschedule_appointment",
     "crm_list_pipelines",
+    "crm_list_event_types",
+    "crm_list_human_cases",
+    "crm_list_knowledge_sources",
   ];
 
   // REPÕE TODAS AS VERSÕES DRAFT DESTE AGENTE, não só a de maior número.
@@ -210,8 +225,10 @@ async function main(): Promise<void> {
     .eq("organization_id", orgId)
     .eq("agent_id", agentId);
   const idsAntigos = (runsAntigos ?? []).map((r) => r.id as string);
+  // Só os runs saem. `api_audit_log` não aceita DELETE de service_role (migration
+  // 0258), e não precisa: `fn_agent_tool_usage` conta a auditoria pelo JOIN com
+  // `ai_agent_runs`, então a linha cujo run foi apagado deixa de contar na tela.
   if (idsAntigos.length > 0) {
-    await admin.from("api_audit_log").delete().in("request_id", idsAntigos);
     await admin.from("ai_agent_runs").delete().in("id", idsAntigos);
   }
 

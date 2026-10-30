@@ -64,6 +64,41 @@ export function enderecoDeRetorno(urlDaAplicacao: string = env.NEXT_PUBLIC_APP_U
 }
 
 /**
+ * A URL canônica continua sendo a do ambiente, mas uma pessoa desenvolvendo
+ * no próprio computador pode abrir o mesmo processo por `localhost` enquanto
+ * o instalador local guardou o IP da rede. OAuth compara o redirect byte a
+ * byte; nesse caso, usar o IP exibido pela configuração manda o navegador para
+ * outra origem e a conexão não termina.
+ *
+ * Só aceitamos loopback como exceção. Host arbitrário nunca vence a URL
+ * canônica da instalação, para que um cabeçalho Host forjado não troque o
+ * endereço a que o Google devolverá o código de autorização.
+ */
+export function origemLocalDoNavegador(origem: string | null | undefined): string | null {
+  if (!origem) return null;
+  try {
+    const url = new URL(origem);
+    const host = url.hostname.toLowerCase();
+    if (host === "localhost" || host === "127.0.0.1" || host === "::1") return url.origin;
+  } catch {
+    // Cabeçalho ausente ou inválido: a URL canônica segue sendo o piso seguro.
+  }
+  return null;
+}
+
+/**
+ * A URL montada pelo runtime pode refletir a URL canônica da instalação mesmo
+ * quando o navegador abriu o Docker por localhost. Para OAuth local, a fonte
+ * correta é o Host que chegou na requisição; é ele que a página já exibe e é a
+ * origem para a qual o navegador conseguirá voltar depois do consentimento.
+ */
+export function origemLocalDosCabecalhos(cabecalhos: Pick<Headers, "get">): string | null {
+  const host = cabecalhos.get("x-forwarded-host") ?? cabecalhos.get("host");
+  const protocolo = (cabecalhos.get("x-forwarded-proto") ?? "http").split(",")[0]?.trim() || "http";
+  return origemLocalDoNavegador(host ? `${protocolo}://${host}` : null);
+}
+
+/**
  * O que o AMBIENTE traz — puro, síncrono, sem banco.
  *
  * Continua existindo separado de propósito. Ele é o PISO DE ROLLBACK: o
@@ -75,7 +110,7 @@ export function enderecoDeRetorno(urlDaAplicacao: string = env.NEXT_PUBLIC_APP_U
  *
  * E ser síncrono e sem banco mantém testável o que é regra pura.
  */
-export function configuracaoDoAmbiente(): AppDoGoogleConfigurado | null {
+export function configuracaoDoAmbiente(urlDaAplicacao?: string): AppDoGoogleConfigurado | null {
   const clientId = texto(env.GOOGLE_CALENDAR_CLIENT_ID);
   const clientSecret = texto(env.GOOGLE_CALENDAR_CLIENT_SECRET);
   if (!clientId || !clientSecret) return null;
@@ -87,7 +122,7 @@ export function configuracaoDoAmbiente(): AppDoGoogleConfigurado | null {
   // morto, e o teste que a exercitava não conseguia sequer montar o cenário: o
   // próprio `env.ts` lançava antes. Guarda inalcançável é pior que guarda
   // ausente — ela dá a sensação de defesa e não pode ser testada.
-  return { clientId, clientSecret, redirectUri: enderecoDeRetorno() };
+  return { clientId, clientSecret, redirectUri: enderecoDeRetorno(urlDaAplicacao) };
 }
 
 /**
@@ -106,6 +141,18 @@ const TTL_MS = 30_000;
 declare global {
   // eslint-disable-next-line no-var
   var __memoDoAppDoGoogle: { readonly valor: LinhaDoApp | null; readonly expiraEm: number } | null | undefined;
+  /**
+   * Contador de escritas. Mora no `globalThis` pelo mesmo motivo que o memo — a
+   * rota que grava e a tela que renderiza são duas instâncias do módulo, e um
+   * `let` de arquivo falharia calado.
+   *
+   * Ele existe porque zerar o memo não basta: uma leitura que já estava em voo
+   * quando a escrita aconteceu volta com a linha PRÉ-ESCRITA e a reinstala por
+   * um TTL inteiro, desfazendo a invalidação. É a guarda que
+   * `lib/branding/instalacao.ts` estreou, e este memo é cópia declarada dela.
+   */
+  // eslint-disable-next-line no-var
+  var __geracaoDoAppDoGoogle: number | undefined;
 }
 
 interface LinhaDoApp {
@@ -115,6 +162,9 @@ interface LinhaDoApp {
 
 /** Chamada por quem ESCREVE a credencial — a server action do /admin. */
 export function invalidarCredencialDoGoogle(): void {
+  // A geração sobe ANTES de zerar: quem estiver lendo agora fica marcado como
+  // anterior a esta escrita e não poderá reinstalar o que leu.
+  globalThis.__geracaoDoAppDoGoogle = (globalThis.__geracaoDoAppDoGoogle ?? 0) + 1;
   globalThis.__memoDoAppDoGoogle = null;
 }
 
@@ -122,12 +172,24 @@ async function linhaDoBanco(): Promise<LinhaDoApp | null> {
   const memo = globalThis.__memoDoAppDoGoogle;
   if (memo && memo.expiraEm > Date.now()) return memo.valor;
 
+  // A geração é lida ANTES da ida ao banco, e conferida depois. Sem isso o memo
+  // sofre lost-update: uma leitura que entrou em voo antes de
+  // `invalidarCredencialDoGoogle()` volta com a linha PRÉ-ESCRITA e a grava com
+  // TTL novo, desfazendo a invalidação — a Agenda seguindo com a credencial
+  // velha por até TTL_MS inteiros, atrás de um toast verde. Mesma guarda, e
+  // mesmo comentário alongado, de `marcaDaInstalacao` (#2795).
+  const geracao = globalThis.__geracaoDoAppDoGoogle ?? 0;
   let valor: LinhaDoApp | null = null;
   try {
     const { data, error } = await createAdminClient()
       .from("platform_google_oauth")
       .select("client_id, client_secret_encrypted")
       .eq("id", 1)
+      // Fora da deduplicação de `fetch` do Next dentro de um render: sem o `signal`,
+      // uma 2ª leitura do MESMO render, feita depois de uma escrita ter invalidado o
+      // memo, recebe a resposta de ANTES dela e a memoiza. O porquê inteiro está em
+      // `lerLinha` de `lib/branding/instalacao.ts` (#1218). Nunca é abortado.
+      .abortSignal(new AbortController().signal)
       .maybeSingle();
     // Clone que ainda não aplicou a 0201 devolve 42P01 aqui. Isso NÃO é erro
     // desta instalação — é o piso de rollback funcionando, e o `.env` assume.
@@ -145,7 +207,11 @@ async function linhaDoBanco(): Promise<LinhaDoApp | null> {
       error: err instanceof Error ? err.message : String(err),
     });
   }
-  globalThis.__memoDoAppDoGoogle = { valor, expiraEm: Date.now() + TTL_MS };
+  // Só memoiza quem não perdeu uma escrita no meio do caminho — a leitura em
+  // voo devolve o valor velho a quem a chamou, mas não o reinstala no memo.
+  if ((globalThis.__geracaoDoAppDoGoogle ?? 0) === geracao) {
+    globalThis.__memoDoAppDoGoogle = { valor, expiraEm: Date.now() + TTL_MS };
+  }
   return valor;
 }
 
@@ -163,7 +229,7 @@ async function linhaDoBanco(): Promise<LinhaDoApp | null> {
  *
  * Nunca lança — ver o cabeçalho.
  */
-export async function configuracaoDoGoogle(): Promise<AppDoGoogleConfigurado | null> {
+export async function configuracaoDoGoogle(urlDaAplicacao?: string): Promise<AppDoGoogleConfigurado | null> {
   const linha = await linhaDoBanco();
   const clientId = texto(linha?.client_id);
   const cifrado = texto(linha?.client_secret_encrypted);
@@ -175,12 +241,12 @@ export async function configuracaoDoGoogle(): Promise<AppDoGoogleConfigurado | n
     // par que não existe em app OAuth nenhum, e o erro do Google apontaria para
     // o lugar errado. Cai inteiro para o ambiente.
     if (segredo) {
-      return { clientId, clientSecret: segredo, redirectUri: enderecoDeRetorno() };
+      return { clientId, clientSecret: segredo, redirectUri: enderecoDeRetorno(urlDaAplicacao) };
     }
     logger.warn("[agenda.google.config] segredo do banco não decifrou; vale o .env inteiro");
   }
 
-  return configuracaoDoAmbiente();
+  return configuracaoDoAmbiente(urlDaAplicacao);
 }
 
 /** Conectar o Google está disponível nesta instalação? */

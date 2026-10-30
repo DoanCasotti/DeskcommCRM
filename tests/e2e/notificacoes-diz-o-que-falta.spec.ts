@@ -3,12 +3,12 @@
  *
  * ## Por que este é o estado que importa
  *
- * Nenhuma instalação nasce com o par VAPID. O `.env.hostgator.example` grava as
- * duas linhas VAZIAS, e gerar o par é um passo que ninguém é obrigado a dar.
- * Ou seja: **este spec roda no estado em que 100% das instalações começam**, e
- * é o estado da doutrina de QA Visual — "teste com os envs opcionais AUSENTES,
- * é o estado real de um primeiro deploy, e é onde moram os piores bugs de
- * primeira impressão".
+ * Pelo kit, o install e a atualização geram o par VAPID sozinhos
+ * (`completar_par_vapid`, em hostgator-setup-kit/_common.sh). Instalação montada
+ * FORA do kit — como o CI, ou um compose escrito à mão — nasce sem o par, e é
+ * esse o estado deste spec: o mesmo de uma VPS cujo kit não conseguiu gerar o
+ * par. É o estado da doutrina de QA Visual — "teste com os envs opcionais
+ * AUSENTES, é onde moram os piores bugs de primeira impressão".
  *
  * Não é preciso configurar nada para chegar nele: o `.env.e2e` do CI não define
  * `VAPID_PUBLIC_KEY` nem `VAPID_PRIVATE_KEY`. Se alguém as acrescentar lá, o
@@ -45,10 +45,10 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page } from "./helpers/test";
 
 const CREDS_PATH = path.join(process.cwd(), ".e2e-creds.json");
-const EVIDENCIA = path.join(process.cwd(), ".superpowers/evidence/notificacoes-sem-chaves");
+const EVIDENCIA = path.join(process.cwd(), "evidence/notificacoes-sem-chaves");
 
 interface Creds {
   password: string;
@@ -84,7 +84,7 @@ async function login(page: Page, email: string, senha: string): Promise<void> {
   await page.goto("/login");
   await page.locator("#email").fill(email);
   await page.locator("#password").fill(senha);
-  await page.getByRole("button", { name: /entrar/i }).click();
+  await page.getByRole("button", { name: "Entrar", exact: true }).click();
   await page.waitForURL(/\/app/, { timeout: 60_000 });
 }
 

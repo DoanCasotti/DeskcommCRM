@@ -1,5 +1,6 @@
 "use server";
 
+import { ipDoCliente } from "@/lib/http/ip-do-cliente";
 import { supportWriteError } from "@/lib/impersonate/support";
 import { headers } from "next/headers";
 import { revalidatePath } from "next/cache";
@@ -7,7 +8,7 @@ import { z } from "zod";
 
 import { audit } from "@/lib/audit";
 import { loadAuthUser, mfaEmDivida, resolveActiveOrg } from "@/lib/auth/server";
-import { ROLE_RANK } from "@/lib/auth/types";
+import { podeAdministrarEmpresa } from "@/lib/auth/pode-administrar-empresa";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { encryptWebhookSecret } from "@/lib/webhooks/secrets";
 
@@ -58,10 +59,9 @@ export type UpdateAdPlatformConnectionResult =
 
 const entradaSchema = z.object({
   /**
-   * Só `meta_ads` hoje. `google_ads` fica FORA do enum de propósito: aceitar o
-   * cadastro de uma plataforma sem transporte deixaria o operador colar um token
-   * e esperar conversões que nunca sairiam — e o livro-razão diria
-   * `plataforma_sem_transporte` sem que ele tivesse como entender por quê.
+   * Só `meta_ads`. `google_ads` fica FORA do enum porque a credencial dele não
+   * é colada: chega pelo OAuth, e o cadastro de para onde reportar mora em
+   * `updateGoogleAdsConnection.ts`.
    */
   platform: z.literal("meta_ads"),
   dataset_id: z.string().trim().min(5).max(64).regex(/^\d+$/, "só dígitos"),
@@ -95,7 +95,7 @@ export async function updateAdPlatformConnection(
   if (supportWriteError(authUser.support)) return { ok: false, error: "forbidden_role" };
   const activeOrg = await resolveActiveOrg(authUser);
   if (!activeOrg) return { ok: false, error: "forbidden_tenant" };
-  if (!authUser.is_platform_admin && ROLE_RANK[activeOrg.role] < ROLE_RANK.admin) {
+  if (!podeAdministrarEmpresa(authUser, activeOrg)) {
     return { ok: false, error: "forbidden_role" };
   }
   // Depois do papel, pelo mesmo motivo de `updateMarcaDaOrganizacao.ts`: quem
@@ -138,7 +138,7 @@ export async function updateAdPlatformConnection(
     resourceType: "ad_platform_connections",
     resourceId: null,
     requestId: hdrs.get("x-request-id") ?? undefined,
-    ip: hdrs.get("x-forwarded-for")?.split(",")[0]?.trim() ?? undefined,
+    ip: ipDoCliente(hdrs) ?? undefined,
     userAgent: hdrs.get("user-agent") ?? undefined,
     metadata: {
       platform: parsed.data.platform,

@@ -43,6 +43,23 @@ export const IDIOMAS_DA_DEFINICAO: { codigo: string; rotulo: string }[] = [
   { codigo: "en_GB", rotulo: "Inglês (Reino Unido)" },
 ];
 
+/**
+ * O idioma com que um modelo NOVO nasce: o da organização (`pt-BR` → `pt_BR`,
+ * `es-PY` → `es`). Fora da lista, ou sem organização, o padrão do produto.
+ * Nascia `es` em toda instalação — herança da tela do parceiro —, e um modelo
+ * brasileiro enviado como espanhol é reprovado ou chega ao cliente errado.
+ */
+export function idiomaInicialDaDefinicao(locale: string | null | undefined): string {
+  const codigo = (locale ?? "").trim().replace("-", "_");
+  const codigos = IDIOMAS_DA_DEFINICAO.map((i) => i.codigo);
+  const base = codigo.split("_")[0]!.toLowerCase();
+  return (
+    codigos.find((c) => c.toLowerCase() === codigo.toLowerCase()) ??
+    codigos.find((c) => c === base) ??
+    "pt_BR"
+  );
+}
+
 /** Limites da plataforma. Passar deles é recusa, e o contador evita descobrir tarde. */
 export const LIMITE_CORPO = 1024;
 export const LIMITE_RODAPE = 60;
@@ -67,12 +84,16 @@ const str = (v: unknown): string | null =>
   typeof v === "string" && v.length > 0 ? v : null;
 
 export interface ConteudoDaDefinicao {
-  header: { formato: string; texto: string | null } | null;
+  /** `midiaUrl`: o link de exemplo do cabeçalho de mídia (`header_handle`), quando há. */
+  header: { formato: string; texto: string | null; midiaUrl?: string | null } | null;
   body: string | null;
   footer: string | null;
-  botoes: { tipo: string; texto: string }[];
+  /** `url`/`telefone` só nos botões desses tipos — a edição precisa deles de volta. */
+  botoes: { tipo: string; texto: string; url?: string; telefone?: string }[];
   /** Quantos `{{n}}` o corpo declara — o que o envio vai precisar preencher. */
   variaveis: number;
+  /** As amostras de cada `{{n}}` que a revisão recebeu (`example.body_text[0]`). */
+  exemplos?: string[];
 }
 
 /**
@@ -98,12 +119,17 @@ export function lerConteudo(components: unknown): ConteudoDaDefinicao {
     const tipo = (str(c.type) ?? "").toUpperCase();
 
     if (tipo === "HEADER") {
+      const handle = obj(c.example)?.header_handle;
       vazio.header = {
         formato: (str(c.format) ?? "TEXT").toUpperCase(),
         texto: str(c.text),
+        midiaUrl: Array.isArray(handle) ? str(handle[0]) : null,
       };
     } else if (tipo === "BODY") {
       vazio.body = str(c.text);
+      const amostras = obj(c.example)?.body_text;
+      const primeira = Array.isArray(amostras) && Array.isArray(amostras[0]) ? amostras[0] : [];
+      vazio.exemplos = primeira.map((v: unknown) => (typeof v === "string" ? v : ""));
     } else if (tipo === "FOOTER") {
       vazio.footer = str(c.text);
     } else if (tipo === "BUTTONS") {
@@ -114,6 +140,8 @@ export function lerConteudo(components: unknown): ConteudoDaDefinicao {
         vazio.botoes.push({
           tipo: (str(o.type) ?? "").toUpperCase(),
           texto: str(o.text) ?? "",
+          ...(str(o.url) ? { url: str(o.url)! } : {}),
+          ...(str(o.phone_number) ? { telefone: str(o.phone_number)! } : {}),
         });
       }
     }
@@ -205,4 +233,35 @@ export function montarComponents(input: {
   if (botoes.length > 0) components.push({ type: "BUTTONS", buttons: botoes });
 
   return components;
+}
+
+/**
+ * O conteúdo de uma definição EXISTENTE, na forma do formulário — é o que deixa
+ * editar partindo do texto aprovado, em vez de redigitar tudo. O caminho de volta
+ * é `montarComponents`, e os dois juntos fecham a ida e volta (ver o teste).
+ */
+export function paraFormulario(c: ConteudoDaDefinicao): {
+  cabecalho: string;
+  midiaUrl: string;
+  corpo: string;
+  rodape: string;
+  exemplos: string[];
+  botoes: BotaoDaDefinicao[];
+} {
+  const tipos: Record<string, TipoDeBotao> = { QUICK_REPLY: "quick_reply", URL: "url", PHONE_NUMBER: "phone_number" };
+  return {
+    cabecalho: c.header?.formato === "TEXT" ? (c.header.texto ?? "") : "",
+    midiaUrl: c.header && c.header.formato !== "TEXT" ? (c.header.midiaUrl ?? "") : "",
+    corpo: c.body ?? "",
+    rodape: c.footer ?? "",
+    exemplos: c.exemplos ?? [],
+    botoes: c.botoes
+      .filter((b) => tipos[b.tipo])
+      .map((b) => ({
+        tipo: tipos[b.tipo]!,
+        texto: b.texto,
+        ...(b.url ? { url: b.url } : {}),
+        ...(b.telefone ? { telefone: b.telefone } : {}),
+      })),
+  };
 }

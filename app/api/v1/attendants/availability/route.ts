@@ -6,6 +6,16 @@
  * carga). Retorna UMA linha por membro agent+ da org (LEFT JOIN availability),
  * com nome/carga — o painel de gestão (G5-04) consome só este endpoint.
  *
+ * LEITOR DECLARADO DA PRESENÇA (issue #996): `present` + `last_heartbeat_at`
+ * entram no roster para o painel da Equipe mostrar quem tem a tela aberta agora.
+ * É presença DERIVADA (`estaPresente`, prazo em lib/atendimento/presenca.ts) e
+ * ela NÃO entra na elegibilidade nem no plantão: `is_available` continua sendo
+ * só a decisão, e a jornada continua decidindo o resto (`estaDePlantao`).
+ *
+ * O SETOR de cada atendente (`sector_id`, migration 0801) vem junto: a tabela
+ * da Equipe agrupa e filtra por ele, e uma segunda chamada por linha seria o
+ * N+1 que o roster existe para evitar. `null` = sem setor.
+ *
  * Por que service role + filtro manual de org (doutrina): a RLS de
  * user_organizations restringe manager a ver só a PRÓPRIA linha (só admin vê o
  * roster inteiro), então listar a equipe pelo client user-scoped devolveria 1
@@ -15,8 +25,10 @@
  */
 import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
+import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { ok, fail } from "@/lib/api/wrappers";
+import { estaPresente } from "@/lib/atendimento/presenca";
 import { isServiceRoleConfigured } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { carregarRosterDeAtendimento } from "@/lib/escalacao/atendentes";
@@ -26,19 +38,35 @@ import { createClient } from "@/lib/supabase/server";
 export const dynamic = "force-dynamic";
 
 const SELECT_COLS =
-  "user_id, is_available, capacity, schedule, last_heartbeat_at, updated_at";
+  "user_id, is_available, capacity, schedule, updated_at, last_heartbeat_at";
 
 interface AvailabilityRow {
   user_id: string;
   is_available: boolean;
   capacity: number;
   schedule: unknown;
-  last_heartbeat_at: string | null;
   updated_at: string | null;
+  last_heartbeat_at: string | null;
+}
+
+/** user_id → sector_id da org. Org filtrada à mão: o admin client ignora RLS. */
+async function setoresPorAtendente(
+  client: Pick<SupabaseClient, "from">,
+  organizationId: string,
+): Promise<Map<string, string>> {
+  const { data, error } = await client
+    .from("attendant_sector_members")
+    .select("user_id, sector_id")
+    .eq("organization_id", organizationId);
+  if (error) throw new Error(error.message);
+  return new Map(
+    ((data ?? []) as Array<{ user_id: string; sector_id: string }>).map((m) => [m.user_id, m.sector_id]),
+  );
 }
 
 export async function GET(_req: NextRequest): Promise<Response> {
   const requestId = randomUUID();
+  const agora = new Date();
 
   const authz = await requireRole("agent", { requestId, resource: "attendant_availability" });
   if (!authz.ok) return authz.response;
@@ -54,8 +82,26 @@ export async function GET(_req: NextRequest): Promise<Response> {
       .eq("organization_id", activeOrg.orgId);
     if (error) return fail("internal_error", error.message, 500, { requestId });
     const rows = (data ?? []) as AvailabilityRow[];
+    let setores: Map<string, string>;
+    try {
+      setores = await setoresPorAtendente(supabase, activeOrg.orgId);
+    } catch (err) {
+      return fail("internal_error", err instanceof Error ? err.message : "setores", 500, { requestId });
+    }
     return ok(
-      rows.map((r) => ({ ...r, role: null, name: null, email: null, current_load: 0 })),
+      rows.map((r) => ({
+        ...r,
+        role: null,
+        name: null,
+        email: null,
+        current_load: 0,
+        sector_id: setores.get(r.user_id) ?? null,
+        // Presença DERIVADA aqui, e não no cliente: o prazo do sinal mora em
+        // `lib/atendimento/presenca.ts`, e uma tela que recalculasse a conta
+        // sozinha passaria a discordar do servidor no dia em que o prazo
+        // mudasse — a doença que o #720 curou entre a tela e o roteador.
+        present: estaPresente(r.last_heartbeat_at, agora),
+      })),
       { requestId },
     );
   }
@@ -66,8 +112,12 @@ export async function GET(_req: NextRequest): Promise<Response> {
   // do agente ("quem pode assumir agora?") lê exatamente a mesma coisa. Enquanto
   // a regra morou aqui dentro, o agente escalava para uma fila cega.
   let roster;
+  let setores: Map<string, string>;
   try {
-    roster = await carregarRosterDeAtendimento(admin, activeOrg.orgId);
+    [roster, setores] = await Promise.all([
+      carregarRosterDeAtendimento(admin, activeOrg.orgId, agora),
+      setoresPorAtendente(admin, activeOrg.orgId),
+    ]);
   } catch (err) {
     return fail("internal_error", err instanceof Error ? err.message : "roster", 500, {
       requestId,
@@ -98,9 +148,14 @@ export async function GET(_req: NextRequest): Promise<Response> {
     is_available: m.disponivel,
     capacity: m.capacidade,
     schedule: m.agenda,
-    last_heartbeat_at: m.ultimoSinalDeVida,
     updated_at: m.atualizadoEm,
     current_load: m.cargaAtual,
+    sector_id: setores.get(m.userId) ?? null,
+    // Presença: "tem sinal recente" — nunca "está de plantão". Os dois campos
+    // andam juntos de propósito, para a tela poder dizer as duas coisas sem
+    // confundi-las (o selo de Status lê o plantão; a linha de presença lê isto).
+    last_heartbeat_at: m.ultimoSinalEm,
+    present: m.presente,
   }));
 
   return ok(rows, { requestId });

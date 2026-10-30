@@ -34,8 +34,12 @@ export function useRemarcarAgendamento() {
   const t = useT();
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (entrada: { id: string; revision?:number; starts_at: string; guest_email?: string }) =>
-      apiClient.patch<{ data: { id: string } }>("/api/v1/agenda/agendamentos", entrada),
+    mutationFn: async (entrada: {
+      id: string;
+      revision?: number;
+      starts_at: string;
+      guest_email?: string;
+    }) => apiClient.patch<{ data: { id: string } }>("/api/v1/agenda/agendamentos", entrada),
     onSuccess: () => {
       toast.success(t("Agendamento remarcado."));
       void qc.invalidateQueries({ queryKey: ["agenda"] });
@@ -50,7 +54,7 @@ export function useCancelarAgendamento() {
   return useMutation({
     // O `reason` é obrigatório na rota (mínimo 3 caracteres) e não é burocracia:
     // é o que a equipe lê ao ver o horário vago. A tela pede antes de chamar.
-    mutationFn: async (entrada: { id: string; revision?:number; reason: string }) =>
+    mutationFn: async (entrada: { id: string; revision?: number; reason: string }) =>
       apiClient.delete<{ data: { id: string } }>("/api/v1/agenda/agendamentos", entrada),
     onSuccess: () => {
       toast.success(t("Agendamento cancelado."));
@@ -90,13 +94,18 @@ export function useRegistrarDesfecho() {
   const t = useT();
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (entrada: { id: string; revision?:number; status: "completed" | "no_show" }) =>
-      apiClient.patch<{ data: { id: string } }>("/api/v1/agenda/agendamentos", entrada),
+    mutationFn: async (entrada: {
+      id: string;
+      revision?: number;
+      status: "confirmed" | "completed" | "no_show";
+    }) => apiClient.patch<{ data: { id: string } }>("/api/v1/agenda/agendamentos", entrada),
     onSuccess: (_dados, entrada) => {
       toast.success(
-        entrada.status === "completed"
-          ? t("Marcado como realizado.")
-          : t("Marcado como falta — o horário volta a ficar livre."),
+        entrada.status === "confirmed"
+          ? t("Horário confirmado.")
+          : entrada.status === "completed"
+            ? t("Marcado como realizado.")
+            : t("Marcado como falta — o horário volta a ficar livre."),
       );
       void qc.invalidateQueries({ queryKey: ["agenda"] });
     },

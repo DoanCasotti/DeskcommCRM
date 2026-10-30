@@ -8,6 +8,11 @@
  *  2. a resposta da RENOVAÇÃO não repete o `refresh_token` — quem substitui o
  *     objeto inteiro apaga o que acabou de renovar;
  *  3. `expires_in` é relativo; persistido cru, dá um token que nunca vence.
+ *
+ * E uma quarta, que não mata conexão nenhuma: tranca quem tem a agenda num
+ * e-mail diferente do login do CRM. Sem `select_account`, o `login_hint` deixa
+ * de sugerir e passa a impor — o Google autoriza a conta que já estava logada
+ * no navegador, sem mostrar o seletor (issue #929).
  */
 import { describe, expect, it } from "vitest";
 
@@ -15,6 +20,7 @@ import {
   ESCOPOS_OBRIGATORIOS,
   FOLGA_DE_RENOVACAO_MS,
   type TokenDoGoogle,
+  clientSecretTemFormato,
   escoposFaltando,
   fundirTokens,
   lerRespostaDeToken,
@@ -40,9 +46,31 @@ describe("montarUrlDeConsentimento", () => {
   it("pede acesso offline COM consentimento forçado — é o que garante refresh_token", () => {
     // Sem `offline` não vem refresh_token nenhum; sem `consent` ele some na
     // segunda conexão, e a integração morre uma hora depois.
-    const url = new URL(montarUrlDeConsentimento(APP, { state: "abc" }));
+    const bruto = montarUrlDeConsentimento(APP, { state: "abc" });
+    const url = new URL(bruto);
     expect(url.searchParams.get("access_type")).toBe("offline");
-    expect(url.searchParams.get("prompt")).toBe("consent");
+    // `prompt` é um CONJUNTO para o Google, não um valor: pinar a lista inteira
+    // impede que tirar um dos dois passe despercebido (ver o cabeçalho).
+    expect(url.searchParams.get("prompt")?.split(" ").sort()).toEqual(["consent", "select_account"]);
+    // Os asserts acima leem por `searchParams.get()`, que DECODIFICA antes de
+    // comparar — um espaço mal codificado no fio chegaria aqui já consertado, e
+    // nenhum gate veria. Este prende a forma que SAI: `URLSearchParams` serializa
+    // o espaço como `+`, e o endpoint de autorização do Google lê a query como
+    // form-urlencoded, onde `+` é espaço.
+    expect(bruto).toMatch(/[?&]prompt=consent(\+|%20)select_account(&|$)/);
+  });
+
+  it("deixa escolher OUTRA conta — a agenda pode estar num e-mail diferente do login do CRM", () => {
+    // Issue #929: quem entra no CRM com um e-mail e tem a agenda em outro chega
+    // na tela do Google e autoriza, sem seletor, a conta que já estava logada no
+    // navegador — e a agenda errada volta para o CRM.
+    const url = new URL(montarUrlDeConsentimento(APP, { state: "abc", contaSugerida: "ana@clinica.com.br" }));
+    const pedidos = url.searchParams.get("prompt")?.split(" ") ?? [];
+
+    expect(pedidos).toContain("select_account");
+    // E a sugestão continua de pé — o que provamos é que ela SAI no pedido; como o
+    // Google a desenha dentro do seletor é dele, e ninguém daqui observou.
+    expect(url.searchParams.get("login_hint")).toBe("ana@clinica.com.br");
   });
 
   it("pede exatamente os dois escopos, e nenhum de perfil", () => {
@@ -238,5 +266,28 @@ describe("precisaRenovar", () => {
     const vence = new Date("2026-08-26T13:00:00.000Z");
     expect(precisaRenovar(vence, new Date("2026-08-26T12:50:00.000Z"), 15 * 60_000)).toBe(true);
     expect(precisaRenovar(vence, new Date("2026-08-26T12:50:00.000Z"), 60_000)).toBe(false);
+  });
+});
+
+describe("clientSecretTemFormato", () => {
+  it("aceita um secret do Google — com e sem o prefixo GOCSPX-", () => {
+    // 35 chars, o formato de hoje.
+    expect(clientSecretTemFormato("GOCSPX-abcdEFGH1234_ijklMNOP5678-qrs")).toBe(true);
+    // Secret antigo (pré-GOCSPX): a cerca é no conjunto de caracteres, não no
+    // prefixo — travar no prefixo recusaria uma instalação legítima e antiga.
+    expect(clientSecretTemFormato("aB3_xZ9-kL0mN1pQ2rS4tU6v")).toBe(true);
+    // Aparado antes: espaço nas pontas de uma colagem não deve condenar.
+    expect(clientSecretTemFormato("  GOCSPX-limpo_mesmo-123  ")).toBe(true);
+  });
+
+  it("⭐ recusa a colagem do JSON de credenciais — o defeito medido em produção", () => {
+    // O que o dono colou: o secret JUNTO com o resto da linha do arquivo JSON.
+    // A aspa e a vírgula é que o Google rejeitava lá na frente como
+    // `invalid_client`, longe da tela que causou o erro.
+    expect(clientSecretTemFormato('GOCSPX-abcdEFGH1234_ijklMNOP5678-qrs","redirect_uris')).toBe(false);
+    // As três marcas da colagem errada, isoladas.
+    expect(clientSecretTemFormato('GOCSPX-tem"aspa')).toBe(false);
+    expect(clientSecretTemFormato("GOCSPX-tem,virgula")).toBe(false);
+    expect(clientSecretTemFormato("GOCSPX-tem espaco")).toBe(false);
   });
 });

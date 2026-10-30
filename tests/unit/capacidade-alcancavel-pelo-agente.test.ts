@@ -72,8 +72,14 @@ const INALCANCAVEIS_CONHECIDAS: ReadonlyArray<string> = [];
 const ESCRITA_QUE_E_TRABALHO_DE_ATENDENTE: ReadonlyArray<string> = [
   // `app/api/v1/leads/` — POST exige `agent`. Um atendente cria negócio pela tela.
   "crm_create_lead",
+  // `app/api/v1/leads/[id]/retomar/` — POST exige `agent` (issue #1538).
+  "crm_retomar_lead",
   // `app/api/v1/leads/[id]/` — PATCH exige `agent`.
   "crm_update_lead",
+  // #3316 — `app/api/v1/leads/[id]/field-proposals/[pid]/` — POST exige `agent`:
+  // anotar o que o documento diz é trabalho de quem atende; quem MUDA O CARD
+  // (aceita e grava) continua sendo a mesma mão, na mesma tela.
+  "crm_propose_lead_fields_from_document",
   // `app/api/v1/leads/[id]/move/` — exige `agent`. Mover card é o trabalho do dia.
   "crm_move_lead_stage",
   // `app/api/v1/messages/` — exige `agent`. Responder cliente é o trabalho do dia.
@@ -109,6 +115,18 @@ const ESCRITA_QUE_E_TRABALHO_DE_ATENDENTE: ReadonlyArray<string> = [
   // `app/api/v1/conversation-tags` é leitura `viewer`; marcar conversa é trabalho
   // de atendente e o dano máximo é um filtro sujo, reversível na tela.
   "crm_manage_tags",
+  // `lib/mcp/tools/propostas.ts` — exige `agent`, de propósito. Rascunhar
+  // proposta é o mesmo tipo de escrita de `crm_create_lead`: cria um registro
+  // que uma PESSOA sempre revisa antes de qualquer efeito externo (nunca
+  // envia — só o manager envia). O dano máximo é um rascunho a mais para
+  // descartar.
+  "crm_draft_proposal",
+  // `app/api/v1/conversations/[id]/drafts/` — POST exige `agent` (auth-dual).
+  // Paridade medida com a própria rota: quem integra e quem atende criam
+  // rascunho com o MESMO papel. O poder concedido é o MENOR possível — a tool
+  // grava uma linha que uma PESSOA precisa revisar e enviar (`consumed_at` só
+  // depois do clique); ela não envia nada ao cliente, então não muda a casa.
+  "crm_create_conversation_draft",
 ];
 
 function alcancavelPeloAgente(requiresRole: Role): boolean {

@@ -23,6 +23,14 @@
 #      e o fallback de "nenhuma tag conhecida + fetch falhou") — casos 8 e 9
 #      isolam cada uma, provado por sabotagem cirúrgica de cada linha.
 set -uo pipefail
+# Isolamento do git: um GIT_DIR herdado (suíte rodada de dentro de um hook ou de um
+# `rebase --exec`) manda por cima de todo `cd`/`git -C` dos repositórios descartáveis
+# abaixo, e init/commit/config caem no repositório de quem roda — foi uma escrita de
+# `user.*` assim que assinou como "Pessoa <alguem@fork.dev>" 829 commits da main a
+# partir de 10/09/2026. Zera o ambiente local do git (o idioma do próprio git) e dá a
+# identidade por ambiente: nenhum teste aqui mede o autor.
+unset $(git rev-parse --local-env-vars)
+export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t.t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t.t
 
 # O namespace das imagens publicadas, lido da FONTE (hostgator-setup-kit/_common.sh)
 # em vez de repetido aqui. Este arquivo tinha o literal em 29 lugares — fixtures e
@@ -57,6 +65,7 @@ trap 'rm -rf "$WORK"' EXIT
 # git de verdade, resolvido ANTES de $WORK/bin entrar no PATH (senão o shim
 # abaixo se acharia a si mesmo e recursaria pra sempre).
 REAL_GIT="$(command -v git)"
+REAL_UNAME="$(command -v uname)"
 
 FAILS=0
 check() {  # check <descrição> <comando de verificação...>
@@ -68,6 +77,7 @@ mkdir -p "$WORK/bin"
 cat > "$WORK/bin/docker" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$DOCKER_LOG"
+case " $* " in *" up -d --no-deps app worker "*) printf 'pull_policy=%s/%s\n' "${APP_PULL_POLICY:-}" "${WORKER_PULL_POLICY:-}" >> "$DOCKER_LOG" ;; esac
 case " $* " in
   # Healthcheck do update.sh: "docker compose ... exec -T app node -e ...".
   # O dublê responde o que o app RESPONDE DE VERDADE — capturado da instalação
@@ -83,6 +93,37 @@ case " $* " in
   # devolver algo: com PREV_IMAGE vazio o rollback nem seria tentado, e o teste
   # do agente passaria mesmo com o defeito de volta.
   *" images "*) printf 'sha256:deadbeef\n' ;;
+  # Caso 13: o aviso de manutenção de uma atualização anterior ficou de pé
+  # (AVISO_PRESO=1), e a imagem local é a mesma do registro (IMAGEM_EM_DIA=1) —
+  # a combinação que leva o update.sh à saída "nada a atualizar".
+  *" ps "*) [ "${AVISO_PRESO:-0}" = "1" ] && printf 'deskcomm-manutencao\n' ;;
+  *" image inspect "*) [ "${IMAGEM_EM_DIA:-0}" = "1" ] && printf 'x@sha256:aaa\n' ;;
+  *" imagetools inspect "*) [ "${IMAGEM_EM_DIA:-0}" = "1" ] && printf 'Digest: sha256:aaa\n' ;;
+  # Aplicação do baseline. Só com BASELINE_ROTEIRO no ambiente (caso 4c): cada
+  # chamada imprime a próxima passada do roteiro. Fora dele, sai limpa como antes.
+  *" -f /b.sql "*)
+    if [ -n "${BASELINE_ROTEIRO:-}" ]; then
+      n=$(( $(cat "$BASELINE_ROTEIRO/n" 2>/dev/null || echo 0) + 1 ))
+      printf '%s' "$n" > "$BASELINE_ROTEIRO/n"
+      [ -f "$BASELINE_ROTEIRO/passada.$n" ] && cat "$BASELINE_ROTEIRO/passada.$n"
+    fi ;;
+  # VPS cuja arquitetura não é a das imagens publicadas (issue 1060): o registro
+  # responde que não tem manifest para ela, então o `pull` não traz nada e o
+  # `up -d` seguinte morre junto. Só vale com ARQ_DIFERENTE=1 — o gatilho do
+  # caso 12; fora dele o dublê é tão transparente quanto sempre foi.
+  *" pull "*)
+    if [ "${ARQ_DIFERENTE:-0}" = "1" ] && [ ! -f "${DOCKER_BUILD_FEITO:-/nao-existe}" ]; then
+      printf 'no matching manifest for linux/arm64/v8 in the manifest list entries\n' >&2
+      exit 1
+    fi ;;
+  *" up "*)
+    if [ "${ARQ_DIFERENTE:-0}" = "1" ] && [ ! -f "${DOCKER_BUILD_FEITO:-/nao-existe}" ]; then
+      exit 1
+    fi ;;
+  # O build local é o que destrava os dois acima: a partir dele as imagens
+  # existem no disco e o `up` sobe, como numa VPS de verdade depois do build.
+  *" build "*)
+    [ -n "${DOCKER_BUILD_FEITO:-}" ] && : > "$DOCKER_BUILD_FEITO" ;;
 esac
 exit 0
 STUB
@@ -132,7 +173,18 @@ if [ "\${FORCE_UNSHALLOW_FAIL:-0}" = "1" ]; then
 fi
 exec "$REAL_GIT" "\$@"
 STUB
-chmod +x "$WORK/bin/docker" "$WORK/bin/crontab" "$WORK/bin/flock" "$WORK/bin/curl" "$WORK/bin/git"
+# `uname -m` responde x86_64. O `_common.sh` recusa, antes de qualquer trabalho,
+# todo `update.sh` que não roda em amd64 — e aqui quem está sob prova é o
+# update.sh, não o processador de quem roda a suíte. Sem o dublê, num Mac Apple
+# Silicon (`arm64`) o script saía na guarda antes de todos os casos (medido: 45
+# provas vermelhas). A recusa de ARM tem prova própria em
+# tests/shell/arquitetura-kit.test.sh; qualquer outro uso de `uname` vai ao real.
+cat > "$WORK/bin/uname" <<STUB
+#!/usr/bin/env bash
+[ "\$*" = "-m" ] && { printf 'x86_64\n'; exit 0; }
+exec "$REAL_UNAME" "\$@"
+STUB
+chmod +x "$WORK/bin/docker" "$WORK/bin/crontab" "$WORK/bin/flock" "$WORK/bin/curl" "$WORK/bin/git" "$WORK/bin/uname"
 export DOCKER_LOG="$WORK/docker.log" CURL_LOG="$WORK/curl.log"
 export FAKE_CRONTAB="$WORK/crontab.txt"
 export PATH="$WORK/bin:$PATH"
@@ -140,8 +192,16 @@ export PATH="$WORK/bin:$PATH"
 # ── Instalação de mentira: repo git + kit + .env ─────────────────────────────
 PROJ="$WORK/deskcommcrm"
 mkdir -p "$PROJ/hostgator-setup-kit" "$PROJ/supabase"
-cp "$REPO_ROOT/hostgator-setup-kit/_common.sh" "$REPO_ROOT/hostgator-setup-kit/update.sh" \
-   "$REPO_ROOT/hostgator-setup-kit/agent.sh" "$PROJ/hostgator-setup-kit/"
+cp "$REPO_ROOT/hostgator-setup-kit/_common.sh" "$REPO_ROOT/hostgator-setup-kit/_manifestos.sh" "$REPO_ROOT/hostgator-setup-kit/_i18n.sh" \
+   "$REPO_ROOT/hostgator-setup-kit/update.sh" \
+   "$REPO_ROOT/hostgator-setup-kit/agent.sh" "$REPO_ROOT/hostgator-setup-kit/manutencao.sh" \
+   "$PROJ/hostgator-setup-kit/"
+# O aviso de manutencao entra no fixture porque o `update.sh` o carrega com
+# `source` DURO, como faz com o `_common.sh`. Deixa-lo de fora nao da um vermelho
+# que fale de manutencao: da 22 casos vermelhos espalhados, todos dizendo "a
+# atualizacao nao explicou nada" — porque o script morre na linha 21, antes de
+# qualquer mensagem. Foi exatamente o que aconteceu ao escrever isto.
+cp -R "$REPO_ROOT/hostgator-setup-kit/manutencao" "$PROJ/hostgator-setup-kit/"
 # backup.sh de mentira: deixa um rastro. É o marco "o script já começou a
 # mexer" — a guarda de retrocesso só vale se abortar ANTES dele.
 BACKUP_MARK="$WORK/backup-rodou"
@@ -151,6 +211,10 @@ touch "$BACKUP_MARK"
 STUB
 # shellcheck disable=SC2016  # o ${APP_IMAGE} é literal DENTRO do compose
 printf 'services:\n  app:\n    image: \${APP_IMAGE:-x}\n' > "$PROJ/docker-compose.prod.yml"
+# O overlay de build local existe no repo de verdade e o caminho de recuperação
+# do caso 12 o referencia por nome: sem ele aqui, o caso acusaria um arquivo que
+# existe na máquina do cliente.
+printf 'services:\n  app:\n    pull_policy: never\n    build:\n      context: .\n' > "$PROJ/docker-compose.build.yml"
 printf 'select 1;\n' > "$PROJ/supabase/baseline.sql"
 cat > "$PROJ/.env" <<ENV
 APP_IMAGE=${NS}/deskcommcrm:latest
@@ -163,8 +227,12 @@ ENV
 chmod 600 "$PROJ/.env"
 
 cd "$PROJ" || exit 1
+# Como no repositório de verdade (`.gitignore`: `.env*`): o .env não é
+# versionado. Versionado, toda escrita do kit nele antes do checkout (o par
+# VAPID nasce antes da decisão de versão) virava "alteração local" e a
+# atualização recusava — um defeito do fixture, não do produto.
+printf '.env*\n' > .gitignore
 git init --quiet
-git config user.email t@t.t; git config user.name t
 git add -A
 git commit --quiet -m "v0.9.0"
 git tag v0.9.0
@@ -174,8 +242,13 @@ echo topo > topo.txt; git add -A; git commit --quiet -m "topo da main"
 OUTFILE="$WORK/saida.txt"
 run_update() {  # run_update <args...> → saída em $OUTFILE, status em $RC
   rm -f "$BACKUP_MARK"
-  bash hostgator-setup-kit/update.sh "$@" > "$OUTFILE" 2>&1
-  RC=$?
+  # `|| RC=$?` em vez de `RC=$?` na linha seguinte: o caso 10 carrega o
+  # _common.sh do kit, que traz `set -e` junto com as funções. Sem este guarda,
+  # um caminho que o teste ESPERA que falhe (o "antes" da issue 1060) derrubava
+  # o harness no meio do caso — a suíte saía 1 sem imprimir QUAL prova falhou,
+  # que é justamente o silêncio que este arquivo existe para caçar.
+  RC=0
+  bash hostgator-setup-kit/update.sh "$@" > "$OUTFILE" 2>&1 || RC=$?
 }
 
 echo "── 1. Alvo anterior ao instalado é recusado antes do backup"
@@ -193,8 +266,16 @@ check "mesmo recusando, deixou o agente da tela instalado (com cd no diretório 
   grep -q "cd ${PROJ} && bash hostgator-setup-kit/agent.sh" "$FAKE_CRONTAB"
 
 echo "── 3. --force é a saída explícita de quem quer mesmo voltar"
+: > "$DOCKER_LOG"
 run_update --to v0.9.0 --force
 check "passou da guarda e rodou o backup" test -f "$BACKUP_MARK"
+# O pré-voo de PLATAFORMA (`preflight_plataforma_atualizacao`) é só do ARM64:
+# no AMD64 toda imagem publicada tem amd64. O preflight geral da #1955
+# (`preflight_atualizacao`) consulta o buildx em toda arquitetura, de propósito
+# e com motivo nomeado — por isso a régua aqui é a RECUSA do pré-voo ARM, não
+# o `imagetools` no log do docker. Se o AMD64 voltar a passar por ele, este
+# dublê (sem registro) faz o pré-voo recusar, e a mensagem aparece na saída.
+check "em AMD64 a atualização não passa pelo pré-voo de plataforma do ARM64" bash -c "! grep -q 'não está completa para' '$OUTFILE'"
 
 echo "── 4. Atualização de verdade grava a imagem no .env, sem duplicar a chave"
 # Estado de quem sofreu um rollback antes: o agente deixou a imagem apontando
@@ -246,6 +327,105 @@ check "o scheduler herda a política da tag imutável" \
 check "nenhuma das chaves novas duplicou" \
   test "$(grep -cE '^(WORKER|SCHEDULER)_(IMAGE|PULL_POLICY)=' .env)" -eq 4
 
+echo "── 4c. Deadlock com o app no ar: o banco é aplicado de novo antes do ✓"
+# Medido numa VPS real na v1.27.3: com o app atendendo, o `create policy` logo
+# depois de um `drop policy` perdeu um deadlock, o script avisou e seguiu, e a
+# tabela ficou sem a policy de leitura. A função tem a própria suíte
+# (baseline-reaplica-apos-disputa.test.sh); este caso prova que o update.sh
+# passa por ela e que a tela diz a verdade nos dois desfechos.
+ROTEIRO_UG="$WORK/roteiro-baseline"
+DEADLOCK_UG='psql:/b.sql:16766: ERROR:  deadlock detected'
+mkdir -p "$ROTEIRO_UG"
+printf '%s\n' "$DEADLOCK_UG" > "$ROTEIRO_UG/passada.1"
+: > "$DOCKER_LOG"
+BASELINE_ROTEIRO="$ROTEIRO_UG" BASELINE_ESPERA_S=0 run_update --to v1.1.0 --force
+check "a atualização termina com sucesso" test "$RC" -eq 0
+check "o update.sh aplicou o baseline duas vezes" test "$(grep -c -- '-f /b.sql' "$DOCKER_LOG")" -eq 2
+check "e diz ✓ banco atualizado" grep -q "✓ banco atualizado" "$OUTFILE"
+check "  contando que foi na 2ª passada (o ✓ depois de disputa não é mudo)" grep -q "✓ banco atualizado na passada 2" "$OUTFILE"
+# linha_de <texto fixo>: número da primeira linha da saída que contém o texto (0 se nenhuma).
+linha_de() { grep -nF -- "$1" "$OUTFILE" | head -1 | cut -d: -f1 | grep . || echo 0; }
+check "  e a linha que perdeu a disputa foi listada ANTES do ✓" \
+  test "$(linha_de 'psql:/b.sql:16766: ERROR:  deadlock detected')" -gt 0 -a \
+       "$(linha_de 'psql:/b.sql:16766: ERROR:  deadlock detected')" -lt "$(linha_de '✓ banco atualizado na passada 2')"
+check "  sem o aviso de banco" test -z "$(grep 'NÃO são os esperados' "$OUTFILE" || true)"
+check "  e o fim diz Atualização concluída" grep -q "✓ Atualização concluída" "$OUTFILE"
+# Com --force na mesma tag ninguém conferiu a imagem: a frase antiga ("o app está
+# rodando uma imagem antiga") mentia justo para quem seguiu a dica de repetir.
+check "--force na mesma tag diz que está refazendo, sem inventar imagem antiga" grep -q "Refazendo a versão v1.1.0" "$OUTFILE"
+check "  (a frase da imagem antiga não aparece)" test -z "$(grep 'imagem antiga' "$OUTFILE" || true)"
+
+rm -rf "$ROTEIRO_UG"; mkdir -p "$ROTEIRO_UG"
+for n in 1 2 3; do printf '%s\n' "$DEADLOCK_UG" > "$ROTEIRO_UG/passada.$n"; done
+: > "$DOCKER_LOG"
+BASELINE_ROTEIRO="$ROTEIRO_UG" BASELINE_ESPERA_S=0 run_update --to v1.1.0 --force
+check "deadlock que não passa aplica 3 vezes e desiste" test "$(grep -c -- '-f /b.sql' "$DOCKER_LOG")" -eq 3
+check "  NÃO vira ✓ banco atualizado" test -z "$(grep '✓ banco atualizado' "$OUTFILE" || true)"
+check "  a tela mostra o deadlock" grep -q "deadlock detected" "$OUTFILE"
+# Sem --force, repetir o update.sh responderia "já está na versão mais recente"
+# e não tocaria no banco.
+check "  e ensina a repetir de um jeito que re-aplica" grep -qF "update.sh --to v1.1.0 --force" "$OUTFILE"
+# Na v1.27.3 de uma VPS real o aviso do passo 4 ficou soterrado pelo docker pull,
+# e a última frase da tela era "Atualização concluída".
+# O cabeçalho do bloco FINAL, e não a frase do passo 6: as duas diziam "banco NÃO
+# terminou limpo", e o check passava com o bloco final apagado (medido em sabotagem).
+check "  o FIM da tela repete que o banco NÃO terminou limpo" \
+  grep -q "Atenção: o banco NÃO terminou limpo nesta atualização" "$OUTFILE"
+check "  e não diz Atualização concluída" test -z "$(grep 'Atualização concluída' "$OUTFILE" || true)"
+check "  a dica aparece no passo do banco E no fim" test "$(grep -cF 'update.sh --to v1.1.0 --force' "$OUTFILE")" -eq 2
+# O backup não volta por cima do banco em uso (#2120): o aviso disso vem depois do
+# que se pode fazer, que é repetir.
+check "  no passo do banco, repetir vem ANTES do aviso sobre o backup" \
+  test "$(linha_de 'update.sh --to v1.1.0 --force')" -lt "$(linha_de 'O backup feito antes desta atualização NÃO volta')"
+check "  e a orientação é a ÚLTIMA coisa da saída, depois do passo 7" \
+  test -n "$(tail -n 8 "$OUTFILE" | grep -F 'update.sh --to v1.1.0 --force' || true)"
+
+# Lista grande (role sem dono: milhares de "must be owner") com a disputa no topo.
+# `printf | head -20` sob pipefail levava SIGPIPE e o set -e matava o update.sh
+# com 141 — antes do aviso de PERMISSÃO, que existe para este caso e agora o encerra.
+rm -rf "$ROTEIRO_UG"; mkdir -p "$ROTEIRO_UG"
+{ printf '%s\n' "$DEADLOCK_UG"; for i in $(seq 1 4000); do printf 'psql:/b.sql:%s: ERROR:  must be owner of table tabela_%s\n' "$i" "$i"; done; } > "$ROTEIRO_UG/passada.1"
+cp "$ROTEIRO_UG/passada.1" "$ROTEIRO_UG/passada.2"; cp "$ROTEIRO_UG/passada.1" "$ROTEIRO_UG/passada.3"
+: > "$DOCKER_LOG"
+BASELINE_ROTEIRO="$ROTEIRO_UG" BASELINE_ESPERA_S=0 run_update --to v1.1.0 --force
+check "lista de erros maior que o buffer do pipe não mata o update.sh (para com 1)" test "$RC" -eq 1
+check "  a disputa no topo foi reconhecida (3 passadas)" test "$(grep -c -- '-f /b.sql' "$DOCKER_LOG")" -eq 3
+check "  o aviso de PERMISSÃO chegou à tela" grep -q "erros de PERMISSÃO" "$OUTFILE"
+check "  e o fim diz que o banco NÃO terminou limpo" grep -q "banco NÃO terminou limpo" "$OUTFILE"
+# Lista misturada: repetir cura a parte da disputa e NÃO cura a de permissão. As
+# duas metades são ditas — escolher uma escondia a ação possível da outra.
+check "  a metade que repetir cura é dita" grep -q "Parte não aplicou porque o banco seguiu ocupado" "$OUTFILE"
+check "  e a metade que repetir NÃO cura também" grep -q "esses repetir não cura" "$OUTFILE"
+check "  e o fim orienta a conexão do dono" test -n "$(tail -n 8 "$OUTFILE" | grep -F 'SUPABASE_DB_ADMIN_URL' || true)"
+
+# Só permissão, sem disputa nenhuma: uma passada, e o fim diz o que fazer.
+rm -rf "$ROTEIRO_UG"; mkdir -p "$ROTEIRO_UG"
+for i in $(seq 1 200); do printf 'psql:/b.sql:%s: ERROR:  must be owner of table tabela_%s\n' "$i" "$i"; done > "$ROTEIRO_UG/passada.1"
+: > "$DOCKER_LOG"
+BASELINE_ROTEIRO="$ROTEIRO_UG" BASELINE_ESPERA_S=0 run_update --to v1.1.0 --force
+check "só permissão: uma passada (repetir não cura)" test "$(grep -c -- '-f /b.sql' "$DOCKER_LOG")" -eq 1
+check "  sem a metade de banco ocupado (não houve disputa)" test -z "$(grep 'Parte não aplicou' "$OUTFILE" || true)"
+check "  e o FIM orienta a conexão do dono" test -n "$(tail -n 8 "$OUTFILE" | grep -F 'SUPABASE_DB_ADMIN_URL' || true)"
+check "  e PARA com 1, sem baixar a imagem nova" test "$RC" -eq 1
+check "  (nenhum pull depois do banco)" test -z "$(grep -E ' pull( |$)' "$DOCKER_LOG" || true)"
+
+# Erro que repetir não cura DEPOIS de um `drop policy` que o `create` não refez.
+# A parada por banco incompleto vem DEPOIS da conferência das regras: saindo
+# antes dela, o trap subia app, worker e scheduler sem a regra — tela vazia para
+# todo mundo. Com a ordem certa o CRM fica parado com o aviso vermelho.
+printf 'drop policy if exists "leitura" on public.leads;\ncreate policy "leitura" on public.leads using (true);\n' > "$PROJ/supabase/baseline.sql"
+rm -rf "$ROTEIRO_UG"; mkdir -p "$ROTEIRO_UG"
+printf 'psql:/b.sql:2: ERROR:  column "organization_id" does not exist\n' > "$ROTEIRO_UG/passada.1"
+: > "$DOCKER_LOG"
+BASELINE_ROTEIRO="$ROTEIRO_UG" BASELINE_ESPERA_S=0 run_update --to v1.1.0 --force
+check "regra derrubada + erro não curável: o baseline aplicado tinha a regra (controle)" \
+  grep -q 'create policy "leitura" on public.leads' "$PROJ/supabase/baseline.sql"
+check "  para com 1" test "$RC" -eq 1
+check "  a conferência das regras rodou e acusou a ausente" grep -q "REGRAS DE ISOLAMENTO AUSENTES" "$OUTFILE"
+check "  e o CRM NÃO subiu depois do banco" \
+  test -z "$(awk '/-f \/b.sql/ {b=1} b && / up -d/' "$DOCKER_LOG")"
+git -C "$PROJ" checkout --quiet -- supabase/baseline.sql
+
 # ── Clone RASO: a topologia que o install.sh realmente entrega ───────────────
 # `install.sh` instala com `git clone --depth 1`. Num repositório raso o
 # `merge-base --is-ancestor` responde "não é ancestral" para QUALQUER coisa
@@ -260,7 +440,7 @@ mkdir -p "$SRC/supabase"; printf 'select 1;\n' > "$SRC/supabase/baseline.sql"
 printf 'services:\n  app:\n    image: \${APP_IMAGE:-x}\n' > "$SRC/docker-compose.prod.yml"
 printf '.env\n' > "$SRC/.gitignore"
 cd "$SRC" || exit 1
-git init --quiet; git config user.email t@t.t; git config user.name t
+git init --quiet
 git add -A; git commit --quiet -m "release antiga"; git tag v0.9.0
 echo topo > topo.txt; git add -A; git commit --quiet -m "main, depois da release"
 
@@ -481,6 +661,266 @@ R="$( printf "APP_IMAGE=${NS}/deskcommcrm:1.3.0\n" > "$PIN_DIR/.env"
       cd "$PIN_DIR" && PATH="$PIN_DIR/bin:$PATH" DUBLE_VERSION="<no value>" bash -c \
         ". '$KIT_DIR_TESTE/_common.sh'; completar_pin_ausente .env" 2>/dev/null || true )"
 check "imagem sem label de versão → não inventa pin" test -z "$R"
+
+# ── 11. Conserto que vive numa função do kit vale JÁ NA PRIMEIRA passada ─────
+# O `update.sh` carrega `_common.sh` na linha 16, ANTES do `git checkout` da tag
+# nova. Sem reler o arquivo depois do checkout, o resto da atualização roda com
+# as funções da versão ANTIGA — e um conserto que more numa função do kit só
+# chega na atualização SEGUINTE. Medido em produção com o conserto do segredo no
+# crontab (GHSA-vm36-w42w-rr5v): a linha antiga, com o segredo escrito nela,
+# continuava no crontab depois de atualizar para a versão que a conserta.
+#
+# A instalação deste caso parte do kit ANTIGO — que é a situação de quem já
+# instalou — e a tag de destino tem o kit NOVO. Uma passada só.
+echo "── 11. Conserto em função do kit vale já na primeira passada"
+CASO11="$WORK/caso11"
+cp -R "$PROJ" "$CASO11"
+cd "$CASO11" || exit 1
+NOVO_COMMON="$WORK/common-novo.sh"
+cp hostgator-setup-kit/_common.sh "$NOVO_COMMON"
+# Kit ANTIGO: a linha do cron carrega o segredo, como antes do conserto.
+python3 - "$CASO11/hostgator-setup-kit/_common.sh" <<'PATCH'
+import sys
+p = sys.argv[1]
+s = open(p, encoding="utf-8").read()
+nova = 'local cron_line="* * * * * curl -fsS -H @\\"${cabecalho}\\" \\"${url_drain}\\" >/dev/null 2>&1 ${marcador}"'
+velha = 'local cron_line="* * * * * curl -fsS -H \\"Authorization: Bearer ${secret}\\" \\"${url_drain}\\" >/dev/null 2>&1 ${marcador}"'
+assert s.count(nova) == 1, "a linha nova do cron mudou de forma: %d ocorrência(s)" % s.count(nova)
+s = s.replace(nova, velha)
+# O kit de ANTES do conserto não gravava arquivo de cabeçalho nenhum — tirar só a
+# linha do cron deixaria o fixture mais moderno que a realidade, e a sabotagem
+# deste caso nem alcançaria a prova da permissão 600.
+grava = '''  local cabecalho="${PROJECT_DIR:-$PWD}/.env.cron-drain"
+  gravar_cabecalho_do_cron "$cabecalho" "$secret" \\
+    || { c_ylw "$(t "⚠ não consegui gravar {1} — não ativei o cron das automações." "$cabecalho")"; return 0; }
+'''
+assert s.count(grava) == 1, "o bloco que grava o cabeçalho mudou de forma: %d" % s.count(grava)
+s = s.replace(grava, "")
+open(p, "w", encoding="utf-8").write(s)
+PATCH
+git add -A; git commit --quiet -m "kit antigo (linha do cron com o segredo)"
+# Tag de destino: kit NOVO.
+cp "$NOVO_COMMON" hostgator-setup-kit/_common.sh
+git add -A; git commit --quiet -m "kit novo (linha do cron aponta para o arquivo)"
+git tag v9.9.9
+git checkout --quiet HEAD~1   # a instalação está no kit ANTIGO
+: > "$FAKE_CRONTAB"
+rm -f "$CASO11/.env.cron-drain"
+bash hostgator-setup-kit/update.sh --to v9.9.9 --skip-backup > "$WORK/saida11.txt" 2>&1
+check "a linha do cron aponta para o arquivo de cabeçalho (conserto aplicado nesta passada)" \
+  grep -q -- "-H @" "$FAKE_CRONTAB"
+check "  e o segredo NÃO está escrito na linha do cron" \
+  bash -c '! grep -q "Authorization: Bearer" "$FAKE_CRONTAB"'
+# `stat -c` (GNU) PRIMEIRO e `stat -f` (BSD) como reserva, nesta ordem: no Linux,
+# `stat -f %Lp` NÃO falha — ele responde sobre o SISTEMA DE ARQUIVOS e sai 0 —,
+# então a ordem inversa nunca chega à reserva e a prova reprova no CI dizendo que
+# a permissão está errada quando ela está certa. Medido: reprovou 1 prova no
+# `verify` do #1115, só esta.
+modo_do_arquivo() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1" 2>/dev/null; }
+check "  o arquivo de cabeçalho nasceu com permissão 600" \
+  test "$(modo_do_arquivo "$CASO11/.env.cron-drain")" = "600"
+cd "$PROJ" || exit 1
+
+echo "── 12. VPS de outra arquitetura: atualizar se recupera sozinho (issue 1060)"
+# O defeito: o registro responde "no matching manifest for linux/arm64/v8", o
+# `pull` não traz imagem nenhuma e o `up -d` morre junto. Medido no Compose,
+# worker, scheduler e voz — que TÊM `build:` ao lado do `image:` — são
+# reconstruídos sozinhos em qualquer falha de pull; o `app` fica SEM `build:`
+# de propósito (#1060), e é a falta da imagem dele que faz o `up -d` falhar e
+# entrega a decisão à guarda, que é quem julga quando o registro não responde.
+# Antes da guarda o script terminava como se tivesse dado certo: o CRM ficava
+# na versão velha e o dono não era avisado. Pelo botão "Atualizar" nem isso,
+# porque o agente roda sozinho no cron. O desfecho certo é construir aqui a
+# MESMA versão alvo e dizer, em português, o que aconteceu.
+cd "$PROJ" || exit 1
+export DOCKER_BUILD_FEITO="$WORK/build-feito"
+rm -f "$DOCKER_BUILD_FEITO"
+# Instalado numa versão anterior à alvo: sem isto a guarda de retrocesso
+# recusaria antes de chegar ao `up -d`.
+sed -i.bak "s|^APP_IMAGE=.*|APP_IMAGE=${NS}/deskcommcrm:0.9.0|" .env && rm -f .env.bak
+: > "$DOCKER_LOG"
+export ARQ_DIFERENTE=1
+run_update --to v1.1.0
+unset ARQ_DIFERENTE
+check "termina com sucesso, sem intervenção manual" test "$RC" -eq 0
+check "o pull falhou de verdade no meio do caminho" \
+  grep -q "no matching manifest for linux/arm64/v8" "$OUTFILE"
+check "caiu para o build local do overlay de build" \
+  grep -q -- "-f docker-compose.build.yml build" "$DOCKER_LOG"
+check "subiu pelo override (pull_policy: never), sem voltar ao registro" \
+  grep -q -- "-f docker-compose.build.yml up -d" "$DOCKER_LOG"
+check "explica em português o que aconteceu" grep -q "não servem para esta VPS" "$OUTFILE"
+# O que sobra na tela do site é o rabo da saída (agent.sh: tail -40). Explicação
+# que fica só lá em cima não chega a quem clicou em "Atualizar".
+fim_tem() { tail -40 "$OUTFILE" | grep -q "$1"; }
+check "e diz no FIM, que é o que o agente manda para a tela" \
+  fim_tem "construídas aqui nesta VPS"
+
+# O caminho feliz NÃO muda de comportamento: imagem disponível, nada de build
+# local e nenhuma menção a arquitetura.
+sed -i.bak "s|^APP_IMAGE=.*|APP_IMAGE=${NS}/deskcommcrm:0.9.0|" .env && rm -f .env.bak
+: > "$DOCKER_LOG"
+run_update --to v1.1.0
+check "caminho feliz: conclui normalmente" test "$RC" -eq 0
+check "caminho feliz: não constrói nada aqui (não paga o build à toa)" \
+  bash -c "! grep -q 'docker-compose.build.yml' '$DOCKER_LOG'"
+check "caminho feliz: a saída não fala em arquitetura nem em construção local" \
+  bash -c "! grep -qiE 'arquitetura|construídas aqui nesta VPS' '$OUTFILE'"
+
+# O passo 9 do install.sh tinha o MESMO buraco do `up -d` sem guarda, e a saída
+# dele também. A recuperação é a MESMA função de _common.sh, exercitada acima de
+# ponta a ponta pelo update.sh; aqui se prova que o install.sh a chama — e logo
+# depois do `up -d` que pode falhar, não em outro lugar qualquer.
+#
+# A janela do grep era -A1 e virou -A6 na #2631: o portão `build_local_permitido`
+# entrou EXATAMENTE entre o `if ! dc up -d; then` e a chamada da recuperação, e
+# -A1 passou a apontar para o portão. A intenção da prova não mudou (a
+# recuperação fica no bloco do `up -d`); o que se ganhou é a segunda metade da
+# mesma régua: o portão vem ANTES de construir. O comportamento dos dois lados
+# — portão aberto e portão fechado — é provado de ponta a ponta em
+# tests/shell/install-portao-do-build.test.sh.
+check "install.sh consulta o portão build_local_permitido no mesmo bloco do up -d, antes de chamar a recuperação" \
+  bash -c "b=\"\$(grep -A6 'if ! dc up -d; then' '$REPO_ROOT/hostgator-setup-kit/install.sh')\"; printf '%s\n' \"\$b\" | grep -q build_local_permitido && printf '%s\n' \"\$b\" | grep -q construir_aqui_e_subir"
+
+echo "── 12b. Worker, scheduler e voz com image: + build:; o app SEM build:, de propósito (#1060)"
+# A parte boa medida no Compose fica: com `image:` + `build:` no mesmo bloco,
+# o `up -d` CONSTRÓI em QUALQUER falha de pull (tag inexistente, registro fora
+# por DNS, "no matching manifest", com `pull_policy` `always`, `missing` ou sem
+# a chave) — é o escape do `up -d` à mão que as mensagens do próprio kit
+# ensinam (`docker compose ... up -d`), e o build de worker, scheduler e voz é
+# barato (`pnpm install` e `apk add`).
+# O `app` fica SEM `build:` de propósito, e é o outro lado da mesma régua: ele
+# é o único build pesado, e com `build:` aqui o Compose construiria o Next
+# sozinho em QUALQUER falha de pull — o portão `build_local_permitido` do
+# update.sh, que recusa construir com o registro fora, só é consultado quando o
+# `up -d` FALHA (#1955). Quem quer construir o app usa o
+# docker-compose.build.yml, que passa APP_VERSION como argumento (por este
+# `build:` ele sairia com `APP_VERSION=dev`).
+# Serviço `build:`-only continua proibido (invariante 1 da doutrina de
+# packaging) — por isso a prova exige as DUAS chaves nos serviços que constroem.
+# Sabotagem: pôr `build:` de volta no `app` em docker-compose.prod.yml reprova
+# o teste de unit (packaging-artefato-do-cliente) E esta prova.
+bloco_do_servico() { # <nome> → bloco (4 espaços) do serviço no compose de produção
+  awk -v alvo="  $1:" '
+    $0 == alvo { dentro = 1; next }
+    dentro && /^  [A-Za-z0-9_-]+:$/ { exit }
+    dentro { print }
+  ' "$REPO_ROOT/docker-compose.prod.yml"
+}
+# `grep -q` dentro de `set -o pipefail` é cilada (o grep fecha o pipe cedo e o
+# awk sai por SIGPIPE), então a leitura é feita linha a linha em bash: menos
+# processos e nenhum falso vermelho por causa do próprio instrumento. A régua
+# de valor não vazio é do teste de unit (packaging-artefato-do-cliente), que
+# parseia o YAML inteiro — aqui o que se prende é a PRESENÇA da chave.
+tem_chave() { # <bloco> <prefixo da linha> → 0 quando alguma linha começa com ele
+  local bloco="$1" pref="$2" linha
+  while IFS= read -r linha; do
+    case "$linha" in
+      "$pref"*) return 0 ;;
+    esac
+  done <<< "$bloco"
+  return 1
+}
+imagem_e_build_juntos() { # <serviço> → 0 quando image: e build: convivem no bloco
+  local bloco
+  bloco="$(bloco_do_servico "$1")"
+  [ -n "$bloco" ] || return 1
+  tem_chave "$bloco" "    image:" || return 1
+  tem_chave "$bloco" "    build:" || return 1
+  return 0
+}
+for svc in worker scheduler voice-agent; do
+  check "o serviço '$svc' declara image: e build: no mesmo bloco" \
+    imagem_e_build_juntos "$svc"
+done
+
+# O outro lado da régua, invertido: o `app` declara `image:` (nunca build-only)
+# e NÃO declara `build:` — de propósito. É a falta da imagem dele que faz o
+# `up -d` falhar e entrega a decisão ao portão do update.sh; com `build:` aqui o
+# Compose construiria o Next sozinho em QUALQUER falha de pull e o portão nunca
+# seria consultado.
+app_sem_build() {
+  local bloco
+  bloco="$(bloco_do_servico app)"
+  [ -n "$bloco" ] || return 1
+  tem_chave "$bloco" "    image:" || return 1
+  if tem_chave "$bloco" "    build:"; then
+    echo "o serviço 'app' ganhou build: no compose de produção"
+    return 1
+  fi
+  return 0
+}
+check "o serviço 'app' declara image: e NÃO declara build: (o portão depende do up -d falhar)" \
+  app_sem_build
+
+# O outro lado da régua: `build:` é só das NOSSAS imagens. Ganhar build num
+# binário de terceiro seria construir na VPS do cliente algo que ninguém aqui
+# mantém — waha, redis, srh, caddy, asterisk e wacalls são upstream e continuam
+# só puxados do registro.
+nenhum_build_upstream() {
+  local svc
+  for svc in waha redis srh caddy asterisk wacalls; do
+    if tem_chave "$(bloco_do_servico "$svc")" "    build:"; then
+      echo "serviço upstream ganhou build: $svc"
+      return 1
+    fi
+  done
+  return 0
+}
+check "nenhum serviço upstream ganhou build: (worker, scheduler e voz são as únicas com build:)" \
+  nenhum_build_upstream
+
+echo "── 13. \"Nada a atualizar\" derruba o aviso de manutenção preso (PR #1524)"
+# Medido numa VPS real: a atualização morreu depois de subir o aviso, com a tag
+# nova já no disco. Toda execução seguinte caía na saída antecipada e o aviso —
+# que segura o apelido de rede `app` — seguia respondendo 503 por 6h30.
+cd "$PROJ" || exit 1
+: > "$DOCKER_LOG"
+rm -f "$FAKE_CRONTAB"
+IMAGEM_EM_DIA=1 AVISO_PRESO=1 run_update --to v1.1.0
+check "sai com sucesso pela saída \"nada a atualizar\"" test "$RC" -eq 0
+check "  no-op ainda instala o cron do agente" grep -q "cd ${PROJ} && bash hostgator-setup-kit/agent.sh" "$FAKE_CRONTAB"
+check "  e a saída é mesmo a antecipada" grep -q "Nada a atualizar" "$OUTFILE"
+check "  não rodou o backup (não virou atualização)" test ! -f "$BACKUP_MARK"
+check "  removeu o contêiner do aviso" grep -q "rm -f deskcomm-manutencao" "$DOCKER_LOG"
+check "  e contou a quem opera" grep -q "aviso de manutenção preso" "$OUTFILE"
+check "  e ensina a concluir com --force" grep -q -- "--to v1.1.0 --force" "$OUTFILE"
+: > "$DOCKER_LOG"
+IMAGEM_EM_DIA=1 run_update --to v1.1.0
+check "sem aviso de pé: não mexe em contêiner nenhum" \
+  bash -c "! grep -q 'rm -f deskcomm-manutencao' '$DOCKER_LOG'"
+check "  e não fala de aviso preso" bash -c "! grep -q 'aviso de manutenção preso' '$OUTFILE'"
+
+echo "── 14. O par VAPID nasce também quando não há versão nova (ADR-0006, D6)"
+# A tela de Notificações manda rodar a atualização SEM --force. Quem já está na
+# última versão sai pela saída "nada a atualizar", e quem segue a main sai pela
+# recusa de versão anterior: nos dois o par tem de nascer, e o app e o worker
+# têm de subir de novo para lê-lo do .env.
+sem_vapid() { { grep -v 'VAPID_' .env || true; } > .env.sem && mv .env.sem .env; }
+tamanho_da_publica() { sed -n 's/^VAPID_PUBLIC_KEY=//p' .env | tail -1 | tr -d "\"'" | awk '{print length}'; }
+cd "$PROJ" || exit 1
+sem_vapid; : > "$DOCKER_LOG"
+IMAGEM_EM_DIA=1 run_update --to v1.1.0
+check "\"nada a atualizar\" sai com sucesso" test "$RC" -eq 0
+check "  e cria o par no .env" test "$(tamanho_da_publica)" = 87
+check "  e sobe de novo o app e o worker para lerem o par" grep -q "up -d --no-deps app worker" "$DOCKER_LOG"
+check "  sem baixar imagem nova (pull_policy never no app e no worker)" grep -qx "pull_policy=never/never" "$DOCKER_LOG"
+check "  sem virar atualização (não rodou o backup)" test ! -f "$BACKUP_MARK"
+cp .env .env.com-par; : > "$DOCKER_LOG"
+IMAGEM_EM_DIA=1 run_update --to v1.1.0
+check "2ª passada: o par segue o mesmo" cmp -s .env .env.com-par
+check "  e não reinicia nada à toa" bash -c "! grep -q 'up -d --no-deps app worker' '$DOCKER_LOG'"
+rm -f .env.com-par
+sem_vapid; : > "$DOCKER_LOG"
+run_update --to v0.9.0
+check "recusa de versão anterior (quem segue a main) também cria o par" test "$(tamanho_da_publica)" = 87
+check "  e sobe de novo o app e o worker" grep -q "up -d --no-deps app worker" "$DOCKER_LOG"
+check "  sem baixar imagem nova, mesmo seguindo a main" grep -qx "pull_policy=never/never" "$DOCKER_LOG"
+check "  e a recusa diz que as chaves foram a única mudança" grep -q "Não mexi em nada além das chaves dos avisos" "$OUTFILE"
+: > "$DOCKER_LOG"
+run_update --to v0.9.0
+check "recusa com o par já presente: não reinicia nada" bash -c "! grep -q 'up -d --no-deps app worker' '$DOCKER_LOG'"
+check "  e diz só 'Não mexi em nada', sem citar as chaves" bash -c "grep -q 'Não mexi em nada: nem no banco' '$OUTFILE' && ! grep -q 'além das chaves' '$OUTFILE'"
 
 if [ "$FAILS" -eq 0 ]; then echo "OK — todas as provas passaram."; else echo "FALHOU — $FAILS prova(s)."; fi
 exit $((FAILS > 0))

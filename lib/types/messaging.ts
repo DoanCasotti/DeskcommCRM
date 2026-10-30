@@ -26,6 +26,15 @@ export interface Conversation {
   assignee_kind: string | null;
   assigned_at: string | null;
   last_inbound_at: string | null;
+  /**
+   * A régua da Fila (migration 0267, issue #990): o instante da mensagem do
+   * cliente MAIS ANTIGA que ninguém respondeu ainda — `min(sent_at)` dos inbound
+   * posteriores a `last_outbound_at`. É o que ordena a aba Fila, o que a pílula
+   * "Aguardando há…" mostra (`esperaDaConversa`) e o que a posição das ferramentas
+   * de IA conta. Opcional cobrindo o intervalo entre o deploy deste código e a
+   * migration aplicada; `null` quando o cliente nunca escreveu.
+   */
+  awaiting_since?: string | null;
   last_outbound_at: string | null;
   last_message_at: string | null;
   last_message_preview: string | null;
@@ -49,9 +58,32 @@ export interface Conversation {
    */
   comando_da_conversa?: string | null;
   last_handoff_at: string | null;
+  /**
+   * Por que o automático está parado. Diferencia o handoff formal de uma pausa
+   * por resposta no celular (`comandoDaConversa` escolhe o motivo da tela).
+   */
+  last_handoff_reason?: string | null;
+  /**
+   * A conversa está marcada como EXEMPLO para o agente aprender (#3006) — o
+   * opt-in de LGPD (L-08) que a rota `POST .../usable-for-rag` liga e que o
+   * cron `kb-conversations-batch` consome.
+   *
+   * Opcional de propósito, como `comando_da_conversa`: uma resposta em cache de
+   * antes deste campo entrar no `SELECT_COLS` da lista não o tem. AUSENTE é
+   * "não afirmo que está marcada", nunca "não está" — e o selo da lista só
+   * aparece com `true`, porque afirmar o contrário seria pior.
+   */
+  usable_for_rag?: boolean;
   created_at: string;
   updated_at: string;
 }
+
+/**
+ * Espelha o CHECK `messages_sent_via_check` do banco. O alias exportado existe
+ * para o invariante banco×TypeScript ler a fonte real do vocabulário, sem criar
+ * uma terceira lista manual só para o teste.
+ */
+export type SentVia = "user" | "ai" | "system" | "external_device" | "automation" | "crm";
 
 export interface Message {
   id: string;
@@ -71,12 +103,26 @@ export interface Message {
   media_mime: string | null;
   media_size_bytes: number | null;
   media_storage_path: string | null;
+  /** Transcrição de mídia derivada (áudio→texto). Só disponível quando
+   * `media_derived_status === 'ready'`. A realimentação chega aqui vinda das
+   * colunas `messages.media_derived_text/status` (#2057). Elas já eram usadas
+   * pela IA; agora o balão da inbox também as lê para o atendente que não
+   * consegue ouvir. */
+  media_derived_text?: string | null;
+  media_derived_status?: string | null;
   // Espelha o CHECK do banco (messages_sent_via_check): 'crm', 'external_device',
   // 'automation', 'ai', 'user', 'system'. O tipo listava só três e o TypeScript
   // aceitava os demais só porque o dado vem do Supabase sem cast — a tela então
   // não conseguia nem NOMEAR o valor para exibi-lo (ver MessageBubble).
-  sent_via: "user" | "ai" | "system" | "external_device" | "automation" | "crm";
+  sent_via: SentVia;
   sent_by_user_id: string | null;
+  /**
+   * Quem DECIDIU o envio quando o que apertou foi um token (#1613, migration
+   * 0416) — a pessoa "em nome de" quem a integração mandou. `null` em todo
+   * envio direto, e ausente nas linhas anteriores à coluna. O balão lê este
+   * campo junto de `metadata.sent_on_behalf` para dizer "Fulano · via {token}".
+   */
+  sent_on_behalf_of_user_id?: string | null;
   sent_at: string;
   delivered_at: string | null;
   read_at: string | null;
@@ -92,6 +138,13 @@ export interface Message {
   /** A mensagem que esta responde (citação). `null` = envio solto. */
   reply_to_message_id: string | null;
   created_at: string;
+  /**
+   * Última escrita na linha (trigger `trg_messages_updated_at`). É o relógio do
+   * reenvio (`lib/messaging/reenvio.ts`): linha `queued` parada há muito pode
+   * ter perdido o processo que a enviava. Opcional porque linhas montadas fora
+   * do `MSG_COLS` (otimistas antigas, fixtures) não o trazem.
+   */
+  updated_at?: string;
 }
 
 /** Nota interna de conversa (Onda 5.2) — nunca vai ao cliente, tabela separada de messages. */
@@ -102,16 +155,34 @@ export interface Note {
   created_by_user_id: string | null;
   created_by_name: string | null;
   created_at: string;
+  /**
+   * O anexo da nota (#1863, F3), em `internal-media` — nunca no
+   * `whatsapp-media`, que é o bucket do canal do cliente. Os três nascem com
+   * `null` e continuam `null` em toda nota só de texto: um quarto de nota antiga
+   * não muda de forma, só ganha as colunas.
+   *
+   * O tipo de render não vem do banco: é derivado de `media_mime` por
+   * `kindFromMime` (o mesmo corte que aceitou o arquivo no upload).
+   */
+  media_storage_path: string | null;
+  media_mime: string | null;
+  media_size_bytes: number | null;
 }
 
 /**
- * Mapeia ack do WAHA (0..3) para o status canônico em messages.status.
- * 0=pending/sent server-side, 1=server-confirmed, 2=delivered (device), 3=read.
+ * Mapeia o ack do WAHA para o status de `messages.status` quando o aviso MUDA o
+ * status. Valores do WAHA: -1 erro, 0 pendente, 1 servidor, 2 aparelho
+ * (entregue), 3 lido, 4 ouvido.
+ *
+ * Devolve `null` para "não muda o status": 0 (pendente, ainda não é "enviada"),
+ * -1 (erro — quem trata é `handleAck`, que grava `failed`, nunca `sending`) e
+ * ausente. Não há mais um `"sending"` de reserva: um aviso que não sabe o que
+ * dizer não pode fazer a mensagem regredir.
  */
-export function ackToStatus(ack: number | null | undefined): Message["status"] {
-  if (ack == null) return "sent";
+export function ackToStatus(ack: number | null | undefined): Message["status"] | null {
+  if (ack == null) return null;
   if (ack >= 3) return "read";
   if (ack >= 2) return "delivered";
   if (ack >= 1) return "sent";
-  return "sending";
+  return null;
 }

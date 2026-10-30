@@ -29,6 +29,12 @@ export interface FunilEditavel {
   slug: string;
   position: number;
   is_default: boolean;
+  /**
+   * Onde nasce o lead de quem já é cliente (migration 0262). Opcional porque um
+   * chamador que só troca nome ou posição não precisa carregá-la, e porque a
+   * coluna é nova: um objeto montado antes dela continua compilando.
+   */
+  is_client_pipeline?: boolean;
   is_archived: boolean;
   /** Opcional porque NENHUMA regra daqui a usa — ela só existe para a tela. */
   description?: string | null;
@@ -96,6 +102,23 @@ export function validarNomeDeFunil(
 }
 
 /**
+ * O funil ATIVO que já ocupa o nome de `funilId` (#2559) — `null` quando o nome está livre.
+ *
+ * É a MESMA régua de `validarNomeDeFunil` (chave dobrada com `chaveDeNome`,
+ * arquivados de fora), saindo como NOME e não como `Resultado` porque quem
+ * chama é a rota que tira do arquivo: ela precisa do nome do outro funil para
+ * citá-lo no conselho, e para traduzir a frase — `traduzir` só casa a chave do
+ * dicionário quando o texto chega com o `{nome}` ainda por preencher.
+ */
+export function nomeOcupadoPorAtivo(funis: FunilEditavel[], funilId: string): string | null {
+  const funil = funis.find((f) => f.id === funilId);
+  if (!funil) return null;
+  const chave = chaveDeNome(funil.name);
+  const colisao = ativos(funis).find((f) => f.id !== funilId && chaveDeNome(f.name) === chave);
+  return colisao?.name ?? null;
+}
+
+/**
  * Recusa o arquivamento que deixaria a operação sem quadro ou quebraria uma entrada de lead.
  *
  * ⚠️ A ORDEM DAS RECUSAS É A ORDEM DO QUE O USUÁRIO CONSEGUE RESOLVER. Quem tem
@@ -127,6 +150,30 @@ export function validarArquivamento(
       erro:
         `«${funil.name}» é o funil padrão: é para ele que vai o negócio criado sem funil escolhido. ` +
         `Marque OUTRO funil como padrão antes de arquivar este.`,
+    };
+  }
+
+  // #2559 — A MARCA DE FUNIL DE CLIENTES NÃO VAI PRESA NO ARQUIVO.
+  //
+  // Arquivar gravava só `is_archived = true` e deixava `is_client_pipeline`
+  // no funil que sumia da lista. Enquanto isso, `lib/leads/nascimento-do-lead.ts`
+  // filtra `is_client_pipeline` junto de `is_archived = false`: o lead de cliente
+  // caía no padrão sem aviso, e ao TIRAR DO ARQUIVO a marca voltava sem ninguém
+  // ter escolhido — era a surpresa nº 2 da #2559. É o MESMO molde do funil
+  // padrão logo acima (`MarcaExclusiva` é um tipo só para as duas serem a mesma
+  // regra), e a ordem é a mesma: o que só resolve marcando OUTRO vem antes das
+  // dependências. A marca do outro tem de existir (ou ninguém decide nada), mas
+  // o índice `uniq_crm_pipelines_org_client` já garante que só um a carrega.
+  //
+  // ⚠️ O `{nome}` NOMEIA O FUNIL COMO CHAVE DE TRADUÇÃO, não como texto final:
+  // este módulo devolve PT e a rota `DELETE` faz `t(erro).replace("{nome}", …)`.
+  // Aqui dentro interpolar o nome deixaria a frase fora do dicionário.
+  if (funil.is_client_pipeline && !funis.some((f) => f.id !== funilId && f.is_client_pipeline)) {
+    return {
+      ok: false,
+      erro:
+        "«{nome}» é o funil de clientes: é para ele que vai o lead que já é cliente. " +
+        "Marque OUTRO funil como funil de clientes antes de arquivar este.",
     };
   }
 
@@ -178,41 +225,81 @@ export function podeExcluirDeVez(
   if (deps.negocios > 0) {
     const funil = funis.find((f) => f.id === funilId)!;
     const n = deps.negocios;
+    const um = n === 1;
+    const negocio = um ? "negócio" : "negócios";
+    const historico = um ? "dele" : "deles";
+    /**
+     * ⚠️ O CONSELHO MUDA CONFORME DE ONDE O CLIQUE VEIO (#979).
+     *
+     * "Arquive em vez de excluir" é a resposta certa para quem está com o funil
+     * na lista viva. Mas o "Excluir de vez" que leva aqui também mora na gaveta
+     * do arquivo — e para um funil que JÁ está arquivado aquilo é beco sem
+     * saída: manda arquivar algo que não está na lista, que é exatamente o
+     * estado sem saída da issue. A recusa em si NÃO muda (nega nos dois casos,
+     * nenhuma escrita sai); só o conselho aponta para a porta que existe
+     * dali — tirar do arquivo e resolver os negócios antes de excluir.
+     */
+    const conselho = funil.is_archived
+      ? `Ele já está no arquivo, então arquivar de novo não resolve: tire-o do arquivo e ` +
+        `resolva ${um ? "o negócio" : "os negócios"} antes de excluir.`
+      : `Arquive em vez de excluir — o funil sai da lista e nada se perde.`;
+
     return {
       ok: false,
       erro:
-        `«${funil.name}» tem ${n} ${n === 1 ? "negócio" : "negócios"}, e o histórico ${n === 1 ? "dele" : "deles"} ` +
-        `aponta para este funil. Arquive em vez de excluir — o funil sai da lista e nada se perde.`,
+        `«${funil.name}» tem ${n} ${negocio}, e o histórico ${historico} ` +
+        `aponta para este funil. ${conselho}`,
     };
   }
 
   return { ok: true };
 }
 
+/** As marcas exclusivas que um funil pode carregar — uma por organização, cada uma. */
+export type MarcaExclusiva = "is_default" | "is_client_pipeline";
+
 export interface UpdateDePadrao {
   pipelineId: string;
-  patch: { is_default: boolean };
+  patch: Partial<Record<MarcaExclusiva, boolean>>;
 }
 
 /**
- * A troca de funil padrão traduzida nos UPDATEs, NA ORDEM EM QUE PRECISAM SAIR.
+ * A troca de uma marca exclusiva de funil traduzida nos UPDATEs, NA ORDEM EM QUE
+ * PRECISAM SAIR.
  *
- * ⚠️ A LIBERAÇÃO DO ANTERIOR VEM PRIMEIRO, e não é estética:
- * `uniq_crm_pipelines_org_default` é imediato (não deferível), então marcar o novo
- * antes de liberar o antigo é um `23505` cru na cara de quem só queria trocar o
- * padrão. Mesmo desenho de `updatesDeMarcacao` para etapas.
+ * ⚠️ A LIBERAÇÃO DO ANTERIOR VEM PRIMEIRO, e não é estética: os dois índices
+ * (`uniq_crm_pipelines_org_default` e `uniq_crm_pipelines_org_client`) são
+ * imediatos (não deferíveis), então marcar o novo antes de liberar o antigo é um
+ * `23505` cru na cara de quem só queria trocar. Mesmo desenho de
+ * `updatesDeMarcacao` para etapas.
+ *
+ * ⚠️ O ANTERIOR É PROCURADO ENTRE TODOS OS FUNIS, ARQUIVADOS INCLUSIVE — e este
+ * parágrafo corrige uma afirmação que estava aqui e era falsa. O comentário
+ * anterior dizia que o índice de padrão é parcial em `is_archived`; medido em
+ * `supabase/baseline.sql`, ele é `where (is_default = true)` e mais nada. Quem
+ * pulava o arquivado deixava o banco com dois marcados para liberar um só, e o
+ * 23505 aparecia justamente na organização que arquivou o funil antigo em vez de
+ * trocar o padrão antes — o caminho mais comum de quem reorganiza o CRM.
  */
-export function updatesDePadrao(funis: FunilEditavel[], novoId: string): UpdateDePadrao[] {
+export function updatesDeMarcaExclusiva(
+  funis: FunilEditavel[],
+  novoId: string,
+  marca: MarcaExclusiva,
+): UpdateDePadrao[] {
   const novo = funis.find((f) => f.id === novoId);
-  if (!novo || novo.is_default) return [];
+  if (!novo || novo[marca]) return [];
 
   const updates: UpdateDePadrao[] = [];
-  // Arquivado não disputa: o índice único de padrão é parcial (`where is_archived = false`).
-  const anterior = ativos(funis).find((f) => f.id !== novoId && f.is_default);
-  if (anterior) updates.push({ pipelineId: anterior.id, patch: { is_default: false } });
+  const anterior = funis.find((f) => f.id !== novoId && f[marca]);
+  if (anterior) updates.push({ pipelineId: anterior.id, patch: { [marca]: false } });
 
-  updates.push({ pipelineId: novoId, patch: { is_default: true } });
+  updates.push({ pipelineId: novoId, patch: { [marca]: true } });
   return updates;
+}
+
+/** O nome que o resto do código já importa. Um caso de `updatesDeMarcaExclusiva`. */
+export function updatesDePadrao(funis: FunilEditavel[], novoId: string): UpdateDePadrao[] {
+  return updatesDeMarcaExclusiva(funis, novoId, "is_default");
 }
 
 /** Uma regra de automação como ela sai do banco — `actions` é jsonb cru. */

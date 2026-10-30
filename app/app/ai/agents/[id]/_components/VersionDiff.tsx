@@ -13,6 +13,7 @@ import * as React from "react";
 import { Badge } from "@/components/ui/badge";
 import { useT } from "@/hooks/i18n/useT";
 import type { AgentVersionRow } from "@/hooks/ai/useAgentVersions";
+import { callbacksHabilitados } from "@/lib/followup/callback-policy";
 
 interface Props {
   versionA: AgentVersionRow; // mais antiga / base
@@ -87,9 +88,11 @@ function buildFieldChanges(a: AgentVersionRow, b: AgentVersionRow): FieldChange[
     ["history_message_window", "history_message_window"],
     ["history_token_window", "history_token_window"],
     ["handoff_tool_enabled", "handoff_tool_enabled"],
+    ["handoff_legal_enabled", "handoff_legal_enabled"],
     ["cases_enabled", "cases_enabled"],
     ["split_messages", "split_messages"],
     ["split_max_chars", "split_max_chars"],
+    ["inbound_debounce_ms", "inbound_debounce_ms"],
     ["voz_enabled", "voz_enabled"],
     ["voz_quando", "voz_quando"],
   ];
@@ -108,6 +111,9 @@ export function VersionDiff({ versionA, versionB }: Props) {
   );
   const followupEnabledChanged =
     (versionA.followup?.enabled ?? false) !== (versionB.followup?.enabled ?? false);
+  const callbackEnabledA = callbacksHabilitados(versionA.followup);
+  const callbackEnabledB = callbacksHabilitados(versionB.followup);
+  const callbackEnabledChanged = callbackEnabledA !== callbackEnabledB;
   const fields = buildFieldChanges(versionA, versionB);
   const lines = diffLines(versionA.system_prompt ?? "", versionB.system_prompt ?? "");
 
@@ -168,7 +174,7 @@ export function VersionDiff({ versionA, versionB }: Props) {
       <Section title={t("Follow-up")}>
         {followupEnabledChanged ? (
           <p className="text-xs">
-            {t("Habilitado:")}{" "}
+            {t("Fluxos automáticos habilitados:")}{" "}
             <span className="font-mono text-destructive">
               {String(versionA.followup?.enabled ?? false)}
             </span>{" "}
@@ -178,9 +184,18 @@ export function VersionDiff({ versionA, versionB }: Props) {
             </span>
           </p>
         ) : null}
+        {callbackEnabledChanged ? (
+          <p className="text-xs">
+            {t("Retornos marcados pelo agente habilitados:")}{" "}
+            <span className="font-mono text-destructive">{String(callbackEnabledA)}</span>
+            {" → "}
+            <span className="font-mono text-emerald-600">{String(callbackEnabledB)}</span>
+          </p>
+        ) : null}
         <Pills label={t("Fluxos adicionados")} tone="add" items={followupFlows.added} />
         <Pills label={t("Fluxos removidos")} tone="del" items={followupFlows.removed} />
         {!followupEnabledChanged &&
+        !callbackEnabledChanged &&
         followupFlows.added.length === 0 &&
         followupFlows.removed.length === 0 ? (
           <p className="text-xs text-muted-foreground">{t("Sem mudanças.")}</p>

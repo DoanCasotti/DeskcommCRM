@@ -57,9 +57,9 @@ describe("tenantSchema", () => {
       locale: "pt-BR",
       currency: "BRL",
       media_retention_days: 90,
+      media_retention_enforced: true,
       dpo_email: "dpo@acme.com",
       privacy_policy_url: "https://acme.com/privacy",
-      lost_reasons_extra: ["Sem orçamento"],
     });
     expect(r.success).toBe(true);
   });
@@ -71,12 +71,11 @@ describe("tenantSchema", () => {
       timezone: "UTC",
       locale: "pt-BR",
       media_retention_days: 5,
-      lost_reasons_extra: [],
     });
     expect(r.success).toBe(false);
   });
 
-  it("defaults lost_reasons_extra to empty array", () => {
+  it("não conhece mais `lost_reasons_extra` — o campo saiu do produto", () => {
     const r = tenantSchema.safeParse({
       display_name: "Acme",
       legal_name: "Acme",
@@ -84,9 +83,13 @@ describe("tenantSchema", () => {
       locale: "pt-BR",
       currency: "BRL",
       media_retention_days: 90,
+      media_retention_enforced: true,
+      lost_reasons_extra: ["Sem orçamento"],
     });
     expect(r.success).toBe(true);
-    if (r.success) expect(r.data.lost_reasons_extra).toEqual([]);
+    // Zod ignora chave desconhecida; o que importa é ela NÃO sair do parse —
+    // é isso que impede a action de voltar a gravá-la sem ninguém notar.
+    if (r.success) expect("lost_reasons_extra" in r.data).toBe(false);
   });
 
   /**
@@ -128,6 +131,14 @@ describe("notificationPrefsSchema", () => {
 });
 
 describe("pipelineConfigPatchSchema", () => {
+  // A porta da comanda do ganho (#1477): o zod descarta chave desconhecida, então
+  // tirá-la do schema faria a caixa da tela gravar NADA, sem erro nenhum.
+  it("mantém `comanda_no_ganho` booleano e recusa qualquer outra forma", () => {
+    const r = pipelineConfigPatchSchema.safeParse({ comanda_no_ganho: true });
+    expect(r.success && r.data.comanda_no_ganho).toBe(true);
+    expect(pipelineConfigPatchSchema.safeParse({ comanda_no_ganho: "true" }).success).toBe(false);
+  });
+
   it("accepts partial vocabulary patch", () => {
     const r = pipelineConfigPatchSchema.safeParse({
       vocabulary: { lead: "Cliente", won: "Pago" },
@@ -148,5 +159,107 @@ describe("pipelineConfigPatchSchema", () => {
       lost_reasons: ["Concorrente", "Preço"],
     });
     expect(r.success).toBe(true);
+  });
+});
+
+describe("pipelineConfigPatchSchema — reabertura (#1538)", () => {
+  it("aceita os dois modos e a lista de campos copiáveis", () => {
+    for (const reabertura of ["mesmo_registro", "novo_negocio"]) {
+      expect(pipelineConfigPatchSchema.safeParse({ reabertura }).success).toBe(true);
+    }
+    expect(
+      pipelineConfigPatchSchema.safeParse({ reabertura_campos: ["tags", "value_cents"] }).success,
+    ).toBe(true);
+  });
+
+  it("recusa modo desconhecido e campo fora da lista", () => {
+    expect(pipelineConfigPatchSchema.safeParse({ reabertura: "NOVO_NEGOCIO" }).success).toBe(false);
+    expect(pipelineConfigPatchSchema.safeParse({ reabertura_campos: ["external_id"] }).success).toBe(
+      false,
+    );
+  });
+});
+
+describe("pipelineConfigPatchSchema — motivos de perda com categoria (#1537)", () => {
+  it("continua aceitando lost_reasons só de texto — nenhum funil migra dado", () => {
+    const r = pipelineConfigPatchSchema.safeParse({ lost_reasons: ["Preço", "Sem perfil"] });
+    expect(r.success).toBe(true);
+  });
+
+  it("aceita { label, categoria } junto de texto puro na mesma lista", () => {
+    const r = pipelineConfigPatchSchema.safeParse({
+      lost_reasons: ["Adiou", { label: "Não tinha o perfil", categoria: "Mérito" }],
+    });
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.lost_reasons?.[1]).toEqual({ label: "Não tinha o perfil", categoria: "Mérito" });
+  });
+
+  it("recusa rótulo vazio/longo e categoria fora do teto", () => {
+    expect(pipelineConfigPatchSchema.safeParse({ lost_reasons: [{ label: "" }] }).success).toBe(false);
+    expect(
+      pipelineConfigPatchSchema.safeParse({ lost_reasons: [{ label: "x".repeat(81) }] }).success,
+    ).toBe(false);
+    expect(
+      pipelineConfigPatchSchema.safeParse({ lost_reasons: [{ label: "ok", categoria: "" }] }).success,
+    ).toBe(false);
+    expect(
+      pipelineConfigPatchSchema.safeParse({ lost_reasons: [{ label: "ok", categoria: "x".repeat(41) }] })
+        .success,
+    ).toBe(false);
+  });
+
+  it("recusa objeto sem label e o teto de 50 motivos continua valendo", () => {
+    expect(pipelineConfigPatchSchema.safeParse({ lost_reasons: [{ categoria: "Cliente" }] }).success).toBe(
+      false,
+    );
+    expect(
+      pipelineConfigPatchSchema.safeParse({ lost_reasons: Array.from({ length: 51 }, (_, i) => `m${i}`) })
+        .success,
+    ).toBe(false);
+  });
+});
+
+describe("pipelineConfigPatchSchema — entrada do Inbox por funil (#3011)", () => {
+  const STAGE = "aaaaaaaa-1111-4111-8111-111111111111";
+
+  it("aceita a chave ligada com a etapa declarada — e é isso que o gravador persiste", () => {
+    const r = pipelineConfigPatchSchema.safeParse({
+      entrada_do_inbox: { ativa: true, stage_id: STAGE },
+    });
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.entrada_do_inbox).toEqual({ ativa: true, stage_id: STAGE });
+  });
+
+  it("aceita desligar sem perder a etapa escolhida", () => {
+    // A tela desliga a chave e religa depois: se desligar apagasse o
+    // `stage_id`, religar obrigaria a escolher a etapa de novo (e quem
+    // desligou achando que era temporário perderia a configuração).
+    const r = pipelineConfigPatchSchema.safeParse({ entrada_do_inbox: { ativa: false } });
+    expect(r.success).toBe(true);
+  });
+
+  it("recusa `ativa` que não é booleano — string vira chave ligada em qualquer leitura frouxa", () => {
+    expect(
+      pipelineConfigPatchSchema.safeParse({ entrada_do_inbox: { ativa: "true", stage_id: STAGE } })
+        .success,
+    ).toBe(false);
+    expect(
+      pipelineConfigPatchSchema.safeParse({ entrada_do_inbox: { stage_id: STAGE } }).success,
+    ).toBe(false);
+  });
+
+  it("recusa `stage_id` que não tem forma de identificador", () => {
+    // Forma não é existência: quem confere se a etapa é deste funil e está
+    // aberta é a consulta (`lib/leads/nascimento-do-lead.ts`). O que o schema
+    // recusa aqui é gravar lixo que só falharia no ingest, longe de quem salvou.
+    expect(
+      pipelineConfigPatchSchema.safeParse({ entrada_do_inbox: { ativa: true, stage_id: "1" } })
+        .success,
+    ).toBe(false);
+  });
+
+  it("não mexe em quem não tem a chave — ausente é o comportamento de hoje", () => {
+    const r = pipelineConfigPatchSchema.safeParse({ vocabulary: { lead: "Cliente" } });
+    expect(r.success && r.data.entrada_do_inbox).toBeUndefined();
   });
 });

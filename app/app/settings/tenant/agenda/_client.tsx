@@ -1,9 +1,16 @@
 "use client";
+import { TituloDaAgenda } from "@/components/agenda/TituloDaAgenda";
 import { AgendasConectadas } from "@/components/agenda/AgendasConectadas";
 import { PrazosDePresenca } from "@/components/agenda/PrazosDePresenca";
+import { AgendaDosColegas } from "@/components/agenda/AgendaDosColegas";
+import { MeetComAcessoAberto } from "@/components/agenda/MeetComAcessoAberto";
+import { ClientePelaAgenda } from "@/components/agenda/ClientePelaAgenda";
 import { DiasBloqueados } from "@/components/agenda/DiasBloqueados";
+import { ConfiguracaoDoServico } from "@/components/agenda/ConfiguracaoDoServico";
 
+import { useMoedaDaOrgAtiva } from "@/hooks/auth/AuthProvider";
 import { useT } from "@/hooks/i18n/useT";
+import { MOEDA_PADRAO, parseReaisToCents } from "@/lib/money";
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
@@ -12,9 +19,22 @@ import { toast } from "sonner";
 import { showApiError } from "@/components/feedback/ApiErrorToast";
 import { Button } from "@/components/ui/button";
 import { LOCAIS_DE_ATENDIMENTO } from "@/lib/agenda/locais";
+import {
+  TETO_DE_LEMBRETES_EXTRAS,
+  deMinutos,
+  desempacotarLembretes,
+  empacotarLembretes,
+  lerPassosDoFormulario,
+  minutosLivres,
+  paraMinutos,
+  type UnidadeDeAntecedencia,
+} from "@/lib/agenda/lembretes";
 import { apiClient } from "@/lib/api/client";
 
 export interface TipoRow {
+  service_enabled?: boolean;
+  booking_mode?: string;
+  service_capacity?: number | null;
   id: string;
   name: string;
   slug: string;
@@ -27,7 +47,12 @@ export interface TipoRow {
   requires_confirmation: boolean;
   is_active: boolean;
   reminder_enabled: boolean;
+  reminder_channel_session_id?: string | null;
   reminder_minutes_before: number;
+  reminder_extra_offsets_minutes: number[] | null;
+  reminder_body: string | null;
+  reminder_bodies: Record<string, string> | null;
+  default_price_cents: number | null;
 }
 
 /**
@@ -76,81 +101,306 @@ const VAZIO: Rascunho = {
 };
 
 /**
- * O LEMBRETE DO COMPROMISSO — o par de controles que faltava.
+ * O LEMBRETE DO COMPROMISSO — a lista que faltava.
  *
- * O cron `agenda-reminder` lê `reminder_enabled` e `reminder_minutes_before`
- * desde o `99c33257`, e nenhum dos dois estava em rota ou tela: ligar era
- * impossível, então a varredura devolvia zero linhas em toda instalação. Isto é
- * a outra metade do par (invariante 6 do Sistema Vivo: configuração tem
- * superfície).
- *
- * ─── Componente próprio, e não mais dois campos no formulário ─────────────
- *
- * "Quantos minutos antes" só faz sentido com o aviso LIGADO, e um campo ativo
- * ao lado de uma caixa desmarcada é o controle decorativo desta casa: quem
- * digita 60 ali conclui que agendou alguma coisa. Isso exige estado, o resto do
- * formulário de edição é não-controlado (`FormData`), e o formulário nasce e
- * morre com o `editandoId` — então o estado inicial é sempre o que veio do
- * servidor, sem `useEffect` de sincronização.
+ * O cron `agenda-reminder` lê `reminder_enabled` e os degraus desde o
+ * `99c33257`, e a tela só deixava UM texto compartilhado e no máximo um extra
+ * (mais dois escondidos numa caixa de vírgulas). Cada aviso agora é um cartão:
+ * antecedência + mensagem. Quantos o operador quiser (teto de segurança no
+ * CHECK, não na operação).
  *
  * ⚠️ **CAMPO DESABILITADO NÃO ENTRA NO `FormData`, e isso é o desenho.** Com o
- * aviso desligado o `PATCH` manda `reminder_enabled: false` e OMITE os minutos:
- * a antecedência guardada fica intacta para quando alguém religar, em vez de
- * ser sobrescrita por um valor que a tela não deixou ninguém escolher.
+ * aviso desligado o `PATCH` manda `reminder_enabled: false` e OMITE os degraus:
+ * a lista guardada fica intacta para quando alguém religar, em vez de ser
+ * sobrescrita por um valor que a tela não deixou ninguém escolher.
  */
-function LembreteDoCompromisso({ tipo }: { tipo: TipoRow }) {
+type CartaoDeLembrete = {
+  id: string;
+  quantidade: number;
+  unidade: UnidadeDeAntecedencia;
+  body: string;
+};
+
+export interface CanalParaLembrete {
+  id: string;
+  nome: string;
+}
+
+function LembreteDoCompromisso({
+  tipo,
+  canais,
+  erroCanais,
+}: {
+  tipo: TipoRow;
+  canais: CanalParaLembrete[];
+  erroCanais: string | null;
+}) {
   const t = useT();
   const [ligado, setLigado] = React.useState(tipo.reminder_enabled);
+  const [cartoes, setCartoes] = React.useState<CartaoDeLembrete[]>(() =>
+    desempacotarLembretes({
+      reminder_minutes_before: tipo.reminder_minutes_before,
+      reminder_extra_offsets_minutes: tipo.reminder_extra_offsets_minutes,
+      reminder_body: tipo.reminder_body,
+      reminder_bodies: tipo.reminder_bodies,
+    }).map((p, i) => {
+      const u = deMinutos(p.minutes);
+      return {
+        id: `r${i + 1}`,
+        quantidade: u.quantidade,
+        unidade: u.unidade,
+        body: p.body,
+      };
+    }),
+  );
+  // Semente = quantos cartões já nasceram. Passar o valor inicial não lê
+  // `.current` no render — é o que o lint recusa em `++seq.current` no
+  // inicializador do `useState`.
+  const seq = React.useRef(cartoes.length);
+
+  function minutosDe(c: CartaoDeLembrete) {
+    return paraMinutos(c.quantidade, c.unidade);
+  }
+
+  function atualizar(id: string, patch: Partial<CartaoDeLembrete>) {
+    setCartoes((cs) => cs.map((c) => (c.id === id ? { ...c, ...patch } : c)));
+  }
+
+  function mudarUnidade(id: string, unidade: UnidadeDeAntecedencia) {
+    setCartoes((cs) =>
+      cs.map((c) => {
+        if (c.id !== id) return c;
+        const minutos = minutosDe(c);
+        const quantidade =
+          unidade === "dias"
+            ? Math.max(1, Math.round(minutos / 1440))
+            : unidade === "horas"
+              ? Math.max(1, Math.round(minutos / 60))
+              : minutos;
+        return { ...c, unidade, quantidade };
+      }),
+    );
+  }
+
+  const teto = 1 + TETO_DE_LEMBRETES_EXTRAS;
+  const passos = cartoes.map((c) => ({ minutes: minutosDe(c), body: c.body }));
 
   return (
-    <>
-      <label className="flex items-center gap-2 text-xs text-text-muted sm:col-span-2">
+    <div className="grid gap-3 border-t border-border pt-3">
+      <label className="flex items-center gap-2 text-xs text-text-muted">
         <input
           type="checkbox"
           name="reminder_enabled"
           checked={ligado}
           data-testid={`editar-lembrete-${tipo.id}`}
           onChange={(e) => setLigado(e.target.checked)}
-          className="size-4 rounded-sm border-border accent-accent"
+          className="size-4 shrink-0 rounded-sm border-border accent-accent"
         />
         {t("Avisar o cliente antes do compromisso, pelo WhatsApp")}
       </label>
-      <label className="flex flex-col gap-1 text-xs text-text-muted">
-        {t("Quantos minutos antes")}
-        <input
-          name="reminder_minutes_before"
-          type="number"
-          // Os limites do `criarSchema` da rota, repetidos aqui para a recusa
-          // chegar no campo em vez de virar um toast vindo do servidor. Quem
-          // decide continua sendo a rota — a tela só evita a viagem.
-          min={15}
-          max={10080}
-          disabled={!ligado}
-          defaultValue={tipo.reminder_minutes_before}
-          data-testid={`editar-lembrete-minutos-${tipo.id}`}
-          className="rounded-md border border-border bg-surface-elevated p-2 text-sm text-text disabled:opacity-50"
-        />
+      <label className="grid gap-1 text-xs text-text-muted">
+        {t("Canal para enviar os lembretes")}
+        <select
+          name="reminder_channel_session_id"
+          disabled={!ligado || Boolean(erroCanais)}
+          defaultValue={tipo.reminder_channel_session_id ?? ""}
+          data-testid={`editar-lembrete-canal-${tipo.id}`}
+          className="rounded-md border border-border bg-surface p-2 text-sm text-text disabled:opacity-50"
+        >
+          <option value="">
+            {t("Automático — conversa da reserva ou único canal disponível")}
+          </option>
+          {tipo.reminder_channel_session_id &&
+          !canais.some((c) => c.id === tipo.reminder_channel_session_id) ? (
+            <option value={tipo.reminder_channel_session_id}>
+              {t("Canal configurado indisponível — escolha outro")}
+            </option>
+          ) : null}
+          {canais.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.nome}
+            </option>
+          ))}
+        </select>
+        <span>
+          {t(
+            "O canal escolhido vale para todas as reservas deste tipo, inclusive as criadas manualmente. Se ele não puder enviar, a equipe recebe um aviso; o sistema não troca de número sozinho.",
+          )}
+        </span>
+        {erroCanais ? (
+          <span role="alert">
+            {t(
+              "Não foi possível carregar os canais. A escolha guardada será preservada; tente novamente.",
+            )}
+          </span>
+        ) : null}
       </label>
-    </>
+      <input
+        type="hidden"
+        name="reminder_steps"
+        value={JSON.stringify(passos)}
+        disabled={!ligado}
+      />
+      <ul className="grid gap-3">
+        {cartoes.map((c, i) => {
+          const min = c.unidade === "dias" ? 1 : c.unidade === "horas" ? 1 : 15;
+          const max = c.unidade === "dias" ? 7 : c.unidade === "horas" ? 168 : 10080;
+          return (
+            <li
+              key={c.id}
+              className="grid gap-2 rounded-md border border-border bg-surface-elevated p-3"
+            >
+              <div className="flex flex-wrap items-end gap-2">
+                <label className="flex min-w-22 flex-col gap-1 text-xs text-text-muted">
+                  {t("Quanto antes")}
+                  <input
+                    type="number"
+                    min={min}
+                    max={max}
+                    disabled={!ligado}
+                    value={c.quantidade}
+                    onChange={(e) => atualizar(c.id, { quantidade: Number(e.target.value) })}
+                    data-testid={
+                      i === 0
+                        ? `editar-lembrete-minutos-${tipo.id}`
+                        : `editar-lembrete-minutos-${tipo.id}-${i}`
+                    }
+                    className="rounded-md border border-border bg-surface p-2 text-sm text-text disabled:opacity-50"
+                  />
+                </label>
+                <label className="flex min-w-28 flex-col gap-1 text-xs text-text-muted">
+                  <span className="sr-only">{t("Unidade")}</span>
+                  <select
+                    disabled={!ligado}
+                    value={c.unidade}
+                    onChange={(e) => mudarUnidade(c.id, e.target.value as UnidadeDeAntecedencia)}
+                    data-testid={
+                      i === 0
+                        ? `editar-lembrete-unidade-${tipo.id}`
+                        : `editar-lembrete-unidade-${tipo.id}-${i}`
+                    }
+                    className="rounded-md border border-border bg-surface p-2 text-sm text-text disabled:opacity-50"
+                  >
+                    <option value="minutos">{t("minutos")}</option>
+                    <option value="horas">{t("horas")}</option>
+                    <option value="dias">{t("dias")}</option>
+                  </select>
+                </label>
+                <span className="pb-2 text-xs text-text-muted">{t("antes")}</span>
+                {ligado && cartoes.length > 1 ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="ml-auto"
+                    data-testid={`editar-lembrete-remover-${tipo.id}-${i}`}
+                    onClick={() => setCartoes((cs) => cs.filter((x) => x.id !== c.id))}
+                  >
+                    {t("Remover")}
+                  </Button>
+                ) : null}
+              </div>
+              <label className="flex flex-col gap-1 text-xs text-text-muted">
+                {t("Mensagem deste lembrete")}
+                <textarea
+                  rows={3}
+                  maxLength={1000}
+                  disabled={!ligado}
+                  value={c.body}
+                  onChange={(e) => atualizar(c.id, { body: e.target.value })}
+                  placeholder={t(
+                    "Oi {{nome}}! Passando pra lembrar: {{titulo}}, {{dia}} às {{hora}}.",
+                  )}
+                  data-testid={
+                    i === 0
+                      ? `editar-lembrete-texto-${tipo.id}`
+                      : `editar-lembrete-texto-${tipo.id}-${i}`
+                  }
+                  className="rounded-md border border-border bg-surface p-2 text-sm text-text disabled:opacity-50"
+                />
+              </label>
+            </li>
+          );
+        })}
+      </ul>
+      {ligado && cartoes.length < teto ? (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="w-fit"
+          data-testid={`editar-lembrete-adicionar-${tipo.id}`}
+          onClick={() => {
+            const u = deMinutos(minutosLivres(cartoes.map(minutosDe)));
+            setCartoes((cs) => [
+              ...cs,
+              {
+                id: `r${++seq.current}`,
+                quantidade: u.quantidade,
+                unidade: u.unidade,
+                body: "",
+              },
+            ]);
+          }}
+        >
+          {t("Adicionar lembrete")}
+        </Button>
+      ) : null}
+      <p className="text-[11px] text-text-muted">
+        {t(
+          "Deixe a mensagem em branco para o texto padrão. Variáveis: {{nome}}, {{titulo}}, {{dia}}, {{hora}}, {{endereco}}.",
+        )}
+      </p>
+    </div>
   );
 }
 
 export function TiposDeAgendamentoClient({
   tiposIniciais,
+  canais = [],
+  erroCanais = null,
+  tituloDaAgenda = null,
   pessoas,
   podeEditar,
   usuarioAtualId,
   podeConfigurarGoogle,
+  erroDeLeitura = null,
+  clientePelaAgendaLigado,
+  podeLigarClientePelaAgenda,
+  colegasPodemMexerNaAgendaLigado,
+  podeMudarAgendaDosColegas,
+  meetAbertoLigado,
+  podeMudarMeetAberto,
 }: {
   tiposIniciais: TipoRow[];
+  canais?: CanalParaLembrete[];
+  erroCanais?: string | null;
+  tituloDaAgenda?: string | null;
   pessoas: Array<{ id: string; papel: string; nome: string }>;
   podeEditar: boolean;
   usuarioAtualId: string;
   podeConfigurarGoogle: boolean;
+  /** Mensagem do banco quando a consulta FALHOU. `null` = a consulta rodou. */
+  erroDeLeitura?: string | null;
+  /** `organizations.settings.crm.cliente_pela_agenda`, lido pela página. */
+  clientePelaAgendaLigado: boolean;
+  podeLigarClientePelaAgenda: boolean;
+  /** `organizations.settings.colegas_podem_mexer_na_agenda` (migration 0343). */
+  colegasPodemMexerNaAgendaLigado: boolean;
+  podeMudarAgendaDosColegas: boolean;
+  /** `organizations.settings.google_meet_acesso_aberto` (migration 0648, issue #2063). */
+  meetAbertoLigado: boolean;
+  podeMudarMeetAberto: boolean;
 }) {
   const t = useT();
   const router = useRouter();
+  // A moeda da organização é a régua do preço padrão digitado aqui (#3367).
+  // O leitor de sessão devolve a MESMA coluna que `moedaDaOrganizacao` lê no
+  // servidor (`organizations.currency`), e cai no padrão fora do provider —
+  // mesma degradação das outras telas de dinheiro.
+  const moeda = useMoedaDaOrgAtiva() ?? MOEDA_PADRAO;
   const [criando, setCriando] = React.useState(false);
+  const [serviceDraft, setServiceDraft] = React.useState(false);
   /**
    * O RASCUNHO NASCE COM QUEM ESTÁ CRIANDO.
    *
@@ -175,6 +425,7 @@ export function TiposDeAgendamentoClient({
   }));
   const [salvando, setSalvando] = React.useState(false);
   const [editandoId, setEditandoId] = React.useState<string | null>(null);
+  const [servicoId, setServicoId] = React.useState<string | null>(null);
 
   async function comErro(acao: () => Promise<unknown>, mensagem: string) {
     setSalvando(true);
@@ -194,9 +445,7 @@ export function TiposDeAgendamentoClient({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4" data-testid="tipos-de-agendamento-config">
-      {podeConfigurarGoogle && <AgendasConectadas />}
-      <PrazosDePresenca podeEditar={podeEditar}/>
-      <DiasBloqueados podeEditar={podeEditar}/>
+      {podeEditar && servicoId && <ConfiguracaoDoServico key={servicoId} typeId={servicoId} name={tiposIniciais.find((x) => x.id === servicoId)?.name ?? ""} pessoas={pessoas} onClose={() => setServicoId(null)} onEditType={() => { setEditandoId(servicoId); setServicoId(null); }}/>}
       {podeEditar ? (
         <div>
           {criando ? (
@@ -212,6 +461,7 @@ export function TiposDeAgendamentoClient({
                       category: rascunho.category,
                       duration_minutes: Number(rascunho.duration_minutes),
                       location_kind: rascunho.location_kind,
+                      ...(serviceDraft ? { service_draft: true } : {}),
                       ...(rascunho.default_owner_user_id
                         ? { default_owner_user_id: rascunho.default_owner_user_id }
                         : {}),
@@ -302,6 +552,8 @@ export function TiposDeAgendamentoClient({
                   ))}
                 </select>
               </label>
+              <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={serviceDraft} onChange={(e) => setServiceDraft(e.target.checked)}/>{t("Criar como serviço em rascunho")}</label>
+              {serviceDraft && <p className="text-sm text-text-muted">{t("Depois de criar, abra Serviço e horários para configurar e ativar. Nenhuma reserva é oferecida antes da ativação.")}</p>}
               <div className="flex justify-end gap-2 sm:col-span-2">
                 <Button type="button" variant="ghost" size="sm" onClick={() => setCriando(false)}>
                   {t("Cancelar")}
@@ -320,9 +572,37 @@ export function TiposDeAgendamentoClient({
       ) : null}
 
       <ul className="flex flex-col gap-2" data-testid="lista-de-tipos">
-        {tiposIniciais.length === 0 ? (
-          <li data-testid="sem-tipos" className="rounded-lg border border-border bg-surface p-4 text-sm text-text-muted">
-            {t("Nenhum tipo de agendamento ainda. Crie o primeiro para que a Agenda tenha o que oferecer.")}
+        {/*
+          TRÊS ESTADOS, NÃO DOIS. "A consulta falhou" nunca pode ser desenhada
+          como "não há nada": foi assim que esta tela disse "nenhum tipo" com
+          quatro tipos ativos no banco, enquanto a API recusava criar um deles
+          por duplicidade. Quem lê "ainda não existe" vai CRIAR — e leva um erro
+          que não explica nada.
+        */}
+        {erroDeLeitura ? (
+          <li
+            data-testid="erro-ao-ler-tipos"
+            role="alert"
+            className="rounded-lg border border-destructive/50 bg-destructive/5 p-4 text-sm"
+          >
+            <p className="font-medium text-destructive">
+              {t("Não consegui carregar os tipos de agendamento.")}
+            </p>
+            <p className="mt-1 text-text-muted">
+              {t(
+                "Isto é uma falha de leitura, não uma lista vazia — pode haver tipos cadastrados que não estão aparecendo. Recarregue a página; se continuar, avise quem cuida da instalação.",
+              )}
+            </p>
+            <p className="mt-1 font-mono text-xs text-text-muted">{erroDeLeitura}</p>
+          </li>
+        ) : tiposIniciais.length === 0 ? (
+          <li
+            data-testid="sem-tipos"
+            className="rounded-lg border border-border bg-surface p-4 text-sm text-text-muted"
+          >
+            {t(
+              "Nenhum tipo de agendamento ainda. Crie o primeiro para que a Agenda tenha o que oferecer.",
+            )}
           </li>
         ) : null}
         {tiposIniciais.map((tipo) => (
@@ -341,7 +621,8 @@ export function TiposDeAgendamentoClient({
               </span>
               <span className="text-xs tabular-nums text-text-muted">{tipo.duration_minutes} min</span>
               <span className="text-xs text-text-muted">{t(rotuloDe(LOCAIS, tipo.location_kind))}</span>
-              {!tipo.default_owner_user_id ? (
+              {tipo.service_enabled && <span className="text-xs text-text-muted">{tipo.booking_mode === "collective_limited" ? `${t("Coletivo com capacidade")} · ${tipo.service_capacity}` : tipo.booking_mode === "collective_unlimited" ? t("Coletivo sem limite automático") : t("Individual por profissional")}</span>}
+              {!tipo.default_owner_user_id && !tipo.service_enabled ? (
                 // O aviso existe porque o sintoma é MUDO: sem dono, a tela de
                 // marcar simplesmente não mostra horário, sem dizer por quê.
                 //
@@ -375,14 +656,22 @@ export function TiposDeAgendamentoClient({
                 // pode viver escondida atrás de um clique em "Editar".
                 <span
                   data-testid={`lembrete-ligado-${tipo.id}`}
-                  className="text-xs tabular-nums text-text-muted"
+                  className="text-xs text-text-muted tabular-nums"
                 >
-                  {t("avisa o cliente")} {tipo.reminder_minutes_before} min {t("antes")}
+                  {t("avisa o cliente")}{" "}
+                  {[tipo.reminder_minutes_before, ...(tipo.reminder_extra_offsets_minutes ?? [])]
+                    .sort((a, b) => b - a)
+                    .join(", ")}{" "}
+                  min {t("antes")}
+                  {tipo.reminder_body || Object.keys(tipo.reminder_bodies ?? {}).length > 0
+                    ? ` · ${t("texto próprio")}`
+                    : ""}
                 </span>
               ) : null}
-              {!tipo.is_active ? <span className="text-xs text-text-subtle">{t("desativado")}</span> : null}
+              {!tipo.is_active ? <span className="text-xs text-text-subtle">{tipo.service_enabled ? t("Rascunho: novas reservas estão desativadas.") : t("desativado")}</span> : null}
               {podeEditar ? (
-                <span className="ml-auto flex gap-1">
+                <span className="ml-auto flex flex-wrap gap-1">
+                  {(tipo.is_active || !tipo.service_enabled) && <Button variant="outline" size="sm" className="h-auto min-h-11 whitespace-normal text-left" onClick={() => { setServicoId(servicoId === tipo.id ? null : tipo.id); window.scrollTo({ top: 0, behavior: "smooth" }); }}>{t("Configurar")} {tipo.name}</Button>}
                   <Button
                     variant="ghost"
                     size="sm"
@@ -406,6 +695,8 @@ export function TiposDeAgendamentoClient({
                     >
                       Desativar
                     </Button>
+                  ) : tipo.service_enabled ? (
+                    <Button variant="outline" size="sm" className="h-auto min-h-11 whitespace-normal text-left" onClick={() => { setServicoId(tipo.id); window.scrollTo({ top: 0, behavior: "smooth" }); }}>{t("Configurar")} {tipo.name}</Button>
                   ) : (
                     <Button
                       variant="ghost"
@@ -437,7 +728,7 @@ export function TiposDeAgendamentoClient({
             {editandoId === tipo.id ? (
               <form
                 data-testid={`form-editar-${tipo.id}`}
-                className="mt-3 grid gap-3 border-t border-border pt-3 sm:grid-cols-3"
+                className="mt-3 flex flex-col gap-3 border-t border-border pt-3"
                 onSubmit={async (e) => {
                   e.preventDefault();
                   const dados = new FormData(e.currentTarget);
@@ -447,7 +738,9 @@ export function TiposDeAgendamentoClient({
                         id: tipo.id,
                         name: String(dados.get("name") ?? "").trim(),
                         category: String(dados.get("category") ?? tipo.category),
-                        duration_minutes: Number(dados.get("duration_minutes") ?? tipo.duration_minutes),
+                        duration_minutes: Number(
+                          dados.get("duration_minutes") ?? tipo.duration_minutes,
+                        ),
                         // `|| null`, e NÃO omitir quando vazio.
                         //
                         // A tela oferece `<option value="">{t("Sem responsável")}</option>`
@@ -465,16 +758,41 @@ export function TiposDeAgendamentoClient({
                           String(dados.get("default_owner_user_id") ?? "") || null,
                         // Caixa desmarcada não aparece no `FormData` — daí a
                         // comparação, e não um `Boolean(...)` do valor ausente.
+                        // Vazio é uma ESCOLHA (voltar a digitar na hora), e
+                        // por isso vira `null` em vez de sumir do corpo: omitir
+                        // deixaria o preço antigo gravado e a tela mentindo.
+                        default_price_cents: (() => {
+                          const bruto = String(dados.get("default_price_cents") ?? "").trim();
+                          if (bruto === "") return null;
+                          // Lido pela régua da moeda da organização (#3367): em
+                          // dólar `1,300` é mil e trezentos, e o preço sugerido
+                          // que a comanda recebe nasce no mesmo centavo.
+                          const cents = parseReaisToCents(bruto, moeda);
+                          return cents === null ? null : cents;
+                        })(),
                         reminder_enabled: dados.get("reminder_enabled") === "on",
                         // O campo desabilitado também não aparece, e omitir é o
-                        // certo: desligar o aviso não pode apagar a antecedência
-                        // que alguém escolheu (ver `LembreteDoCompromisso`).
-                        ...(dados.get("reminder_minutes_before")
-                          ? {
-                              reminder_minutes_before: Number(
-                                dados.get("reminder_minutes_before"),
-                              ),
-                            }
+                        // certo: desligar o aviso não pode apagar a lista que
+                        // alguém escolheu (ver `LembreteDoCompromisso`).
+                        ...(dados.get("reminder_enabled") === "on"
+                          ? (() => {
+                              const emp = empacotarLembretes(
+                                lerPassosDoFormulario(String(dados.get("reminder_steps") ?? "")),
+                              );
+                              return {
+                                ...(dados.has("reminder_channel_session_id")
+                                  ? {
+                                      reminder_channel_session_id:
+                                        String(dados.get("reminder_channel_session_id") || "") ||
+                                        null,
+                                    }
+                                  : {}),
+                                reminder_minutes_before: emp.principal,
+                                reminder_extra_offsets_minutes: emp.extras,
+                                reminder_body: emp.corpoPrincipal,
+                                reminder_bodies: emp.corposExtras,
+                              };
+                            })()
                           : {}),
                       }),
                     "Tipo alterado.",
@@ -482,46 +800,72 @@ export function TiposDeAgendamentoClient({
                   if (feito) setEditandoId(null);
                 }}
               >
-                <label className="flex flex-col gap-1 text-xs text-text-muted">
-                  Nome
-                  <input
-                    name="name"
-                    defaultValue={tipo.name}
-                    data-testid={`editar-nome-${tipo.id}`}
-                    className="rounded-md border border-border bg-surface-elevated p-2 text-sm text-text"
-                  />
-                </label>
-                <label className="flex flex-col gap-1 text-xs text-text-muted">
-                  {t("Duração")}
-                  <input
-                    name="duration_minutes"
-                    type="number"
-                    min={5}
-                    max={1440}
-                    defaultValue={tipo.duration_minutes}
-                    data-testid={`editar-duracao-${tipo.id}`}
-                    className="rounded-md border border-border bg-surface-elevated p-2 text-sm text-text"
-                  />
-                </label>
-                <label className="flex flex-col gap-1 text-xs text-text-muted">
-                  {t("Quem atende")}
-                  <select
-                    name="default_owner_user_id"
-                    defaultValue={tipo.default_owner_user_id ?? ""}
-                    data-testid={`editar-dono-${tipo.id}`}
-                    className="rounded-md border border-border bg-surface-elevated p-2 text-sm text-text"
+                <div className="grid min-w-0 gap-3 sm:grid-cols-[minmax(0,1fr)_8rem_minmax(0,18rem)]">
+                  <label className="flex flex-col gap-1 text-xs text-text-muted">
+                    Nome
+                    <input
+                      name="name"
+                      defaultValue={tipo.name}
+                      data-testid={`editar-nome-${tipo.id}`}
+                      className="rounded-md border border-border bg-surface-elevated p-2 text-sm text-text"
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1 text-xs text-text-muted">
+                    {t("Duração")}
+                    <input
+                      name="duration_minutes"
+                      type="number"
+                      min={5}
+                      max={1440}
+                      defaultValue={tipo.duration_minutes}
+                      data-testid={`editar-duracao-${tipo.id}`}
+                      className="rounded-md border border-border bg-surface-elevated p-2 text-sm text-text"
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1 text-xs text-text-muted">
+                    {t("Quem atende")}
+                    <select
+                      name="default_owner_user_id"
+                      defaultValue={tipo.default_owner_user_id ?? ""}
+                      data-testid={`editar-dono-${tipo.id}`}
+                      className="rounded-md border border-border bg-surface-elevated p-2 text-sm text-text"
+                    >
+                      <option value="">{t("Sem responsável")}</option>
+                      {pessoas.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.nome}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="flex flex-col gap-1 text-xs text-text-muted">
+                    {t("Preço padrão")}
+                    <input
+                      name="default_price_cents"
+                      type="text"
+                      inputMode="decimal"
+                      placeholder={t("digite na hora")}
+                      defaultValue={
+                        tipo.default_price_cents === null
+                          ? ""
+                          : (tipo.default_price_cents / 100).toFixed(2)
+                      }
+                      data-testid={`editar-preco-${tipo.id}`}
+                      className="rounded-md border border-border bg-surface-elevated p-2 text-sm text-text"
+                    />
+                    <span className="text-[11px] text-text-muted">
+                      {t("Opcional. Vira o valor sugerido na comanda, e pode ser mudado lá.")}
+                    </span>
+                  </label>
+                </div>
+                <LembreteDoCompromisso tipo={tipo} canais={canais} erroCanais={erroCanais} />
+                <div className="flex justify-end">
+                  <Button
+                    type="submit"
+                    size="sm"
+                    data-testid={`salvar-${tipo.id}`}
+                    disabled={salvando}
                   >
-                    <option value="">{t("Sem responsável")}</option>
-                    {pessoas.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.nome}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <LembreteDoCompromisso tipo={tipo} />
-                <div className="flex justify-end sm:col-span-3">
-                  <Button type="submit" size="sm" data-testid={`salvar-${tipo.id}`} disabled={salvando}>
                     {salvando ? t("Salvando…") : t("Salvar")}
                   </Button>
                 </div>
@@ -530,6 +874,25 @@ export function TiposDeAgendamentoClient({
           </li>
         ))}
       </ul>
+      {podeConfigurarGoogle && <details className="rounded-lg border border-border bg-surface p-4"><summary className="cursor-pointer font-semibold">{t("Contas e calendários Google")}</summary><div className="mt-4"><AgendasConectadas /></div></details>}
+      <details className="rounded-lg border border-border bg-surface p-4"><summary className="cursor-pointer font-semibold">{t("Regras gerais da agenda")}</summary><div className="mt-4 space-y-4">
+        <TituloDaAgenda tituloInicial={tituloDaAgenda} podeEditar={podeEditar}/>
+      <PrazosDePresenca podeEditar={podeEditar}/>
+      <ClientePelaAgenda
+        ligadoInicial={clientePelaAgendaLigado}
+        podeLigar={podeLigarClientePelaAgenda}
+      />
+      {/* A opção da issue #978 fica ao lado das outras regras de comportamento
+          da agenda: é a mesma pergunta ("como a agenda se comporta nesta
+          empresa?"), e separá-la noutra tela esconderia de quem configura que
+          ela existe. */}
+      <AgendaDosColegas
+        ligadoInicial={colegasPodemMexerNaAgendaLigado}
+        podeMudar={podeMudarAgendaDosColegas}
+      />
+      <MeetComAcessoAberto ligadoInicial={meetAbertoLigado} podeMudar={podeMudarMeetAberto}/>
+      <DiasBloqueados podeEditar={podeEditar}/>
+      </div></details>
     </div>
   );
 }

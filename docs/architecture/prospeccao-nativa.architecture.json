@@ -1,0 +1,324 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Prospecção nativa",
+    "subtitle": "Da pesquisa ao cliente qualificado",
+    "output": "prospeccao-nativa.html",
+    "quality_profile": "standard"
+  },
+  "lanes": [
+    {
+      "id": "humano",
+      "label": "Pessoa"
+    },
+    {
+      "id": "app",
+      "label": "Aplicativo"
+    },
+    {
+      "id": "db",
+      "label": "Banco"
+    }
+  ],
+  "mainPath": [
+    "operator",
+    "discovery",
+    "candidates",
+    "site-enrich",
+    "crm",
+    "queue",
+    "inbox",
+    "qualification"
+  ],
+  "nodes": [
+    {
+      "id": "operator",
+      "lane": "humano",
+      "col": 0,
+      "type": "component",
+      "label": "Prospecção: público, oferta, ritmo"
+    },
+    {
+      "id": "discovery",
+      "lane": "app",
+      "col": 1,
+      "type": "component",
+      "label": "Busca e enriquecimento comercial"
+    },
+    {
+      "id": "candidates",
+      "lane": "db",
+      "col": 2,
+      "type": "component",
+      "label": "Campanhas e candidatos por organização"
+    },
+    {
+      "id": "crm",
+      "lane": "app",
+      "col": 3,
+      "type": "component",
+      "label": "Contatos e negócios existentes"
+    },
+    {
+      "id": "queue",
+      "lane": "app",
+      "col": 4,
+      "type": "component",
+      "label": "Scheduler e guardas antes do envio"
+    },
+    {
+      "id": "inbox",
+      "lane": "humano",
+      "col": 5,
+      "type": "component",
+      "label": "Inbox: resposta, IA e intervenção humana"
+    },
+    {
+      "id": "qualification",
+      "lane": "db",
+      "col": 6,
+      "type": "component",
+      "label": "Etapa real do funil"
+    },
+    {
+      "id": "agent-setup",
+      "lane": "app",
+      "col": 2,
+      "type": "component",
+      "label": "Conversa persistente, resumo e publicação explícita"
+    },
+    {
+      "id": "setup-session",
+      "lane": "db",
+      "col": 1,
+      "type": "component",
+      "label": "Sessão de configuração por campanha e revisão"
+    },
+    {
+      "id": "agent-preview",
+      "lane": "app",
+      "col": 3,
+      "type": "component",
+      "label": "Rascunho pausado e sandbox canônico"
+    },
+    {
+      "id": "voice-settings",
+      "lane": "app",
+      "col": 4,
+      "type": "component",
+      "label": "Editor do agente: voz e instruções"
+    },
+    {
+      "id": "voice-provider",
+      "lane": "app",
+      "col": 5,
+      "type": "component",
+      "label": "ElevenLabs Agents privado e teste no navegador"
+    },
+    {
+      "id": "site-enrich",
+      "lane": "app",
+      "col": 3,
+      "type": "component",
+      "label": "Auditoria de site no tick (spec 24)"
+    },
+    {
+      "id": "inbound-turn",
+      "lane": "app",
+      "col": 4,
+      "type": "component",
+      "label": "Turno de resposta (inbound-turn)"
+    },
+    {
+      "id": "followup-turn",
+      "lane": "app",
+      "col": 4,
+      "type": "component",
+      "label": "Turno de follow-up (followup-turn)"
+    },
+    {
+      "id": "saida-configuravel",
+      "lane": "app",
+      "col": 5,
+      "type": "component",
+      "label": "Contagem e reserva da saída"
+    },
+    {
+      "id": "saida-volta-com-a-mensagem",
+      "lane": "db",
+      "col": 6,
+      "type": "component",
+      "label": "Gatilho: mensagem da saída falhou, a reserva volta"
+    },
+    {
+      "id": "site-tool",
+      "lane": "app",
+      "col": 5,
+      "type": "component",
+      "label": "Consulta da análise do site na conversa (só leitura, por contato do turno)"
+    }
+  ],
+  "edges": [
+    {
+      "from": "operator",
+      "to": "discovery",
+      "label": "busca com teto"
+    },
+    {
+      "from": "operator",
+      "to": "candidates",
+      "label": "planilha (CSV/XLSX)"
+    },
+    {
+      "from": "discovery",
+      "to": "candidates",
+      "label": "normalizar e deduplicar"
+    },
+    {
+      "from": "candidates",
+      "to": "crm",
+      "label": "ativação autorizada (o contato nasce com os links)"
+    },
+    {
+      "from": "crm",
+      "to": "queue",
+      "label": "destino e origem persistidos"
+    },
+    {
+      "from": "queue",
+      "to": "inbox",
+      "label": "primeira abordagem"
+    },
+    {
+      "from": "inbox",
+      "to": "qualification",
+      "label": "critérios confirmados"
+    },
+    {
+      "from": "qualification",
+      "to": "operator",
+      "label": "resultado visível"
+    },
+    {
+      "from": "queue",
+      "to": "operator",
+      "label": "falha pausa a campanha"
+    },
+    {
+      "from": "operator",
+      "to": "agent-setup",
+      "label": "configuração revisada pelo administrador"
+    },
+    {
+      "from": "agent-setup",
+      "to": "queue",
+      "label": "agente selecionado; ativação da campanha separada"
+    },
+    {
+      "from": "agent-setup",
+      "to": "inbox",
+      "label": "publicação e continuidade no canal"
+    },
+    {
+      "from": "agent-setup",
+      "to": "operator",
+      "label": "erros visíveis e retomada sem duplicação"
+    },
+    {
+      "from": "agent-setup",
+      "to": "setup-session",
+      "label": "salvar sem sobrescrever outra revisão"
+    },
+    {
+      "from": "setup-session",
+      "to": "agent-setup",
+      "label": "retomar após recarregar"
+    },
+    {
+      "from": "agent-setup",
+      "to": "agent-preview",
+      "label": "testar antes de publicar"
+    },
+    {
+      "from": "agent-preview",
+      "to": "operator",
+      "label": "resposta simulada e propostas de ferramentas"
+    },
+    {
+      "from": "agent-setup",
+      "to": "voice-settings",
+      "label": "configurar voz do agente salvo"
+    },
+    {
+      "from": "voice-settings",
+      "to": "voice-provider",
+      "label": "chave cifrada, configuração e autorização temporária"
+    },
+    {
+      "from": "voice-provider",
+      "to": "voice-settings",
+      "label": "resultado, falha e revisão antes de novo teste"
+    },
+    {
+      "from": "candidates",
+      "to": "inbox",
+      "label": "crm-summary autorizado: contexto comercial e fontes no painel lateral"
+    },
+    {
+      "from": "candidates",
+      "to": "site-enrich",
+      "label": "auditoria de site em data.site"
+    },
+    {
+      "from": "site-enrich",
+      "to": "queue",
+      "label": "gancho real na abordagem"
+    },
+    {
+      "from": "site-enrich",
+      "to": "inbox",
+      "label": "auditoria no painel via crm-summary"
+    },
+    {
+      "from": "inbound-turn",
+      "to": "saida-configuravel",
+      "label": "conta e reserva a saída antes de enviar"
+    },
+    {
+      "from": "followup-turn",
+      "to": "saida-configuravel",
+      "label": "conta e reserva a saída antes de enviar"
+    },
+    {
+      "from": "saida-configuravel",
+      "to": "candidates",
+      "label": "grava exit_offered_at uma vez e amarra exit_offer_message_id à mensagem com o rodapé"
+    },
+    {
+      "from": "saida-volta-com-a-mensagem",
+      "to": "candidates",
+      "label": "mensagem amarrada virou failed (handler, watchdog, webhook): desfaz contagem e reserva"
+    },
+    {
+      "from": "saida-volta-com-a-mensagem",
+      "to": "operator",
+      "label": "audita prospecting.exit_offer_withdrawn; a tela volta a 'Saída ainda não oferecida'"
+    },
+    {
+      "from": "candidates",
+      "to": "site-tool",
+      "label": "lê data.site, a estratégia e o cadastro do contato da conversa"
+    },
+    {
+      "from": "site-tool",
+      "to": "inbound-turn",
+      "label": "o agente consulta durante qualquer turno, da primeira à última mensagem"
+    },
+    {
+      "from": "site-tool",
+      "to": "operator",
+      "label": "cada consulta sai no registro de ferramentas do agente (laço: a tela mostra se o agente usa)"
+    }
+  ]
+}

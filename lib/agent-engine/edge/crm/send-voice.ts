@@ -85,7 +85,11 @@ export async function resolverCaminhoDeVoz(
     ...input.voz,
     texto: input.textoFalado,
   });
-  const path = await input.upload(audio, mimeType);
+  // Quem fala com o Storage é o `upload` injetado (`uploadDeVoz`, em
+  // inbound-turn.ts) — é lá que a chave do objeto é montada e registrada em
+  // tests/unit/identificadores-que-cruzam-fronteira.test.ts.
+  const { upload: subirAudio } = input;
+  const path = await subirAudio(audio, mimeType);
   const pathGravado = await input.store.setMediaPath(input.identidade.tenantId, resolucao.key, path);
   return {
     // `setMediaPath` devolve o que FICOU gravado — se uma corrida (improvável:

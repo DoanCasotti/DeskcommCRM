@@ -4,11 +4,15 @@ import { useLocaleDeData } from "@/hooks/i18n/useLocaleDeData";
 
 import { useT } from "@/hooks/i18n/useT";
 
-import { addDays, format, isSameDay, isSameMonth, startOfMonth, startOfWeek } from "date-fns";
+import { addDays, format, isSameDay, isSameMonth, startOfDay, startOfMonth, startOfWeek } from "date-fns";
 import Link from "next/link";
 import * as React from "react";
 
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { DURACAO_MAXIMA_MIN, DURACAO_MINIMA_MIN, duracaoEscolhidaValida } from "@/lib/agenda/duracao-escolhida";
+import { dataDeParede, instanteDe } from "@/lib/agenda/fuso";
+import { ApiError } from "@/lib/api/types";
 import { CaretLeft, CaretRight, CheckCircle, Clock, MapPin, Warning } from "@/lib/ui/icons";
 import { cn } from "@/lib/utils";
 
@@ -30,12 +34,48 @@ import type { HorarioLivre, Pessoa } from "./tipos";
  */
 export type TempoDaMarcacao = "escolhendo-dia" | "escolhendo-horario" | "confirmando" | "marcado";
 
+/**
+ * O bloco de "não há jornada publicada" — na pessoa certa.
+ *
+ * A frase antiga ("Você ainda não publicou seus horários de atendimento") era
+ * dita a QUALQUER leitor, e mente quando quem lê não é o dono da jornada: o
+ * Atendente abre a agenda da dona, e "Você" ali é o Atendente (issue #896,
+ * item 1). O rótulo "Você" vem de `lib/agenda/responsavel-do-painel.ts` — a
+ * fonte única —, e a frase volta à segunda pessoa exatamente quando ele
+ * aparece: é o caso do dono abrindo a própria agenda, e é o que o kit visual
+ * (`tests/e2e/agenda-kit-visual.spec.ts`) assere.
+ *
+ * Quando quem lê NÃO é o dono, a tela não deve deduzir quem falhou em
+ * publicar: ela constata que A JORNADA (de quem a agenda é) não foi publicada,
+ * sem apontar o dedo para quem está logado.
+ */
+function AvisoDeJornadaNaoPublicada({ quemLeEhODono }: { quemLeEhODono: boolean }) {
+  const t = useT();
+
+  return (
+    <>
+      <p className="text-sm font-semibold text-text">
+        {quemLeEhODono
+          ? t("Você ainda não publicou seus horários de atendimento")
+          : t("A jornada de atendimento ainda não foi publicada")}
+      </p>
+      <p className="mt-1 text-xs leading-4 text-text-muted">
+        {quemLeEhODono
+          ? t("Sem eles ninguém consegue marcar — nem você, nem o agente.")
+          : t("Sem eles ninguém consegue marcar — nem quem atende, nem o agente.")}
+      </p>
+    </>
+  );
+}
+
 export function PainelDeMarcacao({
   ancora,
   agora,
   responsavel,
   tipo = "Consulta",
   duracaoMin = 30,
+  permiteEscolherDuracao = true,
+  onDuracaoMudar,
   local,
   fuso,
   horariosPorDia,
@@ -44,8 +84,11 @@ export function PainelDeMarcacao({
   fusoSuposto = false,
   fontesDefasadas,
   googleCoberturaParcial,
+  onMesVisivel,
+  mesCarregado,
   quemSeraAtendido,
   horarioInicial,
+  permiteEncaixe = false,
   onConfirmar,
   onVerNaAgenda,
   className,
@@ -54,7 +97,30 @@ export function PainelDeMarcacao({
   agora: Date;
   responsavel: Pessoa;
   tipo?: string;
+  /**
+   * A DURAÇÃO PADRÃO deste atendimento — a do serviço, e ela CONTINUA sendo o
+   * padrão (issue #3709). Deixou de ser a única opção.
+   */
   duracaoMin?: number;
+  /**
+   * Oferece o campo de duração? Ligado por padrão.
+   *
+   * Desligado em dois casos, e os dois são sobre não prometer o que a rota não
+   * faz: serviço (a duração é da agenda do serviço, com capacidade — a escrita
+   * recusa, `agenda_duracao_do_servico`) e remarcação (o PATCH move o bloco e
+   * PRESERVA o comprimento que ele já tem).
+   */
+  permiteEscolherDuracao?: boolean;
+  /**
+   * A visão de fora soube de uma duração nova.
+   *
+   * ⚠️ Quem OFERECE os horários é a rota, e ela precisa da duração para calcular
+   * os slots — o painel não recalcula nada (`lib/agenda/grade-interativa.ts`
+   * diz por quê). Sem este fio, a tela mostraria 90 minutos no campo e a lista
+   * de slots de 30 ao lado: o horário de 09:00 apareceria como livre e a
+   * marcação levaria 422.
+   */
+  onDuracaoMudar?: (duracaoMin: number) => void;
   /**
    * ⚠️ SEM DEFAULT, e isto é o conserto.
    *
@@ -103,7 +169,27 @@ export function PainelDeMarcacao({
   /** O fuso veio do padrão, ninguém escolheu — e o agente oferece horário com ele. */
   fusoSuposto?: boolean;
   /** Agenda conectada que parou de atualizar: o horário fica bloqueado, e a tela diz desde quando. */
+  /** Ocupação do Google ainda não lida para o recorte pedido — aviso, não trava. */
   googleCoberturaParcial?: boolean;
+  /**
+   * O mês que o calendário está mostrando. Quem consulta os horários livres
+   * precisa disto: a busca acompanha o mês visível, senão "Próximo mês" ou
+   * entrega 42 dias mortos ou desliga para não produzir esse estado.
+   */
+  onMesVisivel?: (mes: Date) => void;
+  /**
+   * De que mês são os `horariosPorDia` que chegaram — `null` enquanto a
+   * consulta não respondeu. Ausente (a vitrine, com dado fixo), o painel
+   * confia nos horários como sempre.
+   *
+   * O mês em tela mora aqui e o da consulta mora em quem chama, e os dois
+   * trocam em momentos diferentes. Sem saber de que mês são os dados, o painel
+   * (a) acendia o dia 1º do mês novo com a sobra da janela do velho
+   * (`janelaDoMesVisivel` vai até `endOfMonth + 1 dia`) e (b) não tinha como
+   * distinguir "carregando" de "este mês acabou" — ver a abertura, abaixo.
+   */
+  mesCarregado?: Date | null;
+  /** Agenda conectada que parou de atualizar: o horário fica bloqueado, e a tela diz desde quando. */
   fontesDefasadas?: Array<{ nome?: string; desde?: string }>;
   /**
    * Quem vai ser atendido, e se ele aceita receber mensagem.
@@ -139,7 +225,30 @@ export function PainelDeMarcacao({
    * ofereceria.
    */
   horarioInicial?: HorarioLivre;
-  onConfirmar?: (instante: string) => void | Promise<unknown>;
+  /**
+   * O ENCAIXE — "Outro horário", digitado, fora da grade publicada.
+   *
+   * O servidor aceita horário fora da grade quando quem marca é uma PESSOA da
+   * equipe (`podeMarcarForaDaGrade`, `app/api/v1/agenda/agendamentos/_handler.ts`)
+   * e recusa só a ocupação real. Sem esta porta a regra existia e ninguém a
+   * alcançava pela tela: a QA do lote 8 só conseguiu marcar 10:30 chamando a API.
+   *
+   * Prop EXPLÍCITA e desligada por padrão, porque quem sabe se o encaixe cabe é
+   * quem monta o painel: a vitrine desenha este componente com dado de mentira,
+   * e quem não pode marcar (`viewer`) levaria 403 da rota. A tela esconder não é
+   * autorização — a rota cobra de novo —, é não oferecer um caminho que não existe.
+   *
+   * Mesmo ligada, ela só aparece quando o servidor aceitaria e a tela sabe o que
+   * "10:30" significa: com jornada publicada (sem ela a rota devolve
+   * `agenda_fora_da_jornada`), sem erro na consulta e com `fuso` conhecido.
+   */
+  permiteEncaixe?: boolean;
+  /**
+   * A confirmação — e ela leva a DURAÇÃO junto, porque é ela que vira o
+   * `ends_at` do compromisso (issue #3709). Quem chama pode ignorar o segundo
+   * argumento; o painel nunca marcou por conta própria e continua não marcando.
+   */
+  onConfirmar?: (instante: string, duracaoMin: number) => void | Promise<unknown>;
   className?: string;
 }) {
   const localeDaData = useLocaleDeData();
@@ -155,6 +264,103 @@ export function PainelDeMarcacao({
   const [mes, setMes] = React.useState(() =>
     startOfMonth(horarioInicial ? new Date(horarioInicial.instante) : ancora),
   );
+  React.useEffect(() => {
+    onMesVisivel?.(mes);
+  }, [mes, onMesVisivel]);
+  const [encaixeAberto, setEncaixeAberto] = React.useState(false);
+  /**
+   * A DURAÇÃO DESTE ATENDIMENTO (issue #3709) — em TEXTO, porque o campo é do
+   * usuário e um `number` transformaria a digitação em luta.
+   *
+   * ─── Por que o texto e o valor aplicado são a MESMA coisa aqui ────────────
+   *
+   * `duracaoDigitada` (o número) só vale quando passa em `duracaoEscolhidaValida`
+   * — a faixa 5…1440 dos moldes, de `lib/agenda/duracao-escolhida.ts`. Com o
+   * campo vazio, "0" ou "3", ele não vale, e aí DUAS coisas mudam de uma vez:
+   *
+   *   1. a duração nova NÃO é anunciada a quem calcula os horários, então a
+   *      lista em tela continua sendo a da última duração válida;
+   *   2. a escolha de horário é LIMPA e o Confirmar fica travado.
+   *
+   * A (2) é a que importa: sem ela a pessoa escolheria 09:00 numa lista de 30
+   * minutos e confirmaria 3 minutos — ou, pior, escolheria 09:00 para 600
+   * minutos e o servidor recusaria no fim do caminho. A regra do banco não pode
+   * ser a primeira a saber.
+   */
+  const [duracaoTexto, setDuracaoTexto] = React.useState(() => String(duracaoMin));
+  const duracaoDigitada = Number(duracaoTexto.trim());
+  const duracaoOk = duracaoEscolhidaValida(duracaoDigitada);
+  /** O que foi confirmado — o resumo não pode dizer "30" de um bloco de 90. */
+  const [duracaoConfirmada, setDuracaoConfirmada] = React.useState<number | null>(null);
+
+  /**
+   * O PADRÃO É ANUNCIADO, NÃO SUPOSTO.
+   *
+   * Quem calcula os horários é a rota, e ela precisa saber a duração desde a
+   * PRIMEIRA consulta. Este efeito publica o valor do serviço assim que o painel
+   * abre (e quando o tipo muda) — sem ele, a tela abriria com 30 no campo e a
+   * lista poderia ter vindo de uma duração que ficou de uma abertura anterior.
+   * Publicar o mesmo número de novo é inofensivo: o React Query usa o objeto do
+   * filtro como chave e não refaz a consulta quando ele é igual.
+   */
+  React.useEffect(() => {
+    onDuracaoMudar?.(duracaoMin);
+  }, [duracaoMin, onDuracaoMudar]);
+
+  /**
+   * TROCAR DE TIPO TROCA O PADRÃO — e o campo tem de acompanhar.
+   *
+   * O painel continua montado quando a pessoa troca de serviço no seletor; sem
+   * esta linha, um "90" digitado no serviço A ficaria no campo ao abrir um
+   * serviço de 45, e a lista ao lado (que já é a de 45) discordaria do que está
+   * escrito. Só roda quando o PADRÃO muda — digitar não mexe neste estado.
+   */
+  React.useEffect(() => {
+    setDuracaoTexto(String(duracaoMin));
+    setDuracaoConfirmada(null);
+  }, [duracaoMin]);
+
+  /**
+   * Trocar a duração INVALIDA a escolha de horário.
+   *
+   * Não é zelo: o horário escolhido veio de uma lista calculada para a duração
+   * anterior. Manter o clique enquanto a régua muda é o jeito silencioso de
+   * marcar em cima de outro compromisso — e a pessoa veria "Confirmar 09:00"
+   * sem saber que o 09:00 já não comporta o que ela pediu.
+   */
+  const mudarDuracao = (texto: string) => {
+    setDuracaoTexto(texto);
+    setHorario(null);
+    const valor = Number(texto.trim());
+    if (duracaoEscolhidaValida(valor)) onDuracaoMudar?.(valor);
+  };
+  // O que a pessoa DIGITOU sobrevive a "Voltar", à troca de dia e à recusa do
+  // servidor: quem ouviu "ocupado" quer corrigir dez minutos, não redigitar.
+  const [horaDoEncaixe, setHoraDoEncaixe] = React.useState("");
+  /**
+   * A recusa do servidor PRESA ao horário recusado. Escolher outro horário a tira
+   * da tela sem ninguém lembrar de limpar — e voltar ao recusado a traz de volta,
+   * que é verdade: nada mudou nele.
+   */
+  const [recusa, setRecusa] = React.useState<{ instante: string; mensagem: string } | null>(null);
+
+  /**
+   * A confirmação nasce ONDE a pessoa possa vê-la.
+   *
+   * Ela aparece embaixo do mês, e quem a provoca clica em outro lugar: na coluna
+   * de horários, ou no "Usar" do encaixe. Com o corpo rolando (telas baixas) ou
+   * com o diálogo empilhado (celular), o bloco surgia abaixo da dobra e o clique
+   * parecia não ter feito nada — o "nada acontece" que esta tela já pagou.
+   * `nearest` só rola o necessário, e não rola nada quando já está à vista. A
+   * recusa entra na lista porque aumenta o bloco e pode empurrar o botão para fora.
+   */
+  const confirmacaoRef = React.useRef<HTMLDivElement>(null);
+  const instanteEscolhido = horario?.instante;
+  const mensagemDaRecusa = recusa?.mensagem;
+  React.useEffect(() => {
+    if (!instanteEscolhido) return;
+    confirmacaoRef.current?.scrollIntoView?.({ block: "nearest" });
+  }, [instanteEscolhido, mensagemDaRecusa]);
 
   /**
    * O painel pode continuar montado entre duas aberturas (o `Sheet` decide
@@ -165,12 +371,23 @@ export function PainelDeMarcacao({
    * chamador, novo a cada render dele, e um efeito com o objeto na lista
    * dispararia para sempre.
    */
+  /**
+   * A data de parede no fuso que o painel EXIBE.
+   *
+   * Toda formatação do painel passa por aqui. Enquanto cada `format` lia o
+   * relógio do navegador, o horário oferecido no cabeçalho e a confirmação
+   * logo abaixo podiam dizer horas diferentes para o mesmo agendamento —
+   * silenciosamente, e só quando os dois fusos diferiam.
+   */
+  const parede = (iso: string): Date =>
+    fuso ? dataDeParede(new Date(iso), fuso) : new Date(iso);
+
   const instanteInicial = horarioInicial?.instante;
   React.useEffect(() => {
     if (!instanteInicial) return;
     const d = new Date(instanteInicial);
     setDia(d);
-    setHorario({ instante: instanteInicial, rotulo: format(d, "HH:mm") });
+    setHorario({ instante: instanteInicial, rotulo: format(parede(instanteInicial), "HH:mm") });
     setMes(startOfMonth(d));
     setMarcado(null);
   }, [instanteInicial]);
@@ -202,36 +419,53 @@ export function PainelDeMarcacao({
    *
    *   - instalação fresca: ninguém em `attendant_availability` ⇒ a rota devolve
    *     422 ⇒ o hook joga o erro num toast e `data` fica `undefined` ⇒ o
-   *     `?? true` do chamador diz "publicou" ⇒ 42 dias mortos, zero aviso;
-   *   - navegar para frente: a consulta pede 30 dias e o mês visível é estado
-   *     LOCAL deste painel. Dois cliques em "Próximo mês", numa organização
-   *     perfeitamente configurada, e a grade some — sem toast e sem aviso.
+   *     `?? true` do chamador diz "publicou" ⇒ 42 dias mortos, zero aviso.
    *
    * `nenhumDiaClicavel` é LITERALMENTE a expressão do `disponivel` de cada dia,
    * negada e universal. Por construção os dois não voltam a divergir.
    */
-  /**
-   * Existe algum dia CONSULTADO depois do mês visível?
-   *
-   * Deriva das chaves de `horariosPorDia`, que é o recorte que a consulta de
-   * fato cobriu — e não de uma constante de 30 dias copiada para cá, que
-   * envelheceria no dia em que a janela mudasse.
-   */
-  const temDiaConsultadoDepois = React.useMemo(() => {
-    const fimDoMes = startOfMonth(addDays(startOfMonth(mes), 32));
-    return Object.keys(horariosPorDia).some((chave) => new Date(`${chave}T12:00:00`) >= fimDoMes);
-  }, [horariosPorDia, mes]);
+  const encaixeLigado = permiteEncaixe && Boolean(fuso) && publicouHorarios && !erroAoCarregar;
+  const inicioDeHoje = startOfDay(agora).getTime();
 
-  const nenhumDiaClicavel = React.useMemo(
-    () =>
-      semanas
-        .flat()
-        .every(
-          (d) =>
-            !((horariosPorDia[format(d, "yyyy-MM-dd")]?.length ?? 0) > 0 && isSameMonth(d, mes)),
-        ),
-    [semanas, horariosPorDia, mes],
-  );
+  /**
+   * O dia aceita clique? Com horário publicado, sempre; sem, só pelo encaixe — e
+   * só de hoje em diante, que é o que o calendário já oferecia.
+   *
+   * É a ÚNICA expressão de clicável: o botão do dia e `nenhumDiaClicavel` leem
+   * esta função, para os dois não voltarem a divergir (ver o bloco acima).
+   */
+  const dadosDoMesEmTela = mesCarregado === undefined || (mesCarregado !== null && isSameMonth(mesCarregado, mes));
+  /** Tem horário publicado — a única fonte de `data-disponivel` e da abertura. */
+  const temHorario = (d: Date): boolean =>
+    dadosDoMesEmTela && isSameMonth(d, mes) && (horariosPorDia[format(d, "yyyy-MM-dd")]?.length ?? 0) > 0;
+  const diaClicavel = (d: Date): boolean =>
+    temHorario(d) || (isSameMonth(d, mes) && encaixeLigado && d.getTime() >= inicioDeHoje);
+
+  /**
+   * A ABERTURA NÃO CAI NUM MÊS QUE ACABOU.
+   *
+   * No último dia útil do mês, depois do último horário, o painel abria no mês
+   * de hoje com todo dia apagado e "Nenhum horário livre em setembro" — e o
+   * próximo horário, amanhã, atrás de uma seta que nada apontava. Todo mês.
+   * Foi o que reprovou o e2e de todos os PRs em 30/09/2026 a partir de ~16h BRT.
+   *
+   * A decisão é tomada UMA vez, quando os horários do mês de abertura chegam:
+   * sem nenhum horário publicado nele, o painel passa ao mês seguinte. Quem
+   * volta à mão (para um encaixe hoje) fica onde voltou. Sem jornada publicada
+   * não há o que procurar no mês seguinte, e o aviso é o próximo passo.
+   */
+  // Ajuste de estado DURANTE o render, não num efeito: o mês morto nem chega a
+  // ser pintado (https://react.dev/learn/you-might-not-need-an-effect).
+  const [aberturaDecidida, setAberturaDecidida] = React.useState(false);
+  const aberturaCarregada = mesCarregado != null && dadosDoMesEmTela && isSameMonth(mes, ancora);
+  if (!aberturaDecidida && aberturaCarregada && !instanteInicial) {
+    setAberturaDecidida(true);
+    if (publicouHorarios && !erroAoCarregar && !semanas.flat().some(temHorario)) {
+      setMes(startOfMonth(addDays(startOfMonth(mes), 32)));
+    }
+  }
+
+  const nenhumDiaClicavel = semanas.flat().every((d) => !diaClicavel(d));
 
   const motivoDoBloqueio: "sem-jornada" | "erro" | "sem-vaga" | null = !publicouHorarios
     ? "sem-jornada"
@@ -253,6 +487,121 @@ export function PainelDeMarcacao({
 
   const doDia = dia ? (horariosPorDia[format(dia, "yyyy-MM-dd")] ?? []) : [];
 
+  const partesDaHora = /^([01]\d|2[0-3]):([0-5]\d)(?::\d{2})?$/.exec(horaDoEncaixe);
+
+  /**
+   * "10:30" do dia escolhido, no fuso que o painel EXIBE ("Horários no fuso …"),
+   * vira instante pela mesma conversão do motor (`lib/agenda/fuso.ts`).
+   *
+   * ⚠️ NUNCA `new Date(ano, mes, dia, hora)`: isso é o fuso do NAVEGADOR. Para
+   * quem atende em São Paulo e abre a agenda com o computador em outro fuso, o
+   * compromisso nasceria horas fora do que a pessoa combinou com o cliente.
+   */
+  const usarHoraDoEncaixe = () => {
+    if (!dia || !fuso || !partesDaHora) return;
+    const instante = instanteDe(
+      {
+        ano: dia.getFullYear(),
+        mes: dia.getMonth() + 1,
+        dia: dia.getDate(),
+        hora: Number(partesDaHora[1]),
+        minuto: Number(partesDaHora[2]),
+      },
+      fuso,
+    ).toISOString();
+    setHorario({ instante, rotulo: `${partesDaHora[1]}:${partesDaHora[2]}` });
+  };
+
+  /**
+   * O encaixe mora na coluna de horários. Com horários no dia ele vem DEPOIS da
+   * lista, recolhido; sem nenhum, vem ANTES dela — senão a lista vazia, que
+   * estica para ocupar a coluna, empurrava o campo para o pé da coluna, embaixo
+   * de um vão em branco (medido na tela, 1440×900).
+   */
+  const blocoDoEncaixe =
+    encaixeLigado && dia ? (
+      <div data-testid="encaixe" className={cn("shrink-0", doDia.length > 0 && "mt-2")}>
+        {doDia.length === 0 && (
+          /*
+            DOIS casos diferentes, e a tela dizia um só.
+
+            `publicouHorarios === false` é "esta pessoa NUNCA publicou jornada":
+            nenhum dia abre, e o que falta é configurar os horários. Com jornada
+            publicada, um dia sem janela é FOLGA (ou dia sem expediente) — a
+            pessoa tem jornada, este dia é que não abre. Dizer "nenhum horário
+            publicado neste dia" nos dois casos lê-se como "a pessoa não tem
+            jornada", que é falso no segundo.
+          */
+          <p className="mb-2 text-xs text-text-muted">
+            {/*
+              LITERAL, e não `t(mensagemDoDiaSemJanela(publicouHorarios))`: o
+              guarda de espanhol (`tests/unit/i18n-espanhol-cobre-a-tela.test.ts`)
+              varre `t("literal")`, então `t(variável)` ESCAPA da cobrança — a
+              frase ficaria sem tradução com o guarda verde sobre a ausência
+              (achado da triagem do #1107, item 5). Aqui só a folga alcança (a
+              porta do encaixe exige jornada publicada) e o texto do outro caso
+              tem bloco próprio; o literal e `mensagemDoDiaSemJanela(true)` ficam
+              amarrados por teste em `agenda-do-atendente-diz-por-que.test.tsx`.
+            */}
+            {t("Este dia está fora da jornada publicada (folga ou dia sem expediente).")}
+          </p>
+        )}
+        {/*
+          Recolhido quando o dia TEM horários — a grade continua sendo o
+          caminho de todo dia, e o encaixe, a exceção. Aberto direto quando
+          não tem: ali ele é a única coisa que o clique no dia podia querer.
+        */}
+        {!encaixeAberto && doDia.length > 0 ? (
+          <button
+            type="button"
+            data-testid="abrir-encaixe"
+            onClick={() => setEncaixeAberto(true)}
+            className={cn(
+              "h-11 w-full rounded-sm border border-dashed border-border text-sm text-text-muted transition-colors duration-fast ease-out lg:h-9",
+              "hover:border-accent hover:text-text",
+              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-500",
+            )}
+          >
+            {t("Outro horário")}
+          </button>
+        ) : (
+          <div className="space-y-1.5">
+            <label htmlFor="hora-do-encaixe" className="block text-xs font-medium text-text-muted">
+              {t("Outro horário")}
+            </label>
+            <div className="flex gap-2">
+              <Input
+                id="hora-do-encaixe"
+                data-testid="hora-do-encaixe"
+                type="time"
+                step={60}
+                value={horaDoEncaixe}
+                onChange={(e) => setHoraDoEncaixe(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") usarHoraDoEncaixe();
+                }}
+                aria-describedby="ajuda-do-encaixe"
+                className="h-11 min-w-0 flex-1 px-2 tabular-nums lg:h-9"
+              />
+              <Button
+                variant="outline"
+                size="sm"
+                data-testid="usar-hora-do-encaixe"
+                disabled={!partesDaHora}
+                onClick={usarHoraDoEncaixe}
+                className="lg:h-9"
+              >
+                {t("Usar")}
+              </Button>
+            </div>
+            <p id="ajuda-do-encaixe" className="text-[11px] leading-4 text-text-subtle">
+              {t("Vale fora dos horários publicados. A agenda só recusa se o horário já estiver ocupado.")}
+            </p>
+          </div>
+        )}
+      </div>
+    ) : null;
+
   if (tempo === "marcado" && marcado) {
     return (
       <div
@@ -267,10 +616,10 @@ export function PainelDeMarcacao({
               também. */}
           <h3 className="mt-3 text-base font-semibold">{t("Marcado.")}</h3>
           <p className="mt-1 text-sm text-text-muted">
-            {format(new Date(marcado.instante), t("EEEE, d 'de' MMMM 'às' HH:mm"), { locale: localeDaData })}
+            {format(parede(marcado.instante), t("EEEE, d 'de' MMMM 'às' HH:mm"), { locale: localeDaData })}
           </p>
           <p className="mt-0.5 text-xs text-text-subtle">
-            {t(tipo)} · {duracaoMin} {t("min · com")} {responsavel.nome}
+            {tipo} · {duracaoConfirmada ?? duracaoMin} {t("min · com")} {responsavel.nome}
           </p>
           {quemSeraAtendido && !quemSeraAtendido.aceitaMensagem && (
             // Repetido aqui de propósito: o aviso do passo anterior sumiu da
@@ -281,7 +630,17 @@ export function PainelDeMarcacao({
             </p>
           )}
           <div className="mt-5 flex gap-2">
-            <Button variant="outline" size="sm" onClick={() => { setMarcado(null); setHorario(null); setDia(null); }}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setMarcado(null);
+                setHorario(null);
+                setDia(null);
+                setEncaixeAberto(false);
+                setHoraDoEncaixe("");
+              }}
+            >
               {t("Marcar outro")}
             </Button>
             {/*
@@ -342,10 +701,8 @@ export function PainelDeMarcacao({
         // colunas cabem com folga. Abaixo disso o painel EMPILHA — os horários
         // viram uma seção sob o calendário, que é o que o cal.com faz e o que
         // esta base já fazia no celular.
-        // `lg:min-h-0` junto do piso: em janela larga e BAIXA (menos de ~560px
-        // de altura) um `min-h-[450px]` sem teto estoura o Sheet e o
-        // `overflow-hidden` corta em silêncio — o mesmo modo de falha que este
-        // painel já teve na horizontal.
+        // `lg:min-h-0`: de `lg` para cima o painel tem a altura do conteúdo e
+        // quem rola é o Sheet (`_client.tsx`); o piso de 450px é do empilhado.
         "flex min-h-[450px] flex-col overflow-hidden rounded-lg border border-border bg-surface lg:min-h-0 lg:w-fit lg:flex-row",
         className,
       )}
@@ -360,12 +717,14 @@ export function PainelDeMarcacao({
           <AvatarDaPessoa pessoa={responsavel} tamanho="sm" />
           <span className="truncate text-sm font-semibold">{responsavel.nome}</span>
         </div>
-        <h3 className="mt-3 text-base font-semibold leading-tight">{tipo}</h3>
+        <h3 className="mt-3 break-words text-base font-semibold leading-tight">{t("Agendar")} {tipo}</h3>
         <dl className="mt-3 space-y-2 text-xs text-text-muted">
-          <div className="flex items-center gap-1.5">
-            <Clock size={14} aria-hidden />
-            <dd className="tabular-nums">{duracaoMin} minutos</dd>
-          </div>
+          {permiteEscolherDuracao ? null : (
+            <div className="flex items-center gap-1.5">
+              <Clock size={14} aria-hidden />
+              <dd className="tabular-nums">{duracaoMin} minutos</dd>
+            </div>
+          )}
           {local ? (
             <div className="flex items-center gap-1.5">
               <MapPin size={14} aria-hidden />
@@ -373,6 +732,54 @@ export function PainelDeMarcacao({
             </div>
           ) : null}
         </dl>
+        {/*
+          A DURAÇÃO DEIXOU DE SER SÓ DO SERVIÇO (issue #3709).
+
+          O campo nasce com o valor do serviço — o padrão continua sendo ele — e
+          existe porque um atendimento técnico externo não dura o mesmo que
+          outro. O que ele NÃO é: um número solto que viaja até o banco. Cada
+          tecla válida é anunciada a quem calcula os horários
+          (`onDuracaoMudar`), e a lista ao lado passa a exigir aquele tanto de
+          tempo livre; valor fora de 5…1440 não é anunciado, limpa a escolha de
+          horário e trava o Confirmar.
+        */}
+        {permiteEscolherDuracao ? (
+          <div className="mt-3">
+            <label
+              htmlFor="duracao-do-atendimento"
+              className="block text-xs font-medium text-text-muted"
+            >
+              {t("Duração (minutos)")}
+            </label>
+            <Input
+              id="duracao-do-atendimento"
+              data-testid="duracao-do-atendimento"
+              type="number"
+              inputMode="numeric"
+              min={DURACAO_MINIMA_MIN}
+              max={DURACAO_MAXIMA_MIN}
+              step={5}
+              value={duracaoTexto}
+              onChange={(e) => mudarDuracao(e.target.value)}
+              aria-describedby="ajuda-da-duracao"
+              aria-invalid={duracaoOk ? undefined : true}
+              className="mt-1 h-9 w-24 px-2 tabular-nums"
+            />
+            <p
+              id="ajuda-da-duracao"
+              data-testid={duracaoOk ? "ajuda-da-duracao" : "duracao-invalida"}
+              role={duracaoOk ? undefined : "alert"}
+              className={cn(
+                "mt-1 text-[11px] leading-4",
+                duracaoOk ? "text-text-subtle" : "text-warning",
+              )}
+            >
+              {duracaoOk
+                ? t("O padrão é a duração do serviço. Mude se este atendimento precisar de mais ou menos tempo.")
+                : t("Escolha uma duração entre 5 e 1440 minutos.")}
+            </p>
+          </div>
+        ) : null}
         {fuso ? (
           <p className="mt-4 border-t border-border pt-3 text-[11px] leading-4 text-text-subtle">
             {t("Horários no fuso")} <span className="font-mono">{fuso.replace("_", " ")}</span>.
@@ -382,6 +789,18 @@ export function PainelDeMarcacao({
 
       {/* CORPO — o mês. 420–480px é a faixa medida no cal.com; aqui ela é
           `min-width` e não largura fixa, porque no celular a coluna ocupa tudo. */}
+      {/*
+        ⚠️ SEM rolagem própria — o corpo cresce e quem rola é o Sheet.
+
+        Em 2026-09-15 o Confirmar ficou fora da caixa (1280×800: começava em
+        840px) porque o painel tinha a altura do Sheet e o Sheet não rolava; o
+        remendo foi dar `lg:overflow-y-auto` a este corpo. Não bastou: a altura
+        que sobrava para o painel era o que o formulário acima deixava, e em
+        janela baixa (1280×500, 1024×560), pela conta das alturas do formulário,
+        isso é quase nada — o corpo rolava dentro de uma fresta. Agora o Sheet
+        rola (`_client.tsx`), e um segundo rolador aqui dentro só prenderia a
+        roda do mouse no de dentro.
+      */}
       <div
         data-testid="corpo-da-marcacao"
         className="flex min-w-0 flex-1 flex-col p-4 lg:min-w-[420px]"
@@ -405,15 +824,6 @@ export function PainelDeMarcacao({
               size="icon"
               aria-label={t("Próximo mês")}
               data-testid="mes-seguinte"
-              // NÃO leva a um mês que a consulta nunca cobriu.
-              //
-              // O mês visível é estado LOCAL deste painel e navegar não
-              // reconsulta nada: a busca pede 30 dias a partir de hoje. Dois
-              // cliques aqui, numa organização perfeitamente configurada,
-              // entregavam 42 dias mortos sem toast e sem aviso. O bloco de
-              // motivo acima já explica quando acontece; desabilitar evita
-              // PRODUZIR o estado, que é melhor que explicá-lo.
-              disabled={!temDiaConsultadoDepois}
               onClick={() => setMes((m) => startOfMonth(addDays(startOfMonth(m), 32)))}
             >
               <CaretRight size={16} weight="bold" aria-hidden />
@@ -428,12 +838,7 @@ export function PainelDeMarcacao({
             data-testid="sem-jornada-publicada"
             className="mb-3 rounded-sm border border-warning/40 bg-warning-bg p-3"
           >
-            <p className="text-sm font-semibold text-text">
-              {t("Você ainda não publicou seus horários de atendimento")}
-            </p>
-            <p className="mt-1 text-xs leading-4 text-text-muted">
-              {t("Sem eles ninguém consegue marcar — nem você, nem o agente.")}
-            </p>
+            <AvisoDeJornadaNaoPublicada quemLeEhODono={responsavel.nome === "Você"} />
             {/*
               O AVISO VIRA PORTA.
 
@@ -493,9 +898,7 @@ export function PainelDeMarcacao({
               {t("Nenhum horário livre em")} {format(mes, "MMMM", { locale: localeDaData })}
             </p>
             <p className="mt-1 text-xs leading-4 text-text-muted">
-              {t(
-                "Os próximos 30 dias são o que está publicado hoje — meses adiante aparecem conforme a data se aproxima.",
-              )}
+              {t("Não há horário livre publicado neste mês.")}
             </p>
           </div>
         )}
@@ -530,7 +933,13 @@ export function PainelDeMarcacao({
             // Dia sem horário nasce apagado E não clicável. Oferecer o clique e
             // depois dizer "não tem nada" gasta uma interação para entregar a
             // mesma informação que a cor já dava.
-            const disponivel = livres.length > 0 && isSameMonth(d, mes);
+            //
+            // A exceção é o ENCAIXE: ali o clique entrega outra coisa — o campo
+            // de hora —, e o dia sem grade fica clicável mas SEM a cor de vaga.
+            // `data-disponivel` segue dizendo "tem horário publicado".
+            const disponivel = temHorario(d);
+            const clicavel = diaClicavel(d);
+            const soEncaixe = clicavel && !disponivel;
             const escolhido = dia !== null && isSameDay(d, dia);
             return (
               <button
@@ -538,7 +947,8 @@ export function PainelDeMarcacao({
                 type="button"
                 data-testid={`dia-${chave}`}
                 data-disponivel={disponivel}
-                disabled={!disponivel}
+                data-encaixe={soEncaixe || undefined}
+                disabled={!clicavel}
                 // O DIA DIZ POR QUÊ. O rótulo era `— sem horário` para tudo:
                 // dia de outro mês, dia sem vaga e dia com a consulta quebrada
                 // liam igual, e quem usa leitor de tela recebia a constatação da
@@ -548,17 +958,20 @@ export function PainelDeMarcacao({
                 aria-label={
                   disponivel
                     ? `${format(d, t("d 'de' MMMM"), { locale: localeDaData })} — ${livres.length} ${t("horários")}`
-                    : `${format(d, t("d 'de' MMMM"), { locale: localeDaData })} — ${razaoDoDia(isSameMonth(d, mes))}`
+                    : soEncaixe
+                      ? `${format(d, t("d 'de' MMMM"), { locale: localeDaData })} — ${t("nenhum horário publicado neste dia")}`
+                      : `${format(d, t("d 'de' MMMM"), { locale: localeDaData })} — ${razaoDoDia(isSameMonth(d, mes))}`
                 }
-                title={disponivel ? undefined : razaoDoDia(isSameMonth(d, mes))}
+                title={clicavel ? undefined : razaoDoDia(isSameMonth(d, mes))}
                 onClick={() => { setDia(d); setHorario(null); }}
                 className={cn(
                   "flex h-9 items-center justify-center rounded-sm text-sm tabular-nums transition-colors duration-fast ease-out",
                   "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-500",
                   !isSameMonth(d, mes) && "text-text-subtle",
                   disponivel && !escolhido && "bg-accent-soft text-text hover:bg-accent hover:text-accent-foreground",
+                  soEncaixe && !escolhido && "text-text hover:bg-accent-soft",
                   escolhido && "bg-accent font-semibold text-accent-foreground",
-                  !disponivel && "cursor-default text-text-subtle",
+                  !clicavel && "cursor-default text-text-subtle",
                   isSameDay(d, agora) && !escolhido && "ring-1 ring-inset ring-border-strong",
                 )}
               >
@@ -569,13 +982,33 @@ export function PainelDeMarcacao({
         </div>
 
         {tempo === "confirmando" && horario && (
-          <div className="mt-4 border-t border-border pt-4" data-testid="confirmacao">
+          <div ref={confirmacaoRef} className="mt-4 border-t border-border pt-4" data-testid="confirmacao">
             <p className="text-sm">
               <span className="text-text-muted">{t("Confirmar")} </span>
               <span className="font-semibold">
-                {format(new Date(horario.instante), t("EEEE, d 'de' MMMM 'às' HH:mm"), { locale: localeDaData })}
+                {format(parede(horario.instante), t("EEEE, d 'de' MMMM 'às' HH:mm"), { locale: localeDaData })}
               </span>
             </p>
+
+            {recusa?.instante === horario.instante && (
+              // A RECUSA FICA AQUI, ao lado do botão que a produziu. O toast do
+              // `showApiError` também a diz, mas some em segundos e mora no canto
+              // da tela — e quem marcou por cima de um compromisso precisa ler o
+              // motivo enquanto corrige a hora.
+              //
+              // `lg:w-0 lg:min-w-full`: a frase ocupa a largura do corpo SEM
+              // entrar na conta da largura dele. O painel é `lg:w-fit`, e a
+              // frase numa linha só pedia mais espaço — medido: ao aparecer a
+              // recusa, a coluna de horários pulava 9px para a direita.
+              <div
+                data-testid="recusa-da-marcacao"
+                role="alert"
+                className="mt-3 flex gap-2 rounded-sm border border-warning/40 bg-warning-bg p-2.5 lg:w-0 lg:min-w-full"
+              >
+                <Warning size={16} weight="fill" className="mt-0.5 shrink-0 text-warning" aria-hidden />
+                <p className="text-xs leading-4 text-text">{recusa.mensagem}</p>
+              </div>
+            )}
 
             {quemSeraAtendido && !quemSeraAtendido.aceitaMensagem && (
               // Aviso, não bloqueio: o botão de confirmar continua ativo logo
@@ -601,6 +1034,9 @@ export function PainelDeMarcacao({
               <Button
                 size="sm"
                 data-testid="confirmar-marcacao"
+                // Sem duração válida não há o que confirmar: os horários em tela
+                // foram calculados para OUTRA régua (ver `mudarDuracao`).
+                disabled={!duracaoOk}
                 onClick={async () => {
                   // ⚠️ ERA `setMarcado(horario); onConfirmar?.(...)` — nesta ordem
                   // e sem esperar. A vista de sucesso aparecia por estado local do
@@ -613,11 +1049,22 @@ export function PainelDeMarcacao({
                   // `showApiError` aparece e o painel fica onde estava, com o
                   // horário ainda escolhido para tentar de novo.
                   try {
-                    await onConfirmar?.(horario.instante);
+                    await onConfirmar?.(horario.instante, duracaoDigitada);
+                    setRecusa(null);
+                    setDuracaoConfirmada(duracaoDigitada);
                     setMarcado(horario);
-                  } catch {
-                    // silêncio proposital: quem reporta é o `showApiError` da
-                    // mutação, e engolir aqui não esconde nada que não seja dito.
+                  } catch (err) {
+                    // A mensagem da ROTA só quando ela é uma recusa com motivo
+                    // (4xx). Rede e 5xx chegam como "HTTP 500", que não é frase
+                    // para a tela — e inventar um motivo seria pior que admitir
+                    // que não marcou.
+                    setRecusa({
+                      instante: horario.instante,
+                      mensagem:
+                        err instanceof ApiError && err.status >= 400 && err.status < 500
+                          ? err.message
+                          : t("Não foi marcado. Tente de novo."),
+                    });
                   }
                 }}
               >
@@ -648,6 +1095,7 @@ export function PainelDeMarcacao({
           <p className="mb-2 shrink-0 text-xs font-semibold text-text-muted first-letter:uppercase">
             {dia ? format(dia, t("EEEE, d 'de' MMM"), { locale: localeDaData }) : ""}
           </p>
+          {doDia.length === 0 && blocoDoEncaixe}
           {/*
             `data-testid` para a lista poder ser MEDIDA, e não só vista. O
             `overflow-y-auto` aqui sempre esteve certo e era INERTE: um
@@ -711,6 +1159,8 @@ export function PainelDeMarcacao({
               </button>
             ))}
           </div>
+
+          {doDia.length > 0 && blocoDoEncaixe}
         </div>
       </div>
     </div>

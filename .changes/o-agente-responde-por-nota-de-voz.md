@@ -11,6 +11,11 @@ ElevenLabs em **Agente de IA → Credenciais**, escolha a voz em **Agente de IA 
 do agente, em **Agente de IA → Editar agente**. Você escolhe
 quando: sempre, nunca, ou só quando o cliente mandar áudio primeiro (o padrão).
 
+A mesma chave do ElevenLabs também pode ouvir os áudios do cliente: em
+**Agente de IA → Provedores**, no ponto "Ouvir o áudio do cliente", escolha
+**ElevenLabs (Scribe)**. O padrão continua sendo "Automático" — quem não escolher nada
+segue transcrevendo como antes.
+
 O texto que o agente escreveria continua existindo — a conversa não fica cega: a
 busca, a exportação de dados e o classificador de follow-up continuam lendo
 normalmente. O custo da síntese entra no mesmo orçamento mensal da organização

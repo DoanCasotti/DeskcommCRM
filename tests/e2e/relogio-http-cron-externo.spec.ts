@@ -7,11 +7,11 @@
  *
  * ## Por que isto não podia continuar sem prova
  *
- * Para quem **não tem** o `scheduler` da VPS — o plano gratuito da Vercel é o
- * caso comum, e é o cenário inteiro do runbook `vercel-hobby-relogio.md` — o
- * relógio externo não é conveniência: é o **único** motor do follow-up. E a
- * falha dele é silenciosa: os follow-ups simplesmente não andam, ninguém recebe
- * erro, e a instalação parece saudável.
+ * Para quem **não tem** o `scheduler` da VPS — hospedagem sem cron de minuto,
+ * ou instalação em que o serviço não subiu; é o cenário inteiro do runbook
+ * `relogio-http.md` — o relógio externo não é conveniência: é o
+ * **único** motor do follow-up. E a falha dele é silenciosa: os follow-ups
+ * simplesmente não andam, ninguém recebe erro, e a instalação parece saudável.
  *
  * O que existia era `tests/unit/relogio-hobby-workflow.test.ts`, e ele mede
  * TEXTO — que o `.yml` cita o caminho do tick, a variável e o `exit 1`. Isso
@@ -46,7 +46,7 @@ import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./helpers/test";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 import { CAMINHO_DO_TICK } from "../../lib/relogio/tarefas";

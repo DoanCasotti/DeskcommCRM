@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 
 import { nomeDoOperador, resolverOperador } from "@/lib/legal/operador";
 import { createClient } from "@/lib/supabase/server";
-import { normalizarIdioma } from "@/lib/i18n/idiomas";
+import { idiomaDoVisitante } from "@/lib/i18n/idiomaAnonimo";
 import { traduzir } from "@/lib/i18n/dicionario";
 
 export const dynamic = "force-dynamic";
@@ -20,7 +20,7 @@ export default async function TermsPage() {
   const {
     data: { user },
   } = await supabase.auth.getUser();
-  const idioma = normalizarIdioma(
+  const idioma = await idiomaDoVisitante(
     (user?.user_metadata?.locale as string | undefined) ?? null,
   );
   const t = (texto: string) => traduzir(texto, idioma);
@@ -66,7 +66,7 @@ export default async function TermsPage() {
         <h2 className="text-base font-semibold">{t("3. Sua conta")}</h2>
         <p>
           {t(
-            "O acesso é pessoal. Você é responsável por manter sua senha em segredo e pelo que for feito com a sua conta. Contas de administrador exigem verificação em duas etapas. Avise o operador imediatamente se suspeitar de acesso indevido.",
+            "O acesso é pessoal. Você é responsável por manter sua senha em segredo e pelo que for feito com a sua conta. A verificação em duas etapas é opcional e pode ser exigida por quem administra a empresa. Avise o operador imediatamente se suspeitar de acesso indevido.",
           )}
         </p>
       </section>

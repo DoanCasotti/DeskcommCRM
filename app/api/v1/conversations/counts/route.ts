@@ -11,12 +11,16 @@ import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
 
 import { fail, ok } from "@/lib/api/wrappers";
-import { loadAuthUser, resolveActiveOrg } from "@/lib/auth/server";
+import { idsDosCanaisDesativados } from "@/lib/channels/desativado";
+import { loadAuthUser } from "@/lib/auth/server";
+import { orgAtivaDaApi } from "@/lib/auth/require-role";
 import { traduzir } from "@/lib/i18n/dicionario";
 import { CONVERSATION_TERMINAL_STATUSES } from "@/lib/schemas";
 import { orgTemAutomatico } from "@/lib/ai/agents/org-tem-automatico";
 import { comandosDaFila } from "@/lib/inbox/comando-da-conversa";
+import { aplicarMarcadores, modoDeEtiqueta } from "@/lib/inbox/marcador-da-conversa";
 import { createClient } from "@/lib/supabase/server";
+import { idsDeContatosPessoais } from "../_handler";
 
 export const dynamic = "force-dynamic";
 
@@ -50,8 +54,20 @@ export function filtrosAuxiliaresDaContagem(
   const filtros: FiltroDeContagem[] = [];
   const canal = sp.get("channel_session_id");
   if (canal) filtros.push(["channel_session_id", canal]);
-  const tag = sp.get("tag");
-  if (tag) filtros.push(["tag", tag]);
+  // O atendente escolhido pelo gerente. Só id de usuário (uuid) entra: qualquer
+  // outra coisa seria ignorada em silêncio e a contagem divergiria da lista.
+  const atendente = sp.get("assigned_to");
+  if (atendente && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(atendente)) {
+    filtros.push(["assigned_to_user_id", atendente]);
+  }
+  // O MARCADOR não entra nesta lista, e não é esquecimento: ele não é
+  // IGUALDADE numa coluna, é um `or=` sobre DUAS caixas — `conversations.tags`
+  // e o campo calculado do contato. `conversations` não tem coluna `tag` (`tag`
+  // é o nome do parâmetro da URL): com ele aqui, o laço lá embaixo pedia
+  // `.eq("tag", …)`, o PostgREST devolvia 42703 (`undefined_column`) e a rota
+  // INTEIRA respondia 500 — com um marcador filtrado, toda aba do Inbox ficava
+  // sem número, a "Fechadas" inclusive (#1223). Quem aplica o marcador é
+  // `aplicarMarcador`, a mesma régua que a lista usa.
   return filtros;
 }
 
@@ -73,7 +89,9 @@ export async function GET(req: NextRequest): Promise<Response> {
   }
 
   const authUser = await loadAuthUser();
-  const activeOrg = authUser ? await resolveActiveOrg(authUser) : null;
+  const ativa = await orgAtivaDaApi(authUser, requestId);
+  if (!ativa.ok) return ativa.response;
+  const activeOrg = ativa.org;
   if (!activeOrg) {
     return fail(
       "no_active_org",
@@ -87,16 +105,35 @@ export async function GET(req: NextRequest): Promise<Response> {
   const sp = req.nextUrl.searchParams;
   const auxiliares = filtrosAuxiliaresDaContagem(sp);
   const soNaoLidas = contagemSoNaoLidas(sp);
+  // ⚠️ O badge conta o MESMO que a lista mostra, então o marcador é lido com
+  // `getAll` e o `modo` viaja junto (#1274). Ler com `get` aqui deixaria o badge
+  // de um filtro de duas etiquetas contando uma só — e a aba diria "Fila 3"
+  // listando duas: exatamente a divergência que este arquivo existe para
+  // impedir, agora pelo caminho do marcador em vez do de canal.
+  const marcadores = sp.getAll("tag");
+  const modo = modoDeEtiqueta(sp.get("modo")) ?? "e";
 
   // ⚠️ TODA contagem nasce daqui, e daqui já sai com `organization_id` E com os
   // filtros auxiliares. Herdar tira a opção de esquecer: não existe o caminho
   // "montei uma contagem e não pus o filtro".
-  const countExact = () => {
+  //
+  // Pessoal não soma em nenhuma aba (spec 21, etapa 7 — critério 3): ao marcar,
+  // a contagem cai exatamente nas não-lidas daquele contato. A MESMA exclusão
+  // da lista, pela mesma primitiva — sem ela o badge diria o que a aba esconde.
+  const pessoais = await idsDeContatosPessoais(supabase, org);
+  // Canal desativado nunca entra na inbox: o mesmo corte da lista, para badge
+  // e aba nunca divergirem.
+  const idsDesativados = await idsDosCanaisDesativados(supabase, org);
+  const countExact = (filtrosDaAba: readonly FiltroDeContagem[] = auxiliares) => {
     let q = supabase
       .from("conversations")
       .select("id", { count: "exact", head: true })
       .eq("organization_id", org);
-    for (const [coluna, valor] of auxiliares) q = q.eq(coluna, valor);
+    if (idsDesativados.length > 0) q = q.not("channel_session_id", "in", `(${idsDesativados.join(",")})`);
+    for (const [coluna, valor] of filtrosDaAba) q = q.eq(coluna, valor);
+    // O marcador entra pela régua da LISTA — a mesma função, não uma segunda.
+    q = aplicarMarcadores(q, marcadores, modo);
+    if (pessoais.length > 0) q = q.not("contact_id", "in", `(${pessoais.join(",")})`);
     if (soNaoLidas) q = q.gt("unread_count_for_assignee", 0);
     return q;
   };
@@ -112,7 +149,27 @@ export async function GET(req: NextRequest): Promise<Response> {
   // convenção da regra: assume que há automático.
   const automaticoDaOrg = await orgTemAutomatico(supabase, org);
 
-  const [fila, automatico, mine, all, closed] = await Promise.all([
+  // O badge de "Minhas" precisa contar o MESMO que a aba lista (#2848): a aba
+  // passou a trazer as conversas em que eu PARTICIPO (convite é da conversa), e
+  // um badge que só conta `assigned_to=me` mandaria a convidada procurar
+  // trabalho que a tela não mostra. Mesma fábrica da aba.
+  // ⚠️ Sem data (mock de teste sem `.is`, banco fora) = sem participações = `.eq`
+  // de sempre: o badge nunca muda de regra sozinho, só GANHA conversas quando
+  // existe convite de pé.
+  let idsParticipadas: string[] = [];
+  try {
+    const participadasDoUsuario = await supabase
+      .from("conversation_participants")
+      .select("conversation_id")
+      .eq("organization_id", org)
+      .eq("user_id", user.id)
+      .is("left_at", null);
+    idsParticipadas = (participadasDoUsuario.data ?? []).map((r) => r.conversation_id);
+  } catch {
+    idsParticipadas = [];
+  }
+
+  const [fila, automatico, mine, all, closed, archived] = await Promise.all([
     // A FILA DEIXOU DE SER "sem dono + status de espera".
     //
     // Aquele par contava como trabalho humano pendente tudo que o robô estava
@@ -127,18 +184,43 @@ export async function GET(req: NextRequest): Promise<Response> {
     // A aba "Automático". Antes ela pedia `status='ai_handling'`, escrito por UM
     // caminho só em produção — por isso vivia quase vazia.
     countExact().eq("comando_da_conversa", "automatico"),
-    countExact()
-      .eq("assigned_to_user_id", user.id)
+    // Minhas IGNORA o atendente escolhido pelo gerente: a lista da aba pede
+    // `assigned_to=me`, que vence a escolha. Com o atendente aqui, o badge
+    // contava `eu E ele` (zero) enquanto a aba listava as do gerente.
+    // Mesma regra da lista (#2848): sem participações, `.eq` de sempre; com
+    // convite de pé, `or=` com as conversas em que eu participo — porque um badge
+    // que conta o que a aba não mostra manda a convidada procurar trabalho que a
+    // tela não exibe.
+    (idsParticipadas.length > 0
+      ? countExact(auxiliares.filter(([coluna]) => coluna !== "assigned_to_user_id")).or(
+          `assigned_to_user_id.eq.${user.id},id.in.(${idsParticipadas.join(",")})`,
+        )
+      : countExact(auxiliares.filter(([coluna]) => coluna !== "assigned_to_user_id")).eq(
+          "assigned_to_user_id",
+          user.id,
+        ))
       .not("status", "in", `(${CONVERSATION_TERMINAL_STATUSES.join(",")})`),
     countExact(),
     // A aba "Fechadas" existia SEM número nenhum. Num inbox antigo, é o número
     // que diz o tamanho do arquivo — e a sua ausência fazia a aba parecer um
     // lugar vazio. Mesma fábrica: herda organização e filtros.
-    countExact().in("status", CONVERSATION_TERMINAL_STATUSES),
+    //
+    // ⚠️ `eq("closed")`, e NÃO `in(TERMINAIS)` como antes. O par
+    // fechada/arquivada agora tem DUAS abas, e cada badge tem de contar
+    // exatamente a lista da sua aba: `in(TERMINAIS)` somava arquivadas (e, antes
+    // da 0222, resolvidas) no número de "Fechadas", que lista só
+    // `status='closed'` — o badge dizia 120 e a lista mostrava 40. Era a mesma
+    // classe de defeito que este arquivo já conserta desde a Fila, encontrada
+    // aqui no caminho (#923).
+    countExact().eq("status", "closed"),
+    // A aba "Arquivadas" (#923): a pasta do histórico, separada de "Fechadas"
+    // para que arquivar seja reversível e auditável sem se confundir com o
+    // encerramento do atendimento.
+    countExact().eq("status", "archived"),
   ]);
 
   const firstErr =
-    fila.error ?? automatico.error ?? mine.error ?? all.error ?? closed.error;
+    fila.error ?? automatico.error ?? mine.error ?? all.error ?? closed.error ?? archived.error;
   if (firstErr) {
     return fail("internal_error", firstErr.message, 500, { requestId });
   }
@@ -155,6 +237,7 @@ export async function GET(req: NextRequest): Promise<Response> {
       mine: mine.count ?? 0,
       all: all.count ?? 0,
       closed: closed.count ?? 0,
+      archived: archived.count ?? 0,
     },
     { requestId },
   );

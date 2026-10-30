@@ -15,16 +15,48 @@
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+import { graphVersion } from "@/lib/graph-version";
+import { createAdminClient } from "@/lib/supabase/admin";
+
+import { linhaDoEspelho } from "../linha-do-espelho";
+
+import { resolveMetaCreds } from "./credentials";
 import { sendTemplate } from "./send-template";
 
 export interface SendTemplateForSessionInput {
   beforeSend?: () => Promise<void>;
   organizationId: string;
+  /**
+   * `channel_sessions.meta_phone_number_id` DESTA conexão — o `sessionRef` do canal
+   * oficial. É a segunda metade da chave por que a credencial é resolvida (a primeira
+   * é a organização) e o número por que a mensagem sai.
+   *
+   * Vem do chamador em vez de ser buscado aqui porque é ele quem tem a linha da
+   * sessão na mão — e pedir a credencial "da sessão" com o número de OUTRA conexão
+   * não casaria linha nenhuma, devolvendo o envio ao ambiente: o defeito que esta
+   * fatia fecha, de volta pela porta dos fundos.
+   */
+  sessionRef: string;
   /** Destinatário em dígitos E.164, já resolvido pelo adapter. */
   to: string;
   name: string;
   language: string;
   values: Record<string, string>;
+  /**
+   * Transporte explícito. Ausente = credencial da Meta (sessão, com o ambiente
+   * de reserva). Presente = canal Graph-compatível (parceiro), com host e token
+   * próprios. Sem isto o modelo do parceiro sairia pelo número da Meta.
+   */
+  transport?: {
+    phoneNumberId: string;
+    token: string;
+    graphBase?: string;
+    graphVersion?: string;
+    /** Prefixo dos códigos de erro (`meta_`/`datafy_`). Default `meta`. */
+    errorPrefix?: string;
+  };
+  /** Conexão dona da definição — restringe o `meta_templates` a ela. */
+  channelSessionId?: string | null;
 }
 
 /**
@@ -43,39 +75,63 @@ export async function sendTemplateForSession(
     throw new Error("template_incompleto: nome e idioma são obrigatórios em type=template");
   }
 
-  // A credencial de AMBIENTE é o único caminho deste envio, e a guarda vem
-  // ANTES da consulta ao espelho de propósito: "canal não conectado" é desfecho
-  // da classe `queued` (recuperável), e a ordem dos desfechos é comportamento
-  // neste repo. Sem ela, uma instalação que conectou o número pela TELA
-  // (credencial cifrada no banco, `.env` sem chave) tentaria a Graph com
-  // `Bearer` vazio e viraria `failed` com um erro que não nomeia o motivo real
-  // — a mudança de elegibilidade da #674 transformaria uma fila recuperável em
-  // falha. Com ela, o desfecho é o mesmo de antes do #674: `queued` com
-  // `meta_not_configured`.
+  // A credencial vem da SESSÃO (o que o operador salvou na tela de conexão) e o
+  // ambiente fica só como RESERVA — a mesma porta que `send`, `checkHealth` e
+  // `fetchInboundMedia` já usam. Antes disto este caminho lia
+  // `META_PHONE_NUMBER_ID`/`META_SYSTEM_USER_TOKEN` do ambiente e mais nada: numa
+  // instalação que conectou o número pela TELA (credencial cifrada no banco, `.env`
+  // sem chave) o modelo não sincronizava nem saía, e a recusa não dizia por quê —
+  // logo o modelo, que é justamente o que a janela fechada exige.
   //
-  // Enviar template com a credencial da SESSÃO é um passo próprio (o adapter
-  // ainda não implementa `sendTemplate`); até lá, este caminho é só do env.
-  if (!process.env.META_PHONE_NUMBER_ID || !process.env.META_SYSTEM_USER_TOKEN) {
+  // A GUARDA continua ANTES da consulta ao espelho, e a ordem dos desfechos é
+  // comportamento neste repo: "canal não conectado" é desfecho da classe `queued`
+  // (recuperável). Sem ela, uma instalação sem credencial nenhuma tentaria a Graph
+  // com `Bearer` vazio e viraria `failed` com um erro que não nomeia o motivo real —
+  // e a mudança de elegibilidade da #674 transformaria uma fila recuperável em
+  // falha. Com ela, o desfecho é `queued` com `meta_not_configured`.
+  const creds = input.transport
+    ? {
+        phoneNumberId: input.transport.phoneNumberId,
+        token: input.transport.token,
+        graphVersion: input.transport.graphVersion ?? graphVersion(),
+      }
+    : await resolveMetaCreds(createAdminClient(), {
+        organizationId: input.organizationId,
+        phoneNumberId: input.sessionRef,
+      });
+  if (!creds) {
     throw new Error(
-      "meta_not_configured: sem credencial de ambiente para enviar template (a conexão feita pela tela ainda não é usada por este caminho).",
+      "meta_not_configured: sem credencial para esta sessão (nem na sessão, nem no ambiente).",
     );
   }
 
-  const { data: linha, error } = await db
-    .from("meta_templates")
-    .select("name, language, status, contract_hash, components")
-    .eq("organization_id", input.organizationId)
-    .eq("name", input.name)
-    .eq("language", input.language)
-    .maybeSingle();
+  // Com sessão, a linha DESTA conexão — ou, se não houver, a do canal oficial,
+  // que o sync grava sem conexão. Nunca a de outro número (ver linha-do-espelho.ts).
+  const { data: linha, error } = await linhaDoEspelho<{
+    name: string;
+    language: string;
+    status: string;
+    contract_hash: string;
+    components: unknown;
+    // #2659: sem este campo o contrato era derivado como POSITIONAL e um
+    // template NAMED saía sem `parameter_name` — a Meta respondia
+    // `meta_100: Parameter name is missing or empty` no Inbox e na API.
+    parameter_format: string;
+  }>(db, "name, language, status, contract_hash, components, parameter_format", {
+    organizationId: input.organizationId,
+    name: input.name,
+    language: input.language,
+    channelSessionId: input.channelSessionId,
+  });
 
   if (error) throw new Error(`template_lookup_failed: ${error.message}`);
 
   await input.beforeSend?.();
   const resultado = await sendTemplate({
-    phoneNumberId: process.env.META_PHONE_NUMBER_ID ?? "",
-    token: process.env.META_SYSTEM_USER_TOKEN ?? "",
-    graphVersion: process.env.META_GRAPH_VERSION ?? "v22.0",
+    phoneNumberId: creds.phoneNumberId,
+    token: creds.token,
+    graphVersion: creds.graphVersion,
+    ...(input.transport?.graphBase ? { graphBase: input.transport.graphBase } : {}),
     to: input.to,
     binding: {
       name: input.name,
@@ -92,12 +148,16 @@ export async function sendTemplateForSession(
           contractHash: linha.contract_hash,
           status: linha.status,
           components: linha.components,
+          // Repassa o formato à derivação: é ele que decide se cada parâmetro
+          // textual sai com `parameter_name` (NAMED) ou só com `text` (#2659).
+          parameter_format: linha.parameter_format,
         }
       : null,
   });
 
   if (resultado.sent) return resultado.externalId;
 
+  const prefixo = input.transport?.errorPrefix ?? "meta";
   switch (resultado.reason) {
     case "missing":
       throw new Error(`template_missing: ${input.name} (${input.language}) não está no espelho`);
@@ -108,6 +168,6 @@ export async function sendTemplateForSession(
     case "missing_values":
       throw new Error(`template_missing_values: ${resultado.missing.join(", ")}`);
     case "api_error":
-      throw new Error(`meta_${resultado.code ?? "erro"}: ${resultado.message}`);
+      throw new Error(`${prefixo}_${resultado.code ?? "erro"}: ${resultado.message}`);
   }
 }

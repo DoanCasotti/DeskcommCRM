@@ -54,6 +54,10 @@ const DIR = join(process.cwd(), ".github/workflows");
 const ESCRITA_JUSTIFICADA: Record<string, string> = {
   "publish-image.yml::packages: write":
     "publica a imagem do app no GHCR — é o artefato que o self-hoster instala",
+  "vigia-de-colisao.yml::pull-requests: write":
+    "comenta e rotula o PR cujo número de migration foi tomado depois de ele ficar verde; " +
+    "é o mínimo que escreve (um comentário editado por PR + o rótulo), o workflow não roda " +
+    "código de PR nenhum e não dispara CI — ver scripts/vigia-colisao-de-migration.ts",
   "acolhida.yml::pull-requests: write":
     "comenta a acolhida no PR de fork; é o ÚNICO escopo do workflow (o bloco zera o resto), " +
     "e o job não faz checkout nem usa action nenhuma — ver tests/unit/acolhida-nao-toca-no-fork.test.ts",

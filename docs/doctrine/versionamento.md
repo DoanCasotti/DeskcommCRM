@@ -7,7 +7,7 @@
 
 | Se você quer… | Vá para |
 |---|---|
-| decidir se sua mudança é patch, minor ou major | §A régua |
+| decidir se sua mudança é patch ou minor (major é do dono) | §A régua |
 | saber por que não é você quem escolhe o número | §Ninguém escolhe o número |
 | escrever o fragmento que o seu PR precisa trazer | §O fragmento |
 | saber qual versão está publicada agora | §A versão em vigor |
@@ -37,12 +37,20 @@ Quem lê o número é o operador, não o autor. A régua tem que ser escrita da 
 |---|---|
 | Não precisa fazer nada, e **nada que funcionava mudou de forma** | **patch** — `1.6.0` → `1.6.1` |
 | Não precisa fazer nada, mas **ganhou capacidade nova** | **minor** — `1.6.1` → `1.7.0` |
-| **Precisa agir**: editar `.env`, rodar comando, ou algo que existia sumiu / mudou de forma | **major** — `1.7.0` → `2.0.0` |
+| **Precisa agir**: editar `.env`, rodar comando, ou algo que existia sumiu / mudou de forma | **minor**, com o aviso `⚠️ Requer atenção` em destaque nas notas |
 
-A linha de baixo não é escolha nossa: ela já é lei em `CLAUDE.md`, na doutrina de packaging
-e no [ADR 0001](../adr/0001-packaging-e-distribuicao.md) — *bump que exige edição manual não
-entra; vira issue com plano de migração e vai para uma major*. Esta doutrina apenas estende
-a mesma lógica para baixo, para a faixa onde **todas** as releases do projeto realmente caem.
+**Major só existe por decisão explícita do dono.** Palavras dele, em 07/10: *"Major update é
+somente quando eu pedir. IA nem nenhum workflow decide isso! Mantenha seguindo com minor
+update."* Nenhum fragmento produz major — nem `exige_acao`. Quem corta pede com `--major`
+(`scripts/cortar-release.ts`) ou marcando o input `major` no "Run workflow" do `release.yml`,
+e só quando o dono pediu.
+
+O que protege o operador na linha de baixo é o **aviso**, não o número: o bloco
+`## Requer atenção` do fragmento vira `### ⚠️ Requer atenção` na seção, e é isso que a tela de
+atualização mostra antes do `update.sh`. Continua valendo a lei de `CLAUDE.md`, da doutrina de
+packaging e do [ADR 0001](../adr/0001-packaging-e-distribuicao.md) — *bump que exige edição
+manual não entra; vira issue com plano de migração* —, e o número dessa issue, quando sair,
+é decisão do dono.
 
 ### Por que "comportamento visível" NÃO é a régua
 
@@ -67,17 +75,36 @@ Antes de escolher, escreva a frase que o operador vai ler na tela de atualizaç�
 
 - *"Você não precisa fazer nada."* → **patch**
 - *"Você não precisa fazer nada; agora o sistema também faz X."* → **minor**
-- *"Antes de atualizar, você precisa…"* → **major**
+- *"Antes de atualizar, você precisa…"* → **minor**, com `exige_acao` e o aviso em destaque
 
-Se a terceira frase é verdadeira, o número é major **mesmo que a mudança seja pequena** — o
-custo que ele mede é o do operador, não o do autor.
+Se a terceira frase é verdadeira, o fragmento é `exige_acao` **mesmo que a mudança seja
+pequena** — o custo que ele mede é o do operador, não o do autor. O número continua minor;
+major só quando o dono pede.
+
+### Valor novo num campo de SAÍDA não é "mudar de forma"
+
+Decidido pelo dono do produto em 07/10, no PR #2114 (`crm_list_followups` ganhou o valor
+`nao_disparado` em `situacao`):
+
+- **Acrescentar** um valor a um conjunto fechado que o sistema **devolve** (enum de saída da
+  API, de ferramenta do MCP, de payload de webhook) é **`capacidade_nova`** — desde que o
+  fragmento avise, com o nome do campo e do valor, quem integra ("se a sua integração lê X,
+  ela vai passar a ver também Y"), e que a descrição do contrato diga que valores novos podem
+  aparecer.
+- **Tirar ou renomear** um valor de saída é **`exige_acao`**: a integração que dependia dele
+  quebra sem ter feito nada de errado.
+
+O porquê: quem consome um conjunto de saída já tem de tratar o desconhecido, e o valor novo
+costuma corrigir uma informação que antes era falsa (ali, "concluído" para um retorno que não
+saiu). Sem a linha escrita, cada valor novo reabria a discussão de versão maior.
 
 ---
 
 ## Ninguém escolhe o número
 
 O número é **calculado** a partir do que os PRs declararam, nunca digitado por quem está
-cortando a release. Isso não é preferência de estilo: é o que torna **impossível** a colisão
+cortando a release. A única entrada humana é o pedido de major, que é do dono e só sobe o
+primeiro dígito — o número em si continua calculado. Isso não é preferência de estilo: é o que torna **impossível** a colisão
 entre duas sessões de trabalho paralelas.
 
 Enquanto a escolha era humana, ela dependia de ler `git tag` e somar um — e duas sessões que
@@ -150,6 +177,14 @@ Para conferir o que os fragmentos de agora produziriam, sem escrever nada:
 pnpm release:conferir
 ```
 
+**O fragmento e o mapa da skill de operação.** A skill `deskcomm-operacao`
+ensina ao operador onde fica cada tela, e um fragmento de `capacidade_nova`
+costuma trazer tela ou botão novo. Por isso, quando um PR traz fragmento (ou
+mexe no menu), o pré-voo e o CI conferem se toda tela do `catalogo.ts` está no
+mapa da skill e AVISAM (nunca reprovam). O conserto é acrescentar a tela em
+`references/mapa-da-interface.md` e rodar `pnpm skills:sync`. Comando:
+`bash .agents/skills/deskcomm-operacao/scripts/conferir-mapa.sh`.
+
 Três propriedades, e cada uma resolve um defeito medido:
 
 - **Um arquivo por PR, nome único.** Dois PRs paralelos criam dois arquivos diferentes, e o
@@ -195,6 +230,79 @@ E o `package.json` **não** é a fonte: ele segue em `0.1.0`, de propósito. A f
 
 ---
 
+## A vitrine
+
+Toda versão publicada aparece na página de changelog da LP, nos três idiomas:
+[deskcomm.com.br/changelog](https://www.deskcomm.com.br/changelog),
+[/en/changelog](https://www.deskcomm.com.br/en/changelog) e
+[/es/changelog](https://www.deskcomm.com.br/es/changelog), cada versão com página própria
+(`/changelog/X.Y.Z`). É lá que quem ainda não instalou — e quem decide se atualiza — lê o que
+mudou sem abrir o GitHub.
+
+**Enquanto as três páginas não responderem 200, o parágrafo acima descreve o alvo e não o estado.**
+Elas nascem num PR do repositório `deskcomm-site`, e o corte depende delas: com a vitrine fora do
+ar, o passo abaixo reprova **toda** release depois de 35 tentativas, cerca de meia hora de espera. Quem for cortar confere
+antes — o comando não envelhece, a frase envelheceria:
+
+```bash
+for p in /changelog /en/changelog /es/changelog /guias; do
+  echo "$p: $(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "https://www.deskcomm.com.br$p")"
+done
+```
+
+Quatro `200` e esta seção vale como está escrita. Qualquer `404` e a ordem é a inversa: a vitrine
+entra no ar primeiro, o corte depois.
+
+**Ninguém escreve release no site.** A LP (repositório `deskcomm-site`) lê o `CHANGELOG.md` da
+`main` e revalida a cada 10 minutos. Então a regra de quem corta release não é "lembre de
+atualizar a LP" — regra que não protege quem a escreve —, e sim:
+
+1. **A seção entra no `CHANGELOG.md` pelo caminho normal** (fragmentos → PR de release). Uma
+   seção que chegou à `main` de outro jeito também aparece: a LP lê o arquivo, não as Releases
+   do GitHub. Foi o que salvou a v1.20.0, cuja tag foi criada à mão e nunca ganhou Release.
+2. **O cabeçalho da seção é contrato.** `## [X.Y.Z] — AAAA-MM-DD`, subseções em `###`. O leitor
+   da LP (`deskcomm-site/lib/changelog.ts`, outro repositório) usa a mesma expressão que
+   `tests/unit/release-chega-na-lp.test.ts` cobra aqui. Mudar o formato é mudar os dois
+   repositórios no mesmo movimento.
+3. **O corte confere a consequência.** O último passo do job `cortar-tag` —
+   *"A versão aparece na página de changelog da LP?"* — procura o link da versão nas três
+   páginas em 35 tentativas, cerca de meia hora (até ~47 min se o site responder devagar), e **reprova** o job se ela não aparecer. Vermelho ali não quer
+   dizer que a versão não saiu (tag, Release e imagens já foram conferidas antes); quer dizer
+   que a vitrine não mostra, e isso se conserta na LP.
+4. **O texto é escrito em português.** Em inglês e espanhol a página traduz a moldura, avisa que
+   as notas estão em português e oferece a tradução do navegador. Traduzir a seção a cada
+   release fica fora até existir quem revise a tradução — nota de versão com erro de tradução
+   num `⚠️ Requer atenção` é pior que nota em outra língua.
+
+Se o passo falhar, a ordem de investigação é: a LP responde? → o `CHANGELOG.md` da `main` tem a
+seção com o cabeçalho certo? → o formato mudou sem o leitor da LP mudar junto?
+
+**Depois de consertar a LP, não re-rode o job para conferir.** Um "Re-run failed jobs" roda no
+mesmo commit, onde a tag já existe: a guarda de idempotência do passo `pendente` grava
+`cortar=nao`, e este passo — como o das imagens — aparece como pulado. O job fica verde sem ter
+olhado a LP. A conferência depois do conserto é à mão, com o laço de `curl … | grep -c` de
+`triagem/TRIAGEM.md` (seção "Depois do merge, a versão sai"), nos três caminhos: `/changelog`,
+`/en/changelog` e `/es/changelog`.
+
+Três coisas fazem essa conferência à mão mentir, e as três mentem no sentido do susto:
+
+- **Não basta trocar a URL.** O `href` procurado carrega o prefixo da própria página —
+  `/en/changelog/X.Y.Z` na inglesa, `/es/changelog/X.Y.Z` na espanhola. Procurar o link do pt nas
+  outras duas devolve 0 **com a versão listada**. O passo do `release.yml` monta o padrão com
+  `${p}` justamente por isso; o laço da receita monta igual.
+- **0 também é o que a página inexistente devolve.** Num 404 o corpo não tem o `href`, e o
+  `grep -c` conta 0 igualzinho a uma página que existe e ainda não listou a versão — dois
+  desfechos opostos com o mesmo número. Por isso a receita imprime o `http=` ao lado da contagem,
+  e o passo do `release.yml` nomeia o status de cada página que faltou antes de reprovar.
+  `http=404` é a vitrine fora do ar, e repetir não conserta.
+- **Com `http=200`, 0 na primeira volta não é veredito.** A página revalida a cada 10 minutos e lê
+  o `CHANGELOG.md` pelo `raw.githubusercontent.com`, que guarda outros 5: a versão aparece em até
+  ~15 min, e é o próprio acesso que agenda a regeneração. Repita antes de concluir que a vitrine
+  não mostra — é a mesma razão pela qual o passo do `release.yml` repete a sonda 35 vezes, e não
+  duas.
+
+---
+
 ## Os invariantes
 
 1. **O número responde ao operador, não ao autor.** A pergunta é sempre o que ele precisa
@@ -204,5 +312,42 @@ E o `package.json` **não** é a fonte: ele segue em `0.1.0`, de propósito. A f
 4. **Versão publicada é imutável.** Conserto é `X.Y.Z+1`; nunca republicar o mesmo número.
 5. **Todo PR que muda comportamento traz seu fragmento.** Sem ele, o texto que chega ao
    operador é reconstruído por quem não estava lá — ou não chega.
-6. **Bump não pode exigir edição manual de arquivo na VPS.** Se exigir, é major e vem com
-   plano de migração.
+6. **Bump não pode exigir edição manual de arquivo na VPS.** Se exigir, vem com plano de
+   migração e aviso `exige_acao`; major só se o dono pedir.
+7. **Toda versão publicada aparece na vitrine.** A LP lê o `CHANGELOG.md`; o corte confere
+   que ela chegou, nos três idiomas, e reprova quando não chegou.
+
+
+## Identidade instalada e confirmação do host
+
+O checkout que executa o kit não identifica as imagens em execução. O agente nativo
+inspeciona app, worker e scheduler do compose correto, além da voz quando instalada.
+Lê a revisão OCI e APP_VERSION da imagem imutável, não do env_file do container.
+APP_VERSION localiza a tag; a tag é buscada do origin em namespace isolado e seu
+commit precisa ser ancestral da revisão da imagem. Sem esses objetos/metadados,
+a observação é parcial, nunca uma release confirmada por inferência. Um deploy
+externo deve preservar também os objetos Git da fonte que gerou suas imagens.
+
+A observação viaja pelo heartbeat autenticado existente em runtime_confirmation,
+na mesma linha system_version. A API deriva cobertura, coerência e validade; o
+host não escolhe um veredito livre. A confirmação vence em quinze minutos (três
+batidas de cinco minutos); a data de coleta não pode ser renovada por um POST
+posterior. Heartbeats antigos continuam aceitos e limpam uma confirmação anterior:
+seu current_version é legado, explicitamente sem comprovação do conjunto executado.
+Uma imagem sem healthcheck também não comprova saúde. Mudança durante a coleta,
+serviço ausente, metadado não verificado ou revisões divergentes não viram sucesso.
+
+Base oficial, revisão personalizada, release publicada, pedido de atualização e
+confirmação são estados separados. O rodapé mantém a versão informada e o caráter
+personalizado ao lado do aviso; os detalhes administrativos mostram revisão,
+data e divergências. A comparação da release elegível usa a base executada, não
+HEAD do monitor, mantendo os gates de imagens e comparação do kit. Instalação
+personalizada exige conciliar patches antes de instalar imagens públicas, tanto
+na rota de pedido quanto no consumo de pedidos antigos pelo host.
+
+APP_VERSION sozinho não supera falha ou reversão. Uma reinstalação da mesma versão
+pode superar uma falha quando houver observação posterior, completa, coerente e
+vigente dos serviços, corroborada pela versão do processo que responde. Uma volta
+confirmada para a versão anterior mantém sua explicação. Pedido bem-sucedido sem
+confirmação continua sendo pedido, sujeito à janela nativa, nunca prova de execução.
+Nada concede Docker ao app, amplia privilégios ou cria monitor/registro paralelo.

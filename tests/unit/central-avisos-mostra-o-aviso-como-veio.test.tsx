@@ -43,8 +43,8 @@ vi.mock("@/hooks/i18n/useT", () => ({ useT: () => (texto: string) => `ES:${texto
 vi.mock("@/hooks/i18n/useLocaleDeData", () => ({ useLocaleDeData: () => undefined }));
 
 /** Título e corpo como o runtime os grava: frase inteira, com dado de gente dentro. */
-const TITULO = "Fernando Rocha pediu para falar com uma pessoa";
-const CORPO = "Motivo: pergunta sobre contrato. Cliente: Fernando Rocha (+55 11 99999-0000).";
+const TITULO = "Fulano de Tal pediu para falar com uma pessoa";
+const CORPO = "Motivo: pergunta sobre contrato. Cliente: Fulano de Tal (+55 11 99999-0000).";
 
 const aviso: AgentInboxItem = {
   id: "aviso-1",
@@ -65,6 +65,9 @@ function lista(itens: AgentInboxItem[] = [aviso], extra: Record<string, unknown>
   vi.mocked(useAgentInbox).mockReturnValue({
     data: { items: itens, open_count: itens.length },
     isLoading: false,
+    // Estes casos renderizam como quem ALCANÇA a Central (é o `podeConsultar`
+    // que habilita a lista e o estado vazio legítimo, #3147).
+    podeConsultar: true,
     ...extra,
   } as unknown as ReturnType<typeof useAgentInbox>);
 }

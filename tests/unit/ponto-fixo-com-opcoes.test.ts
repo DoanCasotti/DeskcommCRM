@@ -3,12 +3,17 @@
  *
  * `transcricao_de_audio` é o primeiro ponto `fixo` a ganhar `opcoes`: continua
  * sem aceitar provider/modelo livres (não é um turno de chat), mas passa a ter
- * uma escolha real entre dois serviços. Os dois lados dessa escolha são
+ * uma escolha real: "Automático" (a escada) ou o ElevenLabs (Scribe), que vira
+ * o degrau 0 da escada. Os dois lados dessa escolha são
  * testados juntos porque são a MESMA regra vista de dois ângulos — testar só a
  * leitura deixaria passar uma escrita que grava uma opção inválida; testar só a
  * escrita deixaria passar uma leitura que ignora a escolha salva.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+// A escada lê o `.env` da instalação (degrau 1): sem este mock, quem roda o
+// teste com TRANSCRIPTION_API_KEY preenchida mudaria o degrau esperado.
+vi.mock("@/lib/env", () => ({ env: {} }));
 
 import {
   decidirBinding,
@@ -16,6 +21,7 @@ import {
   type LinhaDeBinding,
 } from "@/lib/ai/pontos/resolver";
 import { validarBinding } from "@/lib/ai/pontos/validar-binding";
+import { decidirTranscricao } from "@/lib/messaging/media/escada-de-transcricao";
 
 const PADRAO = { provider: "anthropic", defaultModel: "claude-sonnet-5" };
 
@@ -38,48 +44,34 @@ const entrada = (over: Partial<EntradaDaDecisao> = {}): EntradaDaDecisao => ({
   ...over,
 });
 
-describe("decidirBinding — ponto fixo com menu", () => {
-  it("sem binding, usa o padrão do produto (Whisper) — como antes do menu existir", () => {
-    const d = decidirBinding(entrada());
-    expect(d.origem).toBe("fixo_do_produto");
-    expect(d.provider).toBe("openai");
-    expect(d.modelId).toBe("whisper-1");
-    expect(d.avisos).toEqual([]);
-  });
-
-  it("binding escolhendo uma opção do menu VENCE o padrão", () => {
-    const d = decidirBinding(entrada({ binding: binding() }));
-    expect(d.origem).toBe("binding");
+describe("o menu escolhe o degrau 0 da escada de transcrição", () => {
+  // O ponto é `escada`: quem decide é `decidirTranscricao`, e o resolvedor só
+  // repassa o anúncio. O Scribe escolhido no menu é o degrau 0 dela.
+  it("Scribe escolhido e com chave: é ele que ouve, e é ele que a tela anuncia", async () => {
+    const decisao = await decidirTranscricao({
+      elevenlabsEscolhido: async () => ({ apiKey: "sk_el", modelId: "scribe_v1" }),
+      chaveOpenai: async () => "sk-openai",
+    });
+    expect(decisao.origem).toBe("elevenlabs_escolhido");
+    expect(decisao.anuncio).toEqual({ provider: "elevenlabs", modelId: "scribe_v1" });
+    const d = decidirBinding(entrada({ binding: binding(), transcricao: decisao }));
     expect(d.provider).toBe("elevenlabs");
     expect(d.modelId).toBe("scribe_v1");
-    expect(d.credentialId).toBe("cred-elevenlabs");
   });
 
-  it("binding desabilitado não conta — cai no padrão, sem aviso de opção inválida", () => {
-    const d = decidirBinding(entrada({ binding: binding({ is_enabled: false }) }));
-    expect(d.origem).toBe("fixo_do_produto");
-    expect(d.provider).toBe("openai");
-    expect(d.avisos).toEqual([]);
+  it("Scribe sem chave utilizável (degrau 0 devolve null): a escada segue, não emudece", async () => {
+    const decisao = await decidirTranscricao({
+      elevenlabsEscolhido: async () => null,
+      chaveOpenai: async () => "sk-openai",
+    });
+    expect(decisao.origem).toBe("padrao_openai_compativel");
+    expect(decisao.transcriber).not.toBeNull();
   });
 
-  it("binding com um PAR que não está no menu: avisa e cai no padrão — não finge que valeu", () => {
-    const d = decidirBinding(
-      entrada({ binding: binding({ provider: "elevenlabs", model_id: "modelo-que-saiu-do-menu" }) }),
-    );
-    expect(d.origem).toBe("fixo_do_produto");
-    expect(d.provider).toBe("openai");
-    expect(
-      d.avisos.some((a) => a.includes("não é mais uma das opções")),
-      "a mudança silenciosa de padrão sem aviso é exatamente o defeito que este degrau existe para fechar",
-    ).toBe(true);
-  });
-
-  it("binding para um provider de fora do menu também cai no padrão — não só model_id trocado", () => {
-    const d = decidirBinding(
-      entrada({ binding: binding({ provider: "openrouter", model_id: "qualquer-coisa" }) }),
-    );
-    expect(d.provider).not.toBe("openrouter");
-    expect(d.origem).toBe("fixo_do_produto");
+  it("sem escada entregue, o ponto não anuncia o Scribe só porque há binding", () => {
+    const d = decidirBinding(entrada({ binding: binding(), transcricao: null }));
+    expect(d.provider).not.toBe("elevenlabs");
+    expect(d.modelId).toBeNull();
   });
 });
 

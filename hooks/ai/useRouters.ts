@@ -19,6 +19,11 @@ export interface RouterMember {
   intent_description: string;
   examples: string[];
   position: number;
+  /** Fluxo de atendimento que começa quando a intenção casa. `null` = só agente. */
+  flow_pointer_id: string | null;
+  /** Funil de DESTINO do card quando a intenção casa (#2155). `null` = só roteia. */
+  pipeline_id: string | null;
+  stage_id: string | null;
 }
 
 export interface RouterMemberInput {
@@ -26,6 +31,10 @@ export interface RouterMemberInput {
   intent_name: string;
   intent_description: string;
   examples: string[];
+  flow_pointer_id: string | null;
+  /** Funil de DESTINO do card quando a intenção casa (#2155). `null` = só roteia. */
+  pipeline_id: string | null;
+  stage_id: string | null;
 }
 
 export interface RouterDetail {
@@ -43,11 +52,33 @@ export interface RouterDetailState {
 }
 
 export interface RouterTestResult {
+  ia_consultada?: boolean;
+  modo_roteador?: "comparacao" | "sob_demanda";
   intent_name: string | null;
-  confidence: number;
+  /**
+   * `null` quando NÃO houve veredito — não é zero. O tipo importa mais que a
+   * rota: ele é o que todo consumidor novo importa, e um `number` aqui faria a
+   * mentira passar com o aval do typecheck.
+   */
+  confidence: number | null;
   min_confidence: number;
   agent_id: string | null;
   agent_name: string | null;
+  /**
+   * O Jev na mesma frase, quando a tarefa do roteador dele roda. `null` com ela
+   * desligada; ausente na resposta da imagem anterior.
+   */
+  jev?: {
+    estado: "observando" | "decidindo";
+    respondeu: boolean;
+    intent_name: string | null;
+    /** A probabilidade da escolha dele; `null` quando ele não respondeu. */
+    confidence: number | null;
+    agent_id: string | null;
+    agent_name: string | null;
+    /** Em produção valeria a escolha dele, conforme o modo de roteamento salvo. */
+    decide: boolean;
+  } | null;
 }
 
 export interface CreateRouterInput {
@@ -79,7 +110,17 @@ export function useRouters(initial?: { routers: RouterListItem[] }) {
 export function useRouter(id: string, initial?: RouterDetailState) {
   return useQuery({
     queryKey: detailKey(id),
-    ...(initial !== undefined ? { initialData: initial } : {}),
+    // #2569 — `placeholderData`, não `initialData`: o snapshot do SSR é o
+    // estado ENQUANTO a busca não volta, não o estado final. Com `initialData`
+    // o React Query grava `dataUpdatedAt = Date.now()` (query-core, `query.ts`),
+    // o `staleTime` de 30 s de `makeQueryClient()` o deixa fresco e
+    // `shouldFetchOnMount` (`queryObserver.ts`) volta falso — o
+    // `GET /api/v1/ai/routers/<id>` NUNCA acontecia ao abrir o editor, a
+    // reidratação do `draftMembers` (que só dispara quando `members` muda)
+    // ficava sem efeito e o seletor ficava em "Sem destino" para sempre, com a
+    // API devolvendo o `pipeline_id` que ninguém pedia. O placeholder não entra
+    // no cache: o que fica guardado é sempre a resposta da API.
+    ...(initial !== undefined ? { placeholderData: initial } : {}),
     queryFn: () =>
       apiClient
         .get<{ data: RouterDetailState }>(`/api/v1/ai/routers/${encodeURIComponent(id)}`)

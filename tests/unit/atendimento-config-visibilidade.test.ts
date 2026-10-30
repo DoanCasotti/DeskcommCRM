@@ -23,6 +23,7 @@ import { describe, expect, it } from "vitest";
 import {
   VISIBILITY_MODES,
   atendimentoConfigPatchSchema,
+  mesclarSettingsDeAtendimento,
   routingConfigSchema,
 } from "@/lib/schemas/routing";
 import { DEFAULT_VISIBILITY_MODE, type VisibilityMode } from "@/lib/auth/types";
@@ -36,11 +37,9 @@ function proximoSettings(
   atual: Record<string, unknown>,
   corpo: unknown,
 ): Record<string, unknown> {
-  const input = atendimentoConfigPatchSchema.parse(corpo);
-  const { visibility_mode, ...routing } = input;
-  const proximo: Record<string, unknown> = { ...atual, routing };
-  if (visibility_mode !== undefined) proximo.visibility_mode = visibility_mode;
-  return proximo;
+  // A MESMA função da rota (antes este helper era uma cópia dela, e cópia
+  // diverge sem avisar).
+  return mesclarSettingsDeAtendimento(atual, atendimentoConfigPatchSchema.parse(corpo)).settings;
 }
 
 describe("config de atendimento — routing + visibilidade na mesma porta", () => {
@@ -92,8 +91,94 @@ describe("config de atendimento — routing + visibilidade na mesma porta", () =
     // O contrato v1 já estava publicado. Se o corpo de antes deixasse de valer,
     // a mudança seria quebra de API disfarçada de feature nova.
     const antigo = { mode: "round_robin", max_retries: 3, backoff_seconds: 30 };
-    expect(atendimentoConfigPatchSchema.parse(antigo)).toEqual({
-      ...routingConfigSchema.parse(antigo),
+    // O corpo antigo não conhece o prazo de devolução, "a conversa fica com
+    // quem atendeu", o prazo do silêncio manual nem a devolução AO RODÍZIO
+    // (#2985): no PATCH eles ficam OMITIDOS (e a mescla preserva o que vale), no
+    // schema do jsonb eles têm o padrão (null, false, null e null).
+    const {
+      handoff_return_after_minutes: _padrao,
+      conversation_stays_with_attendant: _fica,
+      manual_reply_silence_minutes: _silencio,
+      unanswered_return_minutes: _devolveAoRodizio,
+      ...semPrazo
+    } = routingConfigSchema.parse(antigo);
+    expect(atendimentoConfigPatchSchema.parse(antigo)).toEqual(semPrazo);
+  });
+
+  it("corpo SEM unanswered_return_minutes preserva a devolução ao rodízio que já valia", () => {
+    // A omissão não pode LIGAR a regra para quem nunca a configurou (o padrão
+    // do jsonb é null, desligada) nem DESLIGAR quem já a tinha ligada.
+    const atual = { routing: { mode: "manual", unanswered_return_minutes: 45 } };
+    const proximo = proximoSettings(atual, { mode: "round_robin", max_retries: 5, backoff_seconds: 60 });
+    expect(
+      (proximo.routing as { unanswered_return_minutes: number | null }).unanswered_return_minutes,
+      "cliente que só conhece roteamento não pode mexer na devolução ao rodízio por omissão",
+    ).toBe(45);
+    const semConfigurar = proximoSettings(
+      { routing: { mode: "manual" } },
+      { mode: "round_robin", max_retries: 5, backoff_seconds: 60 },
+    );
+    expect((semConfigurar.routing as { unanswered_return_minutes: unknown }).unanswered_return_minutes).toBeNull();
+  });
+
+  it("unanswered_return_minutes: grava o valor, null desliga, fora da faixa é recusado", () => {
+    const base = { mode: "manual", max_retries: 5, backoff_seconds: 60 };
+    const com60 = proximoSettings(
+      { routing: { mode: "manual" } },
+      { ...base, unanswered_return_minutes: 60 },
+    );
+    expect((com60.routing as { unanswered_return_minutes: unknown }).unanswered_return_minutes).toBe(60);
+    const nulo = proximoSettings(com60, { ...base, unanswered_return_minutes: null });
+    expect((nulo.routing as { unanswered_return_minutes: unknown }).unanswered_return_minutes).toBeNull();
+    for (const fora of [4, 1441, 7.5]) {
+      expect(() => atendimentoConfigPatchSchema.parse({ ...base, unanswered_return_minutes: fora })).toThrow();
+    }
+  });
+
+  it("corpo SEM handoff_return_after_minutes preserva o prazo que já valia", () => {
+    const atual = { routing: { mode: "manual", handoff_return_after_minutes: 60 } };
+    const proximo = proximoSettings(atual, { mode: "round_robin", max_retries: 5, backoff_seconds: 60 });
+    expect(
+      (proximo.routing as { handoff_return_after_minutes: number | null }).handoff_return_after_minutes,
+      "cliente que só conhece roteamento não pode desligar a devolução automática por omissão",
+    ).toBe(60);
+  });
+
+  it("handoff_return_after_minutes: null desliga; fora da faixa é recusado", () => {
+    const atual = { routing: { mode: "manual", handoff_return_after_minutes: 60 } };
+    const proximo = proximoSettings(atual, {
+      mode: "manual",
+      max_retries: 5,
+      backoff_seconds: 60,
+      handoff_return_after_minutes: null,
     });
+    expect((proximo.routing as { handoff_return_after_minutes: unknown }).handoff_return_after_minutes).toBeNull();
+    expect(() =>
+      atendimentoConfigPatchSchema.parse({ mode: "manual", max_retries: 5, backoff_seconds: 60, handoff_return_after_minutes: 2 }),
+    ).toThrow();
+    expect(() =>
+      atendimentoConfigPatchSchema.parse({ mode: "manual", max_retries: 5, backoff_seconds: 60, handoff_return_after_minutes: 1441 }),
+    ).toThrow();
+  });
+
+  it("corpo SEM manual_reply_silence_minutes preserva o prazo do silêncio que já valia", () => {
+    const atual = { routing: { mode: "manual", manual_reply_silence_minutes: 15 } };
+    const proximo = proximoSettings(atual, { mode: "round_robin", max_retries: 5, backoff_seconds: 60 });
+    expect(
+      (proximo.routing as { manual_reply_silence_minutes: number | null }).manual_reply_silence_minutes,
+      "cliente que só conhece roteamento não pode voltar a clínica para 60 min por omissão",
+    ).toBe(15);
+  });
+
+  it("manual_reply_silence_minutes: grava o valor, null volta ao padrão, fora da faixa é recusado", () => {
+    const atual = { routing: { mode: "manual" } };
+    const base = { mode: "manual", max_retries: 5, backoff_seconds: 60 };
+    const com15 = proximoSettings(atual, { ...base, manual_reply_silence_minutes: 15 });
+    expect((com15.routing as { manual_reply_silence_minutes: unknown }).manual_reply_silence_minutes).toBe(15);
+    const nulo = proximoSettings(com15, { ...base, manual_reply_silence_minutes: null });
+    expect((nulo.routing as { manual_reply_silence_minutes: unknown }).manual_reply_silence_minutes).toBeNull();
+    for (const fora of [4, 1441, 7.5]) {
+      expect(() => atendimentoConfigPatchSchema.parse({ ...base, manual_reply_silence_minutes: fora })).toThrow();
+    }
   });
 });

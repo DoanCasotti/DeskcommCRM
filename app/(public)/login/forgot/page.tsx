@@ -2,17 +2,19 @@ import Link from "next/link";
 
 import { ForgotPasswordForm } from "@/components/auth/ForgotPasswordForm";
 import { createClient } from "@/lib/supabase/server";
-import { normalizarIdioma } from "@/lib/i18n/idiomas";
+import { idiomaDoVisitante } from "@/lib/i18n/idiomaAnonimo";
 import { traduzir } from "@/lib/i18n/dicionario";
+import { tituloDaTelaPublica } from "@/lib/i18n/titulo-da-tela-publica";
 
-export const metadata = { title: "Recuperar senha" };
+// A aba no idioma do visitante, como o corpo (`lib/i18n/titulo-da-tela-publica.ts`).
+export const generateMetadata = () => tituloDaTelaPublica((t) => t("Recuperar senha"));
 
 export default async function ForgotPasswordPage() {
   const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
-  const idioma = normalizarIdioma(
+  const idioma = await idiomaDoVisitante(
     (user?.user_metadata?.locale as string | undefined) ?? null,
   );
   const t = (texto: string) => traduzir(texto, idioma);

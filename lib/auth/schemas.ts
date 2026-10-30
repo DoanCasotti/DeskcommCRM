@@ -22,6 +22,7 @@ export const organizationNameSchema = z
 export const signupSchema = z
   .object({
     org_name: organizationNameSchema,
+    cobranca_plan_id: z.string().uuid().optional(),
     email: z.string().email("Email inválido"),
     password: z.string().min(8, "Senha deve ter pelo menos 8 caracteres"),
     password_confirm: z.string(),
@@ -75,7 +76,12 @@ export type ForgotPasswordInput = z.infer<typeof forgotPasswordSchema>;
 
 export const resetPasswordSchema = z
   .object({
-    password: z.string().min(8, "Senha deve ter pelo menos 8 caracteres"),
+    password: z
+      .string()
+      .min(8, "Senha deve ter pelo menos 8 caracteres")
+      .regex(/[A-Za-zÀ-ÿ]/, "Senha deve ter pelo menos uma letra")
+      .regex(/[0-9]/, "Senha deve ter pelo menos um número")
+      .regex(/[^A-Za-zÀ-ÿ0-9\s]/, "Senha deve ter pelo menos um símbolo"),
     password_confirm: z.string(),
     // Código TOTP: só exigido quando a conta tem MFA (a sessão de recovery é
     // AAL1 e o GoTrue pede AAL2 para trocar a senha). Opcional no schema; a

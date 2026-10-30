@@ -221,7 +221,8 @@ describe("defeito 3 — anonimização LGPD", () => {
       rows[0]!.is_anonymized,
       `a anonimização NÃO aconteceu — resposta ${res.status} ${JSON.stringify(corpo)}`,
     ).toBe(true);
-    expect(rows[0]!.name, "o nome do titular continua no banco").toBeNull();
+    expect(rows[0]!.name, "o nome do titular continua no banco").not.toBe("Titular Real");
+    expect(rows[0]!.name, "rótulo único dos dois caminhos (#1504)").toMatch(/^Cliente Anonimizado #[0-9a-f]{8}$/);
     expect(rows[0]!.email, "o e-mail do titular continua no banco").toBeNull();
   });
 
@@ -261,6 +262,13 @@ describe("defeito 4 — fim do warm-up", () => {
       [ORG],
     );
     const sessionId = s[0]!.id;
+    // O fim do aquecimento segue a régua do controle de ritmo (#2432):
+    // número usado há 40 dias já passou do último degrau, e a conclusão grava.
+    await pool.query(
+      `insert into channel_knobs (organization_id, channel_session_id, number_activated_at)
+       values ($1, $2, now() - interval '40 days')`,
+      [ORG, sessionId],
+    );
 
     await dispatchWahaEvent(
       db,

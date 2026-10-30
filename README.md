@@ -19,7 +19,7 @@
 [![CI](https://github.com/melgarafael/DeskcommCRM/actions/workflows/ci.yml/badge.svg)](https://github.com/melgarafael/DeskcommCRM/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-[**⚡ Instalar**](#-instalar-na-sua-vps-o-caminho-principal) · [**🔄 Atualizar**](#-atualizar) · [**🧭 Visão**](VISION.md) · [**🏗️ Arquitetura**](ARCHITECTURE.md) · [**🤝 Contribuir**](CONTRIBUTING.md) · [**🗺️ Roadmap**](#%EF%B8%8F-roadmap)
+[**⚡ Instalar**](#-instalar-na-sua-vps-o-caminho-principal) · [**📖 Curso visual**](https://deskcomm.com.br/curso) · [**🔄 Atualizar**](#-atualizar) · [**🧭 Visão**](VISION.md) · [**🏗️ Arquitetura**](ARCHITECTURE.md) · [**🤝 Contribuir**](CONTRIBUTING.md) · [**🗺️ Roadmap**](#%EF%B8%8F-roadmap)
 
 </div>
 
@@ -86,9 +86,14 @@ Se faltar Docker, o instalador pergunta e instala sozinho.
 |---|---|
 | **VPS com Docker** | [HostGator](https://www.hostgator.com.br/52708-141-3-52.html) (parceria) — ou qualquer VPS com Docker. 4 GB de RAM recomendados |
 | **Domínio** | Um registro **A** apontando pro IP da VPS (ex.: `crm.suaempresa.com.br`) |
-| **Banco** | Conta grátis no [supabase.com](https://supabase.com) — 3 chaves + connection string do **Session pooler** |
+| **Banco** | Conta grátis no [supabase.com](https://supabase.com) — 3 chaves + connection string do **Session pooler**. Se o projeto ficar fora do ar parado (`522` ou `PGRST002` por horas), o compute Nano do plano grátis pode não bastar: [veja o runbook](docs/runbooks/custo-e-cota-do-supabase.md#5-quando-o-compute-nano-do-plano-grátis-não-basta) |
 | **IA** | Uma chave de **OpenRouter**, **Anthropic** ou **OpenAI** — o instalador pergunta qual você quer |
 | **WhatsApp** | Seu número, conectado por QR code no onboarding (ou o canal oficial da Meta) |
+
+O instalador também atende VPS ARM64/aarch64, como a Oracle Ampere A1, e escolhe a imagem
+NOWEB oficial do WAHA compatível com essa arquitetura. Vale para os dois caminhos: com Supabase
+externo e com o Supabase na mesma VPS (as imagens do Supabase self-hosted fixadas pelo kit também
+são publicadas para `linux/arm64`). Nada é compilado na VPS.
 
 > 💡 **O Supabase pode ser criado pelo próprio instalador.** Exporte um
 > `SUPABASE_ACCESS_TOKEN` antes de rodar e ele cria o projeto, espera o banco ficar saudável,
@@ -126,22 +131,44 @@ Abra `https://<seu-domínio>` (o cadeado leva ~1 min pra aparecer), entre com o 
 **Google Authenticator** ou **Authy** à mão *se* você quiser ligar a verificação em duas etapas — ela é **opcional** e fica em Configurações › Segurança; o primeiro login **não** a exige. No onboarding,
 escaneie o QR code com o WhatsApp do seu número.
 
+> **Já instalou?** Continue no [**curso visual gratuito**](https://deskcomm.com.br/curso):
+> telas reais e indicações de onde clicar para aprender a usar a Inbox, organizar o funil e
+> configurar seus agentes de IA, no seu ritmo.
+
 ### 🤖 Prefere que uma IA instale pra você?
 
-Jogue a pasta `hostgator-setup-kit/` no chat do **Claude Code** rodando dentro da VPS e diga
-*"instala o DeskcommCRM pra mim"*. Ele lê o [`CLAUDE.md`](hostgator-setup-kit/CLAUDE.md) do kit
-— que traz o passo a passo e as armadilhas já mapeadas — e conduz tudo em português.
+O repositório traz **guias do assistente** que carregam sozinhos no Claude Code, Codex, Cursor,
+OpenCode ou Antigravity: instalar, montar um cliente por nicho, analisar métricas, afinar o prompt
+do agente e contribuir. Para tê-los em **qualquer pasta** — inclusive antes de clonar, no seu
+computador —, rode uma vez:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/melgarafael/DeskcommCRM/main/scripts/instalar-guias.sh | bash
+```
+
+Depois abra uma sessão nova do seu assistente e diga *"quero instalar o CRM na minha VPS"*: pedir o
+assunto em português aciona o guia certo em qualquer um dos cinco. Para chamar um guia pelo nome,
+cada um tem o seu jeito — `/deskcomm-instalar` no Claude Code, no Cursor e no Antigravity;
+`$deskcomm-instalar` no Codex; no OpenCode, peça pelo nome, em linguagem natural.
+
+Os guias **não** se atualizam sozinhos: rodar o mesmo comando de novo traz a versão nova. Para
+desfazer:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/melgarafael/DeskcommCRM/main/scripts/instalar-guias.sh | bash -s -- --remover
+```
+
+Com o repositório já clonado, os guias vêm dentro dele (`.agents/skills/`) e nem isso é preciso. Se
+você rodou o comando mesmo assim, saiba que no Claude Code o guia instalado vale mais que o do clone
+— e fica na versão do dia em que rodou, até rodar de novo (ou desfazer).
+Também funciona o jeito antigo: jogar só a pasta `hostgator-setup-kit/` no chat do **Claude Code**
+dentro da VPS — ele lê o [`CLAUDE.md`](hostgator-setup-kit/CLAUDE.md) do kit e conduz tudo em português.
 
 ---
 
 ## 🔄 Atualizar
 
 Saiu versão nova? Há dois caminhos, e o primeiro **não exige terminal**.
-
-Com o repositório clonado, o **guia de instalação** já vem dentro — `.agents/skills/deskcomm-instalar/` —
-e carrega sozinho no Claude Code, Codex, Cursor, OpenCode ou Antigravity aberto na pasta. Diga só
-*"quero instalar o CRM na minha VPS"*. Há guias também para montar um cliente por nicho, analisar
-métricas, afinar o prompt do agente e contribuir (`AGENTS.md`, seção "Guias do assistente").
 
 ### Pela tela (recomendado)
 
@@ -178,10 +205,14 @@ pra isso existe `--force`, de propósito.
 
 **Coisas normais que você vai ver:** um monte de `already exists` / `multiple primary keys` na
 parte do banco — **é esperado e inofensivo**, são coisas que já existiam. O script filtra esse
-ruído e mostra `✓ banco atualizado`. Se aparecer `⚠ avisos que não são os esperados`, aí sim
-guarde a mensagem.
+ruído e mostra `✓ banco atualizado`. Se o banco estiver ocupado com o CRM atendendo, ele aplica de
+novo sozinho (até 3 passadas) e conta isso na tela — isso vale a partir da atualização seguinte à
+que instalar esta correção. Se aparecer `⚠ Apareceram avisos no banco que NÃO são os esperados`, aí sim guarde a
+mensagem: o **fim** da saída diz o que fazer em cada caso (repetir com `--force` quando foi o banco
+ocupado, declarar `SUPABASE_DB_ADMIN_URL` quando foi permissão).
 
-**Deu ruim?** `bash hostgator-setup-kit/restore.sh` volta pro backup.
+**Deu ruim?** Guarde a mensagem e peça ajuda. O `restore.sh` **não** volta o backup por cima do
+banco em uso: ele só restaura num banco vazio (ver [`hostgator-setup-kit/README.md`](hostgator-setup-kit/README.md)).
 **Quer só diagnosticar?** `bash hostgator-setup-kit/healthcheck.sh`.
 
 > ⚠️ **Numa instalação antiga que ainda não tem o agente da tela**, rode `update.sh` **duas
@@ -204,6 +235,28 @@ Passo a passo em linguagem simples: [`docs/ATUALIZANDO.md`](docs/ATUALIZANDO.md)
 
 > **Backup importa:** o plano grátis do Supabase **não faz backup sozinho**. Vale agendar
 > `backup.sh` no cron diariamente. O `update.sh` já roda um backup antes de cada atualização.
+
+### 🧹 Desinstalar (tirar esta aplicação do Docker)
+
+Para parar e apagar **somente os recursos Docker desta instalação**, na raiz do repositório:
+
+```bash
+bash desinstalar_docker.sh
+```
+
+Ele descobre o projeto pelo label que o Docker Compose grava e remove apenas os containers,
+volumes e redes internas **deste** projeto. Outras aplicações do mesmo servidor, imagens,
+cache de build, a rede externa do proxy reverso, o código, o `.env`, os backups e um Supabase
+externo não são tocados.
+
+O modo interativo mostra quantos recursos encontrou e exige a confirmação
+`REMOVER-<nome-do-projeto>` antes de remover qualquer coisa. Para uma rotina de descarte de
+ambiente, `bash desinstalar_docker.sh --force` pula a pergunta. Use `--project-name NOME`
+só quando a instalação tiver um `COMPOSE_PROJECT_NAME` personalizado que não esteja mais no
+`.env`.
+
+> **Os volumes vão junto** — inclusive as sessões locais do WhatsApp. Rode `backup.sh` antes se
+> precisar preservá-las.
 
 ---
 
@@ -263,7 +316,7 @@ Toda tela tem porta na navegação — o CI reprova tela que existe mas em que s
 | **WhatsApp** | WAHA Plus (engine NOWEB) + Meta Cloud API | QR pra começar rápido; canal oficial pra escala |
 | **Filas** | `event_log` table + workers (cron) | Trigger de banco nunca faz HTTP |
 | **Rate limit** | Upstash Redis (sliding window) | Serverless, free tier suficiente |
-| **AI** | Vercel AI SDK v7 — OpenRouter, Anthropic, OpenAI e Google | Instalador pergunta qual; troca depois pela tela |
+| **AI** | Vercel AI SDK v7 — OpenRouter, Requesty, Anthropic, OpenAI e Google | Instalador pergunta qual; troca depois pela tela |
 | **Validação** | Zod | Input externo, env, payloads |
 | **Observability** | Sentry (scrub em erro, transação, span e breadcrumb) | Telemetria opt-in no install |
 | **Hospedagem** | VPS com Docker (HostGator/SP na parceria) | App + WhatsApp + workers na sua máquina |
@@ -322,7 +375,7 @@ DeskcommCRM/
 │   ├── app/                # Rotas autenticadas: inbox, radar, kanban, contacts,
 │   │                       #   connections, ai/*, integrations, metrics, lgpd,
 │   │                       #   audit, team, settings
-│   └── api/v1/             # API REST canônica (196 route handlers)
+│   └── api/v1/             # API REST canônica
 ├── components/             # React (ui/, inbox/, kanban/, shell/, ...)
 ├── lib/                    # supabase/, waha/, channels/, ai/, agent-engine/,
 │                           #   api/, routing/, navigation/, env.ts
@@ -339,7 +392,7 @@ DeskcommCRM/
 ## 🧪 Testes
 
 ```bash
-pnpm typecheck     # tsc --noEmit (estrito)
+pnpm typecheck     # tsc --noEmit -p tsconfig.typecheck.json (inclui tests/)
 pnpm lint          # eslint next/core-web-vitals
 pnpm test:unit     # Vitest (NÃO inclui tests/invariants/**)
 pnpm test:db       # Postgres efêmero + baseline install/update + invariantes
@@ -360,10 +413,16 @@ gh api repos/melgarafael/DeskcommCRM/branches/main/protection \
 | `verify` | typecheck + lint + `lint:channels` + `test:unit` + `test:shell` |
 | `invariants` | sobe um Postgres limpo, aplica o `baseline.sql` em modo **install** e depois em modo **update** — as duas passadas com `ON_ERROR_STOP=1`, que é o que torna a segunda uma prova de idempotência e não só um "terminou" —, e roda os invariantes de RBAC, atribuição, escopo, roteamento, follow-up, webhooks e automações |
 | `build-and-size` | `pnpm build` em Node 22 |
-| `e2e` | sobe Supabase local, aplica o `baseline.sql` e roda **48 das 49 specs** Playwright pelo frontend |
+| `e2e` | sobe Supabase local, aplica o `baseline.sql` e roda pelo frontend todas as specs Playwright menos as que `FORA_DO_CI` declara |
 | `imagens-ok` | reprova quando qualquer uma das três imagens Docker (`app`, `worker`, `scheduler`) não constrói — é o artefato que o self-hoster instala |
 
-A única spec fora do `e2e` é `vps-fresh-onboarding` — ela precisa de WAHA + Redis + Resend + Nuvemshop de verdade. Ela é a **P0** da nossa doutrina de QA visual, então `e2e` verde **não** prova a jornada de instalação fresca; essa se prova numa VPS.
+Quais specs ficam de fora é pergunta de comando, não de leitura — esta linha já afirmou que a única era `vps-fresh-onboarding`, e desde o PR #983 ela roda no CI:
+
+```bash
+git show origin/main:.github/workflows/e2e.yml | python3 -c "import sys,re; y=sys.stdin.read(); print(sorted({s for _,c in re.findall(r'(FORA_DO_CI):\s*>-\n((?:[ ]{8,}.*\n)+)',y) for s in re.findall(r'[a-z0-9-]+\.spec\.ts',c)}))"
+```
+
+`vps-fresh-onboarding` segue sendo a **P0** da nossa doutrina de QA visual, porque a instalação fresca é o produto que se vende. Ter gate não dispensa a prova pela tela: gate prova que não regrediu, não que a experiência ficou boa.
 
 Entre os invariantes está o **teste de isolamento RLS**: cria 2 organizações, simula os claims JWT pelo mesmo caminho `auth.uid()` / `fn_user_org_ids()` que as policies de produção usam, e prova que um usuário da org A enxerga **zero linhas** da org B em `conversations`, `messages`, `contacts` e `crm_leads`. Antes disso, um caso de controle prova que as linhas da org B realmente existem — sem ele, o teste passaria com a tabela vazia.
 
@@ -383,7 +442,8 @@ Entre os invariantes está o **teste de isolamento RLS**: cria 2 organizações,
 | [`docs/runbooks/deploy.md`](docs/runbooks/deploy.md) | Deploy em produção |
 | [`CLAUDE.md`](CLAUDE.md) | Convenções não-negociáveis (leitura obrigatória pra contribuir) |
 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | Visão de 1 página da arquitetura |
-| [`docs/index.md`](docs/index.md) | Índice dos 157 documentos, com regra de precedência |
+| [`docs/index.md`](docs/index.md) | Índice geral da documentação, com a regra de precedência |
+| [`docs/handoffs/`](docs/handoffs/) | Diário dos épicos (`HANDOFF*.md`), com o índice em [`docs/handoffs/README.md`](docs/handoffs/README.md) |
 | [`docs/prd/`](docs/prd/) · [`docs/specs/`](docs/specs/) | PRDs e specs técnicas (schema SQL, payloads, MCP, governança) |
 
 ---
@@ -491,7 +551,10 @@ Este é um projeto **self-host**: cada pessoa roda o CRM na **própria infraestr
   **desligada**. Se você aceitar o Sentry da comunidade, o que é enviado são **relatórios
   de erro** (stack trace) com CPF, telefone e e-mail substituídos, cabeçalhos sensíveis
   removidos, e token de webhook/convite redigido da URL — **sem** rastreamento de
-  performance e **sem** replay de sessão, que ficam em 0 nesse caminho. Para desligar a
+  performance e **sem** replay de sessão contínuo, que ficam em 0 nesse caminho. Vai
+  junto do erro a gravação dos instantes que o antecederam, com texto e mídia mascarados,
+  as mesmas URLs redigidas e nenhuma gravação nas páginas com credencial na URL
+  ([`lib/sentry/replay.ts`](lib/sentry/replay.ts)). Para desligar a
   qualquer momento: `SENTRY_DSN=off` no `.env`. Para mandar ao **seu** Sentry (aí sim com
   performance e replay): `SENTRY_DSN=<seu-dsn>`. O que é redigido, e por quê, está em
   [`lib/sentry/scrub.ts`](lib/sentry/scrub.ts); a resolução do DSN em

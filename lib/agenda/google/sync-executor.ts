@@ -1,12 +1,20 @@
 import { randomUUID } from "node:crypto";
 import { observeMeeting, type MeetingObservation } from "./meet";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { paraEventoDoGoogle, PREFIXO_PROPRIEDADE, type EventoDoGoogle } from "./evento";
+import { nomeDoContato } from "@/lib/contacts/rotulo-do-contato";
+import {
+  paraEventoDoGoogle,
+  participantesDoAgendamento,
+  PREFIXO_PROPRIEDADE,
+  type EventoDoGoogle,
+} from "./evento";
 import {
   compare,
+  comConviteDaFicha,
   checkpoint,
   delta,
   groups,
+  hash,
   localProjection,
   remoteProjection,
   sameShared,
@@ -22,6 +30,84 @@ import {
   type CalendarFence,
 } from "./sync-store";
 import { decryptWebhookSecret } from "@/lib/webhooks/secrets";
+import { classificarErroDoGoogle, type OperacaoNoGoogle } from "./erros";
+import { deveCriarEspacoAberto } from "./oauth";
+import { meetAbertoLigado } from "@/lib/schemas/settings";
+import { logger } from "@/lib/logger";
+import { emitirMudancaVindaDoGoogle } from "./mudanca-vinda-do-google";
+
+/** A operação do Google que corresponde ao método HTTP usado na publicação. */
+const OPERACAO_POR_METODO: Record<PendingWrite["method"], OperacaoNoGoogle> = {
+  POST: "criar",
+  PATCH: "atualizar",
+  DELETE: "apagar",
+};
+
+/**
+ * A frase que o caminho de publicação PERSISTE quando o Google recusa (#950).
+ *
+ * Antes disto a escrita persistia `erro.message`, que fora do 412 era apenas
+ * `"Google HTTP 400"`: o Google já tinha dito o motivo (`errors[].reason`) e a
+ * frase exibida não dizia o que consertar.
+ *
+ * O corpo cru da resposta NUNCA entra aqui — a frase é persistida e mostrada, e
+ * o corpo carrega nome e e-mail de convidado. `classificarErroDoGoogle` monta a
+ * frase a partir dos identificadores (status e `errors[].reason`), e é ele que
+ * lê o corpo guardado no `GoogleHttpError`.
+ *
+ * O 412 fica de fora de propósito: o transporte tem frase própria e acionável
+ * para ele ("O evento mudou no Google. Releia antes de publicar."), enquanto o
+ * classificador não tem caso para 412 — cairia em `permanente`, "repetir não
+ * muda o resultado", que é o oposto do que resolve uma pré-condição vencida.
+ */
+export function mensagemDaRecusaDePublicacao(
+  erro: unknown,
+  metodo: PendingWrite["method"],
+): string {
+  if (erro instanceof GoogleHttpError) {
+    if (erro.status === 412) return erro.message;
+    return classificarErroDoGoogle(erro, OPERACAO_POR_METODO[metodo]).mensagem;
+  }
+  return erro instanceof Error && "code" in erro
+    ? "O compromisso mudou. A sincronização vai reler a versão atual."
+    : "Não foi possível sincronizar. Confira a conexão e tente novamente.";
+}
+
+/**
+ * E-mail da ficha do contato, para o convite do Google.
+ *
+ * A falta do e-mail (contato sem ficha, stub de teste sem `.from`, falha de
+ * leitura, titular anonimizado) NÃO é falha de sincronização: o compromisso
+ * continua indo para a agenda do atendente. Quem não tem e-mail é o caso
+ * comum — lead que chegou pelo WhatsApp.
+ */
+export async function emailDoContato(
+  db: SupabaseClient,
+  org: string,
+  contactId: string | null,
+): Promise<{ email: string; nome: string | null } | null> {
+  if (!contactId) return null;
+  if (typeof db.from !== "function") return null;
+  try {
+    const { data, error } = await db
+      .from("contacts")
+      .select("email,name,display_name,is_anonymized")
+      .eq("organization_id", org)
+      .eq("id", contactId)
+      .maybeSingle();
+    if (error || !data || data.is_anonymized) return null;
+    const email = typeof data.email === "string" ? data.email.trim() : "";
+    if (!email) return null;
+    return { email, nome: nomeDoContato(data) };
+  } catch {
+    return null;
+  }
+}
+
+function eventoTemEmail(event: EventoDoGoogle | null | undefined, email: string): boolean {
+  const chave = email.trim().toLowerCase();
+  return (event?.attendees ?? []).some((p) => p.email?.trim().toLowerCase() === chave);
+}
 
 export async function tokenForConnection(db: SupabaseClient, org: string, connectionId: string) {
   const { data, error } = await db
@@ -44,6 +130,41 @@ export async function tokenForConnection(db: SupabaseClient, org: string, connec
   if (!token) throw new Error("Reconecte a conta Google para continuar.");
   return token;
 }
+
+/**
+ * O gate de #2063: a reunião nasce aberta SÓ quando a organização ligou a opção
+ * (off por padrão) E a conexão tem o escopo opcional. Ler opção + escopo é um
+ * caminho frio (sem o gate, nada muda); erro de leitura vale como "desligado"
+ * — falha fechada, mesma disciplina do resto do executor.
+ */
+export async function decidirEspacoAberto(
+  db: SupabaseClient,
+  org: string,
+  connectionId: string | null,
+): Promise<boolean> {
+  if (!connectionId) return false;
+  try {
+    // As DUAS leituras vêm no envelope do PostgREST (`{data, error}`), não a
+    // linha crua: ler `scopes` do envelope achava `undefined` sempre, o gate
+    // ficava falso para TODO organização e a opção nunca abria espaço nenhum.
+    // Medido no executor de mentira de `agenda-google-meet-aberto-no-corpo`.
+    const [{ data: orgRow, error: erroOrg }, { data: connRow, error: erroConexao }] = await Promise.all([
+      db.from("organizations").select("settings").eq("id", org).maybeSingle(),
+      db
+        .from("calendar_connections")
+        .select("scopes")
+        .eq("organization_id", org)
+        .eq("id", connectionId)
+        .maybeSingle(),
+    ]);
+    if (erroOrg || erroConexao) return false;
+    const ligada = meetAbertoLigado((orgRow as { settings?: unknown } | null)?.settings);
+    const escopos = (connRow as { scopes?: string[] | null } | null)?.scopes ?? [];
+    return deveCriarEspacoAberto({ ligada }, escopos);
+  } catch {
+    return false;
+  }
+}
 export interface ExecuteOptions {
   transport?: GoogleFetch;
   calendarFence?: CalendarFence;
@@ -63,7 +184,7 @@ export async function reconcileAppointment(
     p_args: options.calendarFence ? { calendar_fence: options.calendarFence } : {},
   });
   if (!raw) return "busy";
-  if (typeof raw === "object" && "terminal" in raw && raw.terminal === "redacted")
+  if (typeof raw === "object" && "terminal" in raw && (raw.terminal === "redacted" || raw.terminal === "not_configured"))
     return "terminal";
   let a = appointmentSnapshotSchema.parse(raw);
   const call = (action: string, extra: Record<string, unknown> = {}) =>
@@ -79,11 +200,17 @@ export async function reconcileAppointment(
     a = appointmentSnapshotSchema.parse(saved);
     return true;
   };
+  // Qual método estava em voo quando o Google recusou. O `catch` está FORA do
+  // `send`, então o parâmetro dele não alcança a frase persistida — e o método
+  // muda o significado da recusa (404 e 410 querem dizer coisas opostas em
+  // `apagar` e em `criar`).
+  let metodoEmVoo: PendingWrite["method"] = "PATCH";
   try {
     if (!a.google_event_id && a.status === "cancelled") {
       await commit({ ack: true });
       return "processed";
     }
+    const contato = await emailDoContato(db, org, a.contact_id);
     if (!a.google_connection_id || !a.google_calendar_id || !a.google_event_id)
       throw new Error("Publicação antiga sem identidade completa. Revise a conexão.");
     const api = googleTransport(
@@ -98,8 +225,91 @@ export async function reconcileAppointment(
       a = appointmentSnapshotSchema.parse(await call("meet", { result: { ...observation, etag } }));
       meetingObserved = true;
     };
-    let local = localProjection(a);
+    /**
+     * O espaço aberto do Meet (#2063): cria o espaço pela API do Meet e grava o
+     * link como `ready`. Devolve `false` em QUALQUER recusa — API desativada,
+     * cota, 403, escopo que o Google ignora.
+     *
+     * ⚠️ É chamado ANTES de o corpo ser finalizado (`send`), e não depois: a
+     * primeira publicação do caminho aberto sai JÁ com o link no `location`.
+     * O corpo é (re)montado da projeção que o link acabou de mudar, nunca
+     * injetado campo a campo — a montagem fica num lugar só, `localDoEvento`.
+     *
+     * ⚠️ A recusa NÃO segura a publicação: quem cai no Meet "confiável" do
+     * Calendar é o chamador — um link com "pedir para participar" é melhor que
+     * nenhum link, e um erro da API do Meet não pode deixar a reunião sem
+     * evento nenhum nessa passada.
+     */
+    const criarEspacoAberto = async (): Promise<boolean> => {
+      try {
+        const { meetingUri } = await api.criarEspacoAberto();
+        await saveMeeting({ state: "ready", received: true, url: meetingUri, error: null });
+        return true;
+      } catch (e) {
+        // Só o status: o corpo da recusa do Google não vai nem para o log.
+        logger.warn("[meet-aberto] a API do Meet recusou; o evento nasce com o Meet do Calendar", {
+          organization_id: org,
+          appointment_id: id,
+          meet_status: e instanceof GoogleHttpError ? e.status : null,
+        });
+        return false;
+      }
+    };
+    /** Se o espaço aberto nasceu nesta passada, o corpo ainda vai sair dele. */
+    let espacoAbertoAgora = false;
+    /**
+     * O marcador PERSISTENTE do espaço aberto (#2063, caminho 2 do review de
+     * 08/10): o `location` que mandamos ao Google é o link do espaço aberto.
+     *
+     * Não há coluna nova nem migration: a prova está num registro que já
+     * existe, em um dos DOIS momentos em que o link pode estar. Depois de
+     * publicado, `google_base_projection.local.location` é o hash do
+     * `location` publicado, igual ao hash do `meeting_url` de hoje SÓ quando o
+     * link publicado é este. Enquanto a escrita que carrega o link ainda não
+     * foi reconhecida pelo commit (em voo, ou recusada pelo Google), a mesma
+     * prova está na intenção gravada em `google_pending_write.desired` — ver
+     * `espacoAbertoNaIntencao` abaixo. `meeting_url` sozinho não distingue: o
+     * link "confiável" do Calendar também mora ali.
+     *
+     * As duas regras da main valem por construção. Compromisso publicado com
+     * Meet do Calendar: `base.local.location` é o hash dos `location_details`,
+     * nunca o do link — sem marcador, `localDoEvento` devolve os detalhes e a
+     * projeção não muda. E ainda que mudasse por acaso (a pessoa escreveu o
+     * próprio link nos detalhes), o hash publicado e o do link seriam do MESMO
+     * texto: nada sai do lugar, nenhum PATCH.
+     */
+    const espacoAbertoPublicado = () =>
+      Boolean(a.meeting_url?.trim() && base?.local.location === hash(a.meeting_url));
     let base = a.google_base_projection;
+    /**
+     * O outro momento do MESMO marcador: o link do espaço aberto que AINDA
+     * PRECISA ENTRAR (#2063 — o caso que o review de 09/10 mediu com um 503).
+     *
+     * A janela é esta: o `spaces.create` gravou `ready`, o `prepare` gravou a
+     * intenção da escrita em `google_pending_write.desired` com o link no
+     * `location`, e o Google recusou o corpo (429/5xx/rede). `fn_google_appointment`
+     * NÃO limpa o `google_pending_write` no `error`, então a intenção
+     * sobrevive à recusa: `desired.outbound.location === hash(meeting_url)`
+     * prova que a escrita que levava o link foi preparada e ainda não teve o
+     * resultado reconhecido. É UM marcador só para o POST e para o PATCH —
+     * regra única, não duas — e ele mora num registro que já existe: sem
+     * coluna nova, sem migration, e sem derivar do que o Google recebeu (no
+     * caminho do Meet do Calendar, o `desired` carrega o hash dos detalhes,
+     * nunca o do link, porque é este marcador quem o põe na projeção).
+     *
+     * Capturado ANTES do bloco que reconcilia escritas pendentes: esse bloco
+     * limpa o `google_pending_write` ao reconhecer a escrita, e o marcador
+     * tem de valer para a escrita que esta passada ainda vai refazer.
+     */
+    const espacoAbertoNaIntencao = Boolean(
+      a.meeting_url?.trim() &&
+        a.google_pending_write &&
+        "operation_id" in a.google_pending_write &&
+        a.google_pending_write.desired.outbound.location === hash(a.meeting_url),
+    );
+    /** O marcador de leitura, único: publicado OU ainda em voo com o link. */
+    const espacoAberto = () => espacoAbertoPublicado() || espacoAbertoNaIntencao;
+    let local = localProjection({ ...a, meet_aberto: espacoAberto() });
     // Listagem é sinal de mudança, não versão para um PATCH: GET exato revalida.
     const event = await api.get(a.google_calendar_id, a.google_event_id);
     const linked = event?.extendedProperties?.private;
@@ -250,6 +460,7 @@ export async function reconcileAppointment(
           return "processed";
         }
         const next = checkpoint(base, local, remote, [], true);
+        const antes = a;
         const accepted = await commit({
           base: next,
           remote: remote.shared,
@@ -260,6 +471,7 @@ export async function reconcileAppointment(
           ack: groups.every((g) => next.local[g] === local.outbound[g]),
         });
         if (!accepted) await conflict("overlap", remote);
+        else await emitirMudancaVindaDoGoogle(db, org, antes, a);
         return "processed";
       }
       if (resolution.choice === "preserve_remote") {
@@ -290,7 +502,7 @@ export async function reconcileAppointment(
         await commit({ base: next, conflict: null, clear_pending: true, etag: event.etag });
       }
     }
-    local = localProjection(a);
+    local = localProjection({ ...a, meet_aberto: espacoAberto() });
     base = a.google_base_projection;
     if (!event) {
       if (wasPublished) {
@@ -306,9 +518,11 @@ export async function reconcileAppointment(
           "POST",
           paraEventoDoGoogle({
             ...a,
-            participantes: a.guest_email
-              ? [{ email: a.guest_email, aguardandoResposta: true }]
-              : [],
+            participantes: participantesDoAgendamento({
+              contactEmail: contato?.email,
+              contactName: contato?.nome,
+              guestEmail: a.guest_email,
+            }),
           }) as unknown as Record<string, unknown>,
           null,
           [...groups],
@@ -318,7 +532,14 @@ export async function reconcileAppointment(
       }
     }
     if (!remote) throw new Error("Evento sem projeção válida.");
-    const decision = compare(base, local, remote);
+    // O e-mail da ficha vai junto de uma alteração, nunca sozinho — ver
+    // `comConviteDaFicha` (decisão do dono, doc 36: sem convite em massa na
+    // 1ª sincronização depois da atualização).
+    const decision = comConviteDaFicha(compare(base, local, remote), {
+      temEmail: Boolean(contato?.email),
+      eventoJaTemOEmail: Boolean(contato?.email && event && eventoTemEmail(event, contato.email)),
+      cancelado: event?.status === "cancelled" || a.status === "cancelled",
+    });
     if (decision.kind === "conflict") {
       await conflict(decision.reason!, remote, decision.groups);
       return "processed";
@@ -329,6 +550,7 @@ export async function reconcileAppointment(
         return "processed";
       }
       const next = checkpoint(base, local, remote, [], true);
+      const antes = a;
       const accepted = await commit({
         base: next,
         remote: remote.shared,
@@ -337,6 +559,9 @@ export async function reconcileAppointment(
         ack: groups.every((g) => next.local[g] === local.outbound[g]),
       });
       if (!accepted) await conflict("overlap", remote);
+      // A remarcação ou o cancelamento feito NO GOOGLE vira o mesmo evento que
+      // a tela emite — sem isto, o aviso e as automações não sabiam dela.
+      else await emitirMudancaVindaDoGoogle(db, org, antes, a);
       return "processed";
     }
     if (
@@ -377,7 +602,19 @@ export async function reconcileAppointment(
     }
     await send(
       local.shared.cancelled ? "DELETE" : "PATCH",
-      local.shared.cancelled ? undefined : delta(a, event, base, decision.groups, decision.shared),
+      local.shared.cancelled
+        ? undefined
+        : delta(
+            {
+              ...a,
+              contact_email: contato?.email ?? null,
+              contact_nome: contato?.nome ?? null,
+            },
+            event,
+            base,
+            decision.groups,
+            decision.shared,
+          ),
       event.etag ?? null,
       decision.groups,
       decision.shared,
@@ -392,6 +629,10 @@ export async function reconcileAppointment(
       shared: boolean,
     ) {
       let conferenceRequestId: string | undefined;
+      // O grupo `location` pode entrar AQUI, depois da decisão: quando o
+      // espaço aberto nasce nesta passada, a projeção nova manda o link e o
+      // `delta` tem de levá-lo. Fora disto `campos` é `fields`, sem mudança.
+      let campos = fields;
       if (
         method !== "DELETE" &&
         a.meeting_state === "pending" &&
@@ -407,20 +648,70 @@ export async function reconcileAppointment(
             error: a.meeting_allowed_types === null ? "unknown" : "unsupported",
           });
         } else {
-          conferenceRequestId = a.meeting_request_id;
-          body = {
-            ...body,
-            conferenceData: {
-              createRequest: {
-                requestId: conferenceRequestId,
-                conferenceSolutionKey: { type: "hangoutsMeet" },
+          // #2063 — o espaço aberto SÓ quando a organização ligou a opção E a
+          // conexão tem o escopo opcional; o link nasce via `spaces.create`
+          // (accessType OPEN) e entra no `location` pela projeção
+          // (`localDoEvento`, com o marcador `meet_aberto`) — nunca injetado
+          // campo a campo.
+          //
+          // Qualquer recusa da API do Meet (desativada, escopo ausente, 403,
+          // cota) cai no Meet "confiável" do Calendar: um link com "pedir para
+          // participar" é melhor que nenhum link, e a recusa não segura a
+          // publicação do evento nesta passada.
+          espacoAbertoAgora =
+            (await decidirEspacoAberto(db, org, a.google_connection_id)) && (await criarEspacoAberto());
+          if (!espacoAbertoAgora) {
+            conferenceRequestId = a.meeting_request_id;
+            body = {
+              ...body,
+              conferenceData: {
+                createRequest: {
+                  requestId: conferenceRequestId,
+                  conferenceSolutionKey: { type: "hangoutsMeet" },
+                },
               },
+            };
+          }
+        }
+      }
+      if (method !== "DELETE" && (espacoAbertoAgora || espacoAbertoNaIntencao)) {
+        // O espaço nasceu ANTES do envio — ou a escrita que levava o link foi
+        // recusada e a intenção dela sobreviveu (`espacoAbertoNaIntencao`) —,
+        // então esta escrita já sai com o link: o convidado recebe UM convite
+        // com a sala, nunca um convite sem link e um "alterado" cinco minutos
+        // depois (#2063, item 3, e o 503 medido pelo review de 09/10).
+        //
+        // O corpo é remontado da projeção nova — o mesmo `localDoEvento` de
+        // sempre, agora com o marcador ligado —, nunca montado à mão aqui.
+        local = localProjection({ ...a, meet_aberto: true });
+        if (method === "POST") {
+          body = paraEventoDoGoogle({
+            ...a,
+            meet_aberto: true,
+            participantes: participantesDoAgendamento({
+              contactEmail: contato?.email,
+              contactName: contato?.nome,
+              guestEmail: a.guest_email,
+            }),
+          }) as unknown as Record<string, unknown>;
+        } else if (method === "PATCH") {
+          campos = [...new Set([...campos, "location" as const])];
+          body = delta(
+            {
+              ...a,
+              meet_aberto: true,
+              contact_email: contato?.email ?? null,
+              contact_nome: contato?.nome ?? null,
             },
-          };
+            event!,
+            base,
+            campos,
+            shared,
+          );
         }
       }
       // Se só faltava conferência e a capacidade foi recusada, nenhum PATCH vazio.
-      if (method === "PATCH" && !shared && !fields.length && !conferenceRequestId) return;
+      if (method === "PATCH" && !shared && !campos.length && !conferenceRequestId) return;
       const pending: PendingWrite = {
         ...(conferenceRequestId ? { conference_request_id: conferenceRequestId } : {}),
         operation_id: randomUUID(),
@@ -429,12 +720,14 @@ export async function reconcileAppointment(
         revision: a.revision,
         local_revision: a.google_local_revision,
         desired: local,
-        groups: fields,
+        groups: campos,
         shared,
       };
       await call("prepare", { operation: pending });
       // Imediatamente antes do efeito: mesma aquisição/revisão e membership.
       await call("renew");
+      // O método que está em voo — é ele que a frase da recusa vai usar.
+      metodoEmVoo = method;
       const response = await api.write(
         a.google_calendar_id!,
         a.google_event_id!,
@@ -446,11 +739,11 @@ export async function reconcileAppointment(
         ? remoteProjection(response, local, base)
         : { ...local, shared: { ...local.shared, cancelled: true } };
       await commit({
-        base: checkpoint(base, local, observed, fields, shared),
+        base: checkpoint(base, local, observed, campos, shared),
         etag: response?.etag ?? null,
         operation_id: pending.operation_id,
         clear_pending: true,
-        ack: shared || fields.length > 0,
+        ack: shared || campos.length > 0,
       });
       if (conferenceRequestId && response && a.status !== "cancelled") {
         const observation = observeMeeting(response, conferenceRequestId) ?? {
@@ -463,13 +756,9 @@ export async function reconcileAppointment(
       }
     }
   } catch (e) {
-    // Nunca persistir corpo remoto, e-mail ou payload no erro exibido.
-    const message =
-      e instanceof GoogleHttpError
-        ? e.message
-        : e instanceof Error && "code" in e
-          ? "O compromisso mudou. A sincronização vai reler a versão atual."
-          : "Não foi possível sincronizar. Confira a conexão e tente novamente.";
+    // Nunca persistir corpo remoto, e-mail ou payload no erro exibido: a frase
+    // sai dos identificadores da recusa, nunca do texto livre do Google.
+    const message = mensagemDaRecusaDePublicacao(e, metodoEmVoo);
     try {
       await call("error", { message });
     } catch {

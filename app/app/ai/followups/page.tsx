@@ -29,6 +29,8 @@ export default async function FollowupFlowsPage() {
     .from("followup_flow_pointers")
     .select(FLOW_COLUMNS)
     .eq("organization_id", activeOrg.orgId)
+    // Roteiro de atendimento não é follow-up (prova do #1130): tem tela própria.
+    .neq("surface", "atendimento")
     .order("updated_at", { ascending: false });
 
   const flows = (data ?? []) as unknown as FollowupFlowPointerRow[];
@@ -47,7 +49,7 @@ export default async function FollowupFlowsPage() {
       <Tabs defaultValue="fluxos" className="flex flex-1 flex-col">
         <TabsList>
           <TabsTrigger value="fluxos">{t("Fluxos")}</TabsTrigger>
-          <TabsTrigger value="fila">Fila</TabsTrigger>
+          <TabsTrigger value="fila">{t("Fila")}</TabsTrigger>
         </TabsList>
         <TabsContent value="fluxos">
           <FlowsList initialData={flows} canWrite={canWrite} />

@@ -8,9 +8,10 @@
  * cosmético: é o número que faz o teto de orçamento da organização disparar na
  * hora certa, ou não disparar.
  *
- * Este cron busca o catálogo público (sem chave — o endpoint de modelos da
- * OpenRouter é aberto), traduz e concilia. A regra da conciliação vive em
- * `lib/ai/catalogo/sincronizar.ts`; aqui é só borda e I/O.
+ * Este cron concilia a OpenRouter e descobre modelos nativos da OpenAI e
+ * Anthropic pelo catálogo público Models.dev. Não exige chave de IA e não
+ * muda modelos escolhidos pela organização. Fontes falham independentemente;
+ * falha de qualquer uma é reportada ao scheduler, sem desfazer a outra.
  *
  * O que ele deliberadamente NÃO faz:
  *
@@ -36,7 +37,10 @@
 import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
 
+import { autorizaCron } from "@/lib/auth/cron-auth";
 import { fail, ok } from "@/lib/api/wrappers";
+import { audit } from "@/lib/audit";
+import { FONTE_MODELS_DEV, sincronizarModelosNativos } from "@/lib/ai/catalogo/models-dev";
 import {
   FONTE_OPENROUTER,
   traduzirCatalogo,
@@ -47,7 +51,6 @@ import {
   planejarSincronizacao,
   type ModeloExistente,
 } from "@/lib/ai/catalogo/sincronizar";
-import { env } from "@/lib/env";
 import { logger } from "@/lib/logger";
 import { createAdminClient } from "@/lib/supabase/admin";
 
@@ -126,19 +129,53 @@ async function buscarDaOpenRouter(): Promise<ModeloDaOpenRouter[]> {
   return json.data;
 }
 
-function autorizado(req: NextRequest): boolean {
-  const esperado = env.INTERNAL_CRON_SECRET || env.INTERNAL_SECRET;
-  if (!esperado) return false; // fail-closed
-  return req.headers.get("authorization") === `Bearer ${esperado}`;
-}
+// Esta rota aceitava SÓ o primeiro segredo definido (`INTERNAL_CRON_SECRET ||
+// INTERNAL_SECRET`), e era a única das rotas de cron a fazer isso. O efeito era
+// 401 em toda instalação do kit: o `install.sh` gera os DOIS segredos com valores
+// diferentes e o `crond` do serviço `scheduler` manda `Bearer $INTERNAL_SECRET`
+// (`docker/scheduler/entrypoint.sh`), que não era o esperado aqui. O `curl` do
+// crontab descarta a saída, então o 401 diário não aparecia em lugar nenhum.
+// Agora usa o mesmo portão das outras: `lib/auth/cron-auth.ts`, que confere o
+// Bearer (ou `x-cron-secret`) contra os dois segredos e falha fechado sem nenhum.
+// A cerca contra o padrão voltar é `tests/unit/cron-aceita-os-dois-segredos.test.ts`.
 
 async function handler(req: NextRequest): Promise<Response> {
   const requestId = randomUUID();
-  if (!autorizado(req)) {
+  if (!autorizaCron(req)) {
     return fail("unauthorized", "cron secret ausente ou inválido", 401, { requestId });
   }
   try {
-    const resultado = await sincronizarCatalogo(createAdminClient(), buscarDaOpenRouter);
+    const admin = createAdminClient();
+    const [openrouter, nativos] = await Promise.allSettled([
+      sincronizarCatalogo(admin, buscarDaOpenRouter),
+      sincronizarModelosNativos(admin),
+    ]);
+    if (nativos.status === "fulfilled") {
+      logger.info("[sync-model-catalog] modelos nativos", {
+        ...nativos.value,
+        request_id: requestId,
+      });
+      if (nativos.value.gravados > 0) {
+        void audit({
+          action: "ai_models.synced",
+          resourceType: "ai_models",
+          requestId,
+          bypassedRls: true,
+          metadata: nativos.value,
+        });
+      }
+    }
+    if (nativos.status === "rejected") {
+      void audit({
+        action: "ai_models.sync_failed",
+        resourceType: "ai_models",
+        requestId,
+        metadata: { fonte: FONTE_MODELS_DEV, erro: String(nativos.reason).slice(0, 500) },
+      });
+      throw nativos.reason;
+    }
+    if (openrouter.status === "rejected") throw openrouter.reason;
+    const resultado = { ...openrouter.value, nativos: nativos.value };
     logger.info("[sync-model-catalog] concluído", { ...resultado, request_id: requestId });
     return ok(resultado, { requestId });
   } catch (err) {
@@ -151,10 +188,7 @@ async function handler(req: NextRequest): Promise<Response> {
         conhecidos: err.conhecidos,
         request_id: requestId,
       });
-      return ok(
-        { fonte: FONTE_OPENROUTER, recusado: true, motivo: err.message },
-        { requestId },
-      );
+      return ok({ fonte: FONTE_OPENROUTER, recusado: true, motivo: err.message }, { requestId });
     }
     const detalhe = err instanceof Error ? err.message : String(err);
     logger.error("[sync-model-catalog] falhou", { error: detalhe, request_id: requestId });

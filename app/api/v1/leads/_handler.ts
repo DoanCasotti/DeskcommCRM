@@ -1,5 +1,7 @@
+import { guardServiceEffect } from "@/lib/atendimento/fronteira-server";
 import { observeServiceOrigin } from "@/lib/atendimento/origem";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { idsDeContatosPessoais } from "@/app/api/v1/conversations/_handler";
 /**
  * Core handlers para /api/v1/leads.
  *
@@ -16,9 +18,47 @@ import { resolveOwnerPatch, type OwnerPatch, type OwnerPatchInput } from "@/lib/
 import { emitLeadActivity, stageChangeReason } from "@/lib/leads/activity-emitter";
 import { listaLegivel } from "@/lib/leads/activity-vocabulary";
 import { camposAlterados } from "@/lib/leads/campos-alterados";
+import { valoresAntesDepois } from "@/lib/leads/valores-audit";
+import {
+  mencionaRecorrencia,
+  recorrenciaParaGravar,
+  type RecorrenciaNoPatch,
+} from "@/lib/leads/valor-recorrente";
+import { RECUSA_DE_TROCA_DE_FUNIL } from "@/lib/leads/clonar-para-funil";
+import {
+  camposQueMudaram,
+  defsDoPadraoDoFunil,
+  erroDePadrao,
+  recusasDePadrao,
+} from "@/lib/leads/padrao-do-campo";
+import { testaComPrazo } from "@/lib/leads/padrao-do-campo-no-servidor";
+import {
+  RECUSA_RETOMADA_ETAPA_INDISPONIVEL,
+  RECUSA_RETOMADA_LEAD_ABERTO,
+  RECUSA_RETOMADA_SEM_ETAPA,
+  camposCopiadosNaRetomada,
+  modoDeReabertura,
+  recusaReabertura,
+} from "@/lib/leads/reabertura";
+import {
+  camposComAnexo,
+  recusaDeCamposObrigatorios,
+  recusaDeMotivoDoGanho,
+  settingsDoFunil,
+  validaCamposExigidos,
+} from "@/lib/leads/campos-exigidos";
+import { ORIGEM_DA_PLANILHA } from "@/lib/leads/planilha";
 import { registraFalhaDeAtividade } from "@/lib/leads/activity-write-failure";
+import { moedaDaOrganizacao } from "@/lib/catalogo/moeda-da-org";
+import {
+  decideMotivoDaPerda,
+  recusaDeMotivoDaPerdaPeloBanco,
+} from "@/lib/leads/motivo-da-perda";
+import { motivosDaCategoria } from "@/lib/leads/motivos-de-perda-do-funil";
 import type { CreateLeadInput, UpdateLeadInput } from "@/lib/schemas";
 import { ehCorrecaoDeMovimentoDaIa } from "@/lib/leads/correcao-humana";
+import { ocultarProvaMetaNaResposta, removerProvaMetaLeadSubmitted } from "@/lib/leads/prova-meta-lead-submitted";
+import { ehRecusaDaVisibilidadeDoFunil } from "@/lib/leads/recusa-da-visibilidade";
 
 type SB = SupabaseClient;
 
@@ -35,6 +75,8 @@ async function ownerPatchOrThrow(
   supabase: SB,
   ctx: HandlerCtx,
   input: OwnerPatchInput,
+  /** Na edição, o responsável que o lead JÁ tem: reenviá-lo não é atribuir. */
+  responsavelAtual: string | null = null,
 ): Promise<OwnerPatch | null> {
   const result = resolveOwnerPatch(input);
   if (!result.ok) {
@@ -71,7 +113,185 @@ async function ownerPatchOrThrow(
     }
   }
 
+  // O responsável humano passa pela mesma pergunta que o agente acima: é desta
+  // organização? A FK de `owner_user_id` só garante que a pessoa EXISTE — sem
+  // isto, um id de outra empresa (ou de quem foi desligado) virava dono do
+  // negócio. Régua G3-04, a mesma do bulk-assign e da automação `assign_owner`:
+  // vínculo não revogado e papel acima de viewer.
+  //
+  // Cliente ADMIN, filtrado pela org do contexto: a RLS de `user_organizations`
+  // só mostra a um `agent` a própria linha, e o cliente de sessão recusaria
+  // todo colega legítimo.
+  //
+  // Reenviar o responsável que o lead já tem não é atribuir: sem esta exceção,
+  // um lead cujo dono foi desligado não poderia mais ser editado por quem manda
+  // o formulário inteiro.
+  const responsavel = result.patch.owner_user_id;
+  if (responsavel !== null && responsavel !== responsavelAtual) {
+    const { data: membro, error: membroErr } = await createAdminClient()
+      .from("user_organizations")
+      .select("role")
+      .eq("organization_id", ctx.organization_id)
+      .eq("user_id", responsavel)
+      .is("revoked_at", null)
+      .maybeSingle();
+
+    if (membroErr) {
+      throw new ApiError(500, "internal_error", undefined, ctx.requestId, membroErr.message);
+    }
+    if (!membro || membro.role === "viewer") {
+      throw new ApiError(
+        422,
+        "validation_failed",
+        undefined,
+        ctx.requestId,
+        traduzir("Responsável não é um atendente ativo desta organização.", ctx.idioma ?? "pt-BR"),
+      );
+    }
+  }
+
   return result.patch;
+}
+
+/**
+ * O contato do lead tem de ser DESTA organização.
+ *
+ * A FK `crm_leads_contact_id_fkey` referencia só `contacts(id)`: ela aceita o
+ * contato de qualquer empresa. Todo escritor de lead — tela, MCP, token de
+ * servidor, automação, importação, webhook de entrada, prospecção, clone —
+ * passa por `createLeadHandler`/`updateLeadHandler`, então a pergunta mora aqui.
+ *
+ * 404 igual para "não existe" e "é de outra organização" (molde de
+ * `app/api/v1/agenda/agendamentos/_handler.ts`): a resposta não pode confirmar
+ * que o id existe noutro lugar. E responde ANTES do INSERT, para que um uuid
+ * inexistente não vire 500 com a mensagem da FK.
+ */
+async function contatoDaOrgOrThrow(supabase: SB, ctx: HandlerCtx, contactId: string): Promise<void> {
+  const { data: contato, error: contatoErr } = await supabase
+    .from("contacts")
+    .select("id, is_personal")
+    .eq("id", contactId)
+    .eq("organization_id", ctx.organization_id)
+    .maybeSingle();
+
+  if (contatoErr) {
+    throw new ApiError(500, "internal_error", undefined, ctx.requestId, contatoErr.message);
+  }
+  if (!contato) {
+    throw new ApiError(
+      404,
+      "not_found",
+      undefined,
+      ctx.requestId,
+      traduzir("Contato não encontrado.", ctx.idioma ?? "pt-BR"),
+    );
+  }
+  // Contato pessoal está fora da operação (spec 21, decisão 3): nenhum negócio
+  // nasce nem muda de dono/etapa para ele — 403 sem vazar dado do contato.
+  if ((contato as { is_personal?: boolean }).is_personal === true) {
+    throw new ApiError(
+      403,
+      "forbidden",
+      undefined,
+      ctx.requestId,
+      traduzir("Contato marcado como pessoal.", ctx.idioma ?? "pt-BR"),
+    );
+  }
+}
+
+/**
+ * O contato EFETIVO do negócio é pessoal? (spec 21, decisão 3).
+ *
+ * `contatoDaOrgOrThrow` cobre o contato NOVO que o corpo pede; aqui fica o que
+ * ela não vê: o contato que o negócio JÁ tem (update sem trocar contato, mover,
+ * retomar) e a leitura (get lista/ficha). Sem esta pergunta, marcar depois de
+ * abrir o negócio deixaria a escrita passar pela porta que já estava aberta.
+ * Ausente = não é pessoal (o 404 de quem não existe é de outra guarda).
+ */
+async function contatoEfetivoEhPessoal(
+  supabase: SB,
+  ctx: HandlerCtx,
+  contactId: string | null | undefined,
+): Promise<boolean> {
+  if (!contactId) return false;
+  const { data, error } = await supabase
+    .from("contacts")
+    .select("is_personal")
+    .eq("id", contactId)
+    .eq("organization_id", ctx.organization_id)
+    .maybeSingle();
+  if (error) {
+    throw new ApiError(500, "internal_error", undefined, ctx.requestId, error.message);
+  }
+  return (data as { is_personal?: boolean } | null)?.is_personal === true;
+}
+
+/** Recusa 403 padrão de escrita para pessoal (mesma mensagem do veto de envio). */
+async function recusaPessoalNaEscrita(
+  supabase: SB,
+  ctx: HandlerCtx,
+  contactId: string | null | undefined,
+): Promise<void> {
+  if (await contatoEfetivoEhPessoal(supabase, ctx, contactId)) {
+    throw new ApiError(
+      403,
+      "forbidden",
+      undefined,
+      ctx.requestId,
+      traduzir("Contato marcado como pessoal.", ctx.idioma ?? "pt-BR"),
+    );
+  }
+}
+
+/**
+ * O gatilho `trg_lead_so_liga_a_propria_empresa` (migration 0403) recusa com
+ * SQLSTATE `PT404`/`PT422` o contato ou responsável de fora da organização. As
+ * guardas acima respondem antes; isto cobre a janela entre conferir e gravar
+ * (um vínculo revogado nesse meio) com a MESMA resposta, e não um 500.
+ *
+ * `42501` é a policy de `crm_leads` (`fn_can_view_lead`) recusando a linha:
+ * quem grava não enxergaria o negócio depois de gravado — no modo "own" um
+ * Atendente nasce sem dono, e no "own_and_unassigned" um dono colega. É falta
+ * de permissão, não falha do sistema: 403, e não 500 "tente de novo", que
+ * tentar de novo nunca resolve.
+ */
+function recusaDaGuardaDoBanco(
+  ctx: HandlerCtx,
+  erro: { code?: string; message?: string } | null,
+): ApiError | null {
+  if (erro?.code === "PT404") {
+    return new ApiError(
+      404,
+      "not_found",
+      undefined,
+      ctx.requestId,
+      traduzir("Contato não encontrado.", ctx.idioma ?? "pt-BR"),
+    );
+  }
+  if (erro?.code === "PT422") {
+    return new ApiError(
+      422,
+      "validation_failed",
+      undefined,
+      ctx.requestId,
+      traduzir("Responsável não é um atendente ativo desta organização.", ctx.idioma ?? "pt-BR"),
+    );
+  }
+  // Só a policy de `crm_leads` (a régua mora no predicado); o 42501 de GRANT
+  // faltando continua 500 com a mensagem do banco.
+  if (ehRecusaDaVisibilidadeDoFunil(erro)) {
+    return new ApiError(
+      403,
+      "forbidden",
+      undefined,
+      ctx.requestId,
+      traduzir(
+        "Sem permissão para salvar este negócio: pela visibilidade definida na organização, ele ficaria fora do que você pode ver.",
+        ctx.idioma ?? "pt-BR",
+      ),
+    );
+  }
+  return null;
 }
 
 function actorAuditPayload(actor: Actor): {
@@ -85,6 +305,16 @@ function actorAuditPayload(actor: Actor): {
     return {
       actorUserId: null,
       metadataActor: { actor_type: "webhook_source", actor_id: actor.id },
+    };
+  }
+  // TOKEN DE SERVIDOR é caso próprio, e não o `else` de `ai_agent`: sem esta
+  // linha ele seria auditado como agente de IA, e o audit passaria a afirmar que
+  // uma integração é um agente — a única coisa que o audit não pode fazer é
+  // mentir sobre quem agiu.
+  if (actor.type === "api_token") {
+    return {
+      actorUserId: null,
+      metadataActor: { actor_type: "api_token", actor_api_token_id: actor.id },
     };
   }
   return {
@@ -106,6 +336,12 @@ export interface ListLeadsQuery {
   stage_id?: string;
   status?: "open" | "won" | "lost";
   owner_user_id?: string;
+  /** `lost_reason` exato (issue #1537) — o filtro de perda por motivo. */
+  lost_reason?: string;
+  /** Categoria do motivo de perda (issue #1537), resolvida no funil. */
+  lost_reason_category?: string;
+  /** Só os negócios deste contato — o escopo do turno do agente, no WHERE, antes do limite. */
+  contact_id?: string;
   limit?: number;
   cursor?: string | null;
 }
@@ -159,6 +395,36 @@ export async function listLeadsHandler(
   if (q.stage_id) query = query.eq("stage_id", q.stage_id);
   if (q.status) query = query.eq("status", q.status);
   if (q.owner_user_id) query = query.eq("owner_user_id", q.owner_user_id);
+  if (q.contact_id) query = query.eq("contact_id", q.contact_id);
+  // Negócio de pessoal não é listado (spec 21, etapa 12 — leitura exclui):
+  // a MESMA primitiva de ids da lista do inbox (`conversations/_handler.ts`),
+  // antes do limite, para cursor e `has_more` descreverem o conjunto visível.
+  const pessoais = await idsDeContatosPessoais(supabase, ctx.organization_id);
+  if (pessoais.length > 0) {
+    query = query.not("contact_id", "in", `(${pessoais.join(",")})`);
+  }
+  // #1537 — perda por motivo e por categoria. A categoria NÃO é coluna: ela
+  // sai do `settings.lost_reasons` do funil, então o caminho é achar os rótulos
+  // da categoria e filtrar por eles. Só os PERDIDOS têm motivo que valha; um
+  // filtro de categoria sozinho não força status (quem quer "Cliente" pode
+  // querer em qualquer aba), mas `lost_reason` em lead aberto não existe.
+  if (q.lost_reason) query = query.eq("lost_reason", q.lost_reason);
+  if (q.lost_reason_category) {
+    const { data: funis, error: funisErr } = await supabase
+      .from("crm_pipelines")
+      .select("id, settings")
+      .eq("organization_id", ctx.organization_id);
+    if (funisErr) throw new ApiError(500, "internal_error", undefined, ctx.requestId, funisErr.message);
+    const escopados = q.pipeline_id
+      ? (funis ?? []).filter((f) => f.id === q.pipeline_id)
+      : (funis ?? []);
+    const permitidos = motivosDaCategoria(
+      escopados.map((f) => ({ settings: f.settings })),
+      q.lost_reason_category,
+    );
+    if (permitidos.length === 0) return { leads: [], cursor: null, has_more: false };
+    query = query.in("lost_reason", permitidos);
+  }
 
   if (q.cursor) {
     const c = decLeadCursor(q.cursor);
@@ -188,7 +454,7 @@ export async function listLeadsHandler(
     hasMore && last
       ? encLeadCursor({ created_at: String(last.created_at), id: String(last.id) })
       : null;
-  return { leads: page, cursor, has_more: hasMore };
+  return { leads: page.map(ocultarProvaMetaNaResposta), cursor, has_more: hasMore };
 }
 
 // ---------------------------------------------------------------------------
@@ -227,7 +493,19 @@ export async function getLeadHandler(
       traduzir("Lead não encontrado.", ctx.idioma ?? "pt-BR"),
     );
   }
-  return data as Record<string, unknown>;
+  // Negócio de pessoal some até por link direto (spec 21, etapa 12): o mesmo
+  // 404 de "não existe", para não revelar que ele está lá — espelha o 404 da
+  // conversa de pessoal em `conversations/_handler.ts`.
+  if (await contatoEfetivoEhPessoal(supabase, ctx, (data as { contact_id?: string | null }).contact_id)) {
+    throw new ApiError(
+      404,
+      "not_found",
+      undefined,
+      ctx.requestId,
+      traduzir("Lead não encontrado.", ctx.idioma ?? "pt-BR"),
+    );
+  }
+  return ocultarProvaMetaNaResposta(data as Record<string, unknown>);
 }
 
 // ---------------------------------------------------------------------------
@@ -242,7 +520,68 @@ export async function createLeadHandler(
     source_metadata?: Record<string, unknown>;
     /** Interno (webhook inbound) — idempotência via uniq_crm_leads_org_source_external. */
     external_id?: string;
+    /**
+     * Interno (webhook inbound) — a FONTE que criou este card (issue #2316,
+     * migration 0683).
+     *
+     * É o carimbo que responde "de quem é este card" para a atualização por
+     * integração alcançar só o card da própria fonte, e ele é durável por
+     * desenho: a linha de `webhook_lead_captures` é podada em 365 dias. Não vem
+     * do corpo da requisição — quem passa é a rota de captação, que resolve a
+     * fonte pelo `path_token`.
+     */
+    webhook_source_id?: string | null;
+    /**
+     * Interno (importação de planilha). Marca o `lead.created` com
+     * `metadata.via`, e o gatilho de follow-up "Lead criado" não inscreve em
+     * lote quem entrou por planilha. Não vem do corpo da requisição.
+     */
+    via_planilha?: boolean;
+    /**
+     * Interno (clone para outro funil, pela tela ou pela automação). O dono veio
+     * do negócio de ORIGEM, não de quem pediu: se ele não pode mais ser dono
+     * (desligado, virou viewer, agente arquivado), o clone nasce sem dono e a
+     * linha do tempo diz por quê — mover o negócio de funil não pode falhar
+     * porque alguém saiu da empresa. Não vem do corpo da requisição.
+     */
+    dono_herdado?: boolean;
+    /**
+     * Interno (retomada de negócio perdido, issue #1538). O NOVO negócio aponta
+     * para o encerrado que ele tenta de novo: é a coluna `retomado_de_lead_id`
+     * (migration 0425) por onde "tentativas até ganhar" é derivado. Não vem do
+     * corpo da requisição — quem cria a retomada é a rota `/retomar` (ou a tool
+     * MCP `crm_retomar_lead`), nunca o POST genérico.
+     */
+    retomado_de_lead_id?: string | null;
+    /**
+     * Interno (clone, transferência entre funis, retomada): o `custom_fields`
+     * do negócio de ORIGEM. A régua do padrão (#2730) julga só o que difere
+     * dele — o valor herdado já estava gravado, e trocar de funil não pode ser
+     * barrado por um dado antigo que ninguém tocou, a mesma regra da edição.
+     * Não vem do corpo da requisição.
+     */
+    custom_fields_da_origem?: Record<string, unknown> | null;
   },
+  opcoes: {
+    /**
+     * `false` SÓ no webhook de captação (`app/api/v1/webhooks/in/[token]`): o
+     * lead de formulário entra no funil mesmo que a etapa padrão da fonte exija
+     * um campo que o formulário não mandou. Decisão de produto (#2295), não
+     * consequência da régua — reverter é tirar o argumento daquela rota.
+     *
+     * É opção e não `ctx.actor.type`: `webhook_source` também é o ator da
+     * automação `create_or_move_lead` e da prospecção, que continuam na régua.
+     * E não vem do corpo da requisição, como os demais internos.
+     */
+    exigirCamposDaEtapa?: boolean;
+    /**
+     * `false` SÓ no webhook de captação, pelo mesmo motivo do anterior: o lead
+     * de formulário nasce com o valor como veio, mesmo fora do `padrao` do
+     * campo (#2730). Recusar perderia o lead; o formato passa a ser cobrado
+     * quando alguém editar o campo na ficha.
+     */
+    exigirPadraoDoCampo?: boolean;
+  } = {},
 ): Promise<Record<string, unknown>> {
   // Validate stage belongs to pipeline within active org.
   const { data: stage, error: stageErr } = await supabase
@@ -273,6 +612,93 @@ export async function createLeadHandler(
     );
   }
 
+  // As DUAS réguas desta criação leem o MESMO `settings` de funil — os campos
+  // exigidos (#2295, logo abaixo) e o PADRÃO do valor (#2730) — então a linha é
+  // perguntada UMA vez só. E nenhuma quando não há o que perguntar: o webhook de
+  // captação, isento das duas, continua sem tocar em `crm_pipelines`, byte a
+  // byte como antes. O valor herdado de outro negócio não é julgado (ver
+  // `custom_fields_da_origem`), só o que difere dele.
+  const camposAJulgar =
+    opcoes.exigirPadraoDoCampo === false || !input.custom_fields
+      ? {}
+      : input.custom_fields_da_origem !== undefined
+        ? camposQueMudaram(input.custom_fields, input.custom_fields_da_origem)
+        : input.custom_fields;
+  const settingsDaCriacao =
+    opcoes.exigirCamposDaEtapa !== false || Object.keys(camposAJulgar).length > 0
+      ? await settingsDoFunil(supabase, input.pipeline_id)
+      : null;
+
+  // ── O PADRÃO (#2730) — o valor do campo tem de CASAR antes de nascer ─────
+  //
+  // A MESMA régua do formulário e da API (`lib/leads/padrao-do-campo`): regex
+  // do `settings.fields[].padrao` com a frase do DONO na recusa. Aqui ela roda
+  // ANTES da régua de campos exigidos, porque é sobre o que já veio escrito —
+  // um "dois" em "Idades das crianças" não é campo faltando, é valor torto.
+  //
+  // Fail-open igual ao resto da casa: `settingsDoFunil` devolve `null` quando a
+  // leitura falha, `defsDoPadraoDoFunil` devolve lista vazia e a criação segue
+  // como hoje — a régua só tem poder sobre o que ela consegue ler.
+  if (Object.keys(camposAJulgar).length > 0) {
+    const recusas = recusasDePadrao(
+      defsDoPadraoDoFunil(settingsDaCriacao, "negocio"),
+      camposAJulgar,
+      testaComPrazo,
+    );
+    if (recusas.length > 0) throw erroDePadrao(recusas, ctx.requestId, ctx.idioma);
+  }
+
+  // ── A ETAPA EM QUE O NEGÓCIO NASCE TAMBÉM É UMA ENTRADA (issue #1710) ──────
+  //
+  // Criar direto numa etapa exigente é o MESMO gatilho do arrasto: o funil que
+  // exige um campo para RECEBER o negócio o exige aqui também. Sem esta pergunta
+  // a criação nascia na coluna com o campo em branco e a exigência só era cobrada
+  // na PRÓXIMA escrita — o negócio já estava lá.
+  //
+  // Este handler é o escritor de criação de TODOS os clientes (REST `POST
+  // /api/v1/leads`, a tool MCP `crm_create_lead`, o `NewLeadDialog` com
+  // `stage_id`, o import de planilha, a automação `create_or_move_lead` — criação
+  // e transferência de funil — e a prospecção), então a régua é a MESMA função de
+  // todos os outros caminhos, e a recusa é o MESMO 422 com `details.faltando`.
+  // A exceção é o webhook de captação, que passa `exigirCamposDaEtapa: false`
+  // (ver `opcoes` acima).
+  //
+  // O `settings` perguntado é o do funil de DESTINO — `input.pipeline_id`, que a
+  // checagem acima acabou de provar ser o da etapa. `desfecho: null`, como no
+  // clone e na retomada: criar não fecha o negócio, então `ao_ganhar`/`ao_perder`
+  // não entram nesta pergunta. O valor que a régua lê é o que o negócio VAI ter:
+  // `custom_fields` do corpo.
+  //
+  // FAIL-OPEN igual ao resto da régua (`settingsDoFunil` devolve `null` quando a
+  // leitura falha): um funil sem `obrigatorio_em` valida `faltando: []` e a
+  // criação acontece byte a byte como antes — a regra continua opt-in.
+  if (opcoes.exigirCamposDaEtapa !== false) {
+    const vereditoDeCampos = validaCamposExigidos({
+      lead: { custom_fields: input.custom_fields ?? {} },
+      settingsDoFunil: settingsDaCriacao,
+      destino: { stageId: stage.id, desfecho: null },
+      motivoDeGanho: null,
+      // O ARQUIVO não é cobrado aqui (#3433): o anexo mora em
+      // `crm_lead_attachments.lead_id` e só pode subir depois que o negócio
+      // existe. Sem esta opção, etapa que exige documento recusava TODA
+      // criação (422) sem caminho de saída. A exigência volta no próximo move,
+      // no lote ou no fechamento — lá `camposComAnexo` é lido de verdade.
+      semAnexosAinda: true,
+    });
+    if (vereditoDeCampos.faltando.length > 0) {
+      const recusa = recusaDeCamposObrigatorios(vereditoDeCampos.faltando, ctx.idioma);
+      throw new ApiError(
+        422,
+        recusa.codigo,
+        { faltando: vereditoDeCampos.faltando },
+        ctx.requestId,
+        recusa.mensagem,
+      );
+    }
+  }
+
+  if (input.contact_id) await contatoDaOrgOrThrow(supabase, ctx, input.contact_id);
+
   // next position_in_stage = MAX + 1000.
   const { data: maxRow, error: maxErr } = await supabase
     .from("crm_leads")
@@ -289,11 +715,34 @@ export async function createLeadHandler(
 
   // Nascer com dono e sem owner_kind é drift silencioso (o CHECK aceita kind
   // null): o lead teria dono e sumiria do filtro e das métricas por kind.
-  const ownerPatch =
-    (await ownerPatchOrThrow(supabase, ctx, input)) ??
-    ({ owner_user_id: null, owner_agent_id: null, owner_kind: null } satisfies OwnerPatch);
+  const semDono = { owner_user_id: null, owner_agent_id: null, owner_kind: null } satisfies OwnerPatch;
+  let donoHerdadoDescartado = false;
+  let ownerPatch: OwnerPatch;
+  try {
+    ownerPatch = (await ownerPatchOrThrow(supabase, ctx, input)) ?? semDono;
+  } catch (erro) {
+    if (!(input.dono_herdado && erro instanceof ApiError && erro.status === 422)) throw erro;
+    ownerPatch = semDono;
+    donoHerdadoDescartado = true;
+  }
+
+  // A moeda de um lead novo é a que a ORGANIZAÇÃO declarou, não um literal.
+  // `"BRL"` aqui (e o `.default("BRL")` que saiu de `createLeadSchema`) fazia
+  // toda organização em peso ou dólar cadastrar lead em real: o valor certo com
+  // o símbolo errado, que é o defeito que a migration 0208 já tinha consertado
+  // no catálogo de produtos. Mesma função daquele conserto, pelo mesmo motivo
+  // (uma leitura só, que não diverge entre caminhos de escrita).
+  //
+  // A leitura extra só acontece quando quem chamou NÃO mandou moeda: a REST com
+  // `currency` no corpo passa direto. O import por planilha e o webhook de
+  // captação NÃO mandam — mandavam `"BRL"` em duro, e o lead de uma organização
+  // em euro nascia em real — e caem aqui. Ela não pode derrubar a criação:
+  // `moedaDaOrganizacao` degrada para o padrão e deixa rastro (console.error +
+  // Sentry) em vez de lançar.
+  const currency = input.currency ?? (await moedaDaOrganizacao(supabase, ctx.organization_id));
 
   const serviceOrigin = ctx.serviceOrigin ?? await observeServiceOrigin(createAdminClient(), ctx.organization_id, input.contact_id ?? null);
+  await guardServiceEffect();
   const { data: lead, error: insErr } = await supabase
     .from("crm_leads")
     .insert({
@@ -304,22 +753,60 @@ export async function createLeadHandler(
       description: input.description ?? null,
       contact_id: input.contact_id ?? null,
       value_cents: input.value_cents ?? null,
-      currency: input.currency ?? "BRL",
+      // O VALOR RECORRENTE — as três colunas da fatia 1 da #3602, SEMPRE
+      // nomeadas (nulas quando o negócio não tem recorrência). `value_cents`
+      // acima segue sendo o valor ÚNICO: nada é somado, e é por isso que o card
+      // consegue escrever "R$ 3.000 + R$ 500/mês". A coerência do trio
+      // (recorrente nulo ⇒ periodicidade e duração nulas; recorrente sem
+      // periodicidade ⇒ mensal) é da régua pura, a MESMA que o PATCH usa.
+      ...recorrenciaParaGravar(input),
+      currency,
       ...ownerPatch,
       assigned_at:
         ownerPatch.owner_kind === null ? null : new Date().toISOString(),
       expected_close_date: input.expected_close_date ?? null,
       tags: input.tags ?? [],
       source: input.source,
-      source_metadata: input.source_metadata ?? {},
+      source_metadata: removerProvaMetaLeadSubmitted(input.source_metadata),
       external_id: input.external_id ?? null,
+      webhook_source_id: input.webhook_source_id ?? null,
       custom_fields: input.custom_fields ?? {},
+      retomado_de_lead_id: input.retomado_de_lead_id ?? null,
       status: "open",
       position_in_stage: nextPos,
       created_by_user_id: ctx.actor.type === "user" ? ctx.actor.id : null,
     })
     .select(LEAD_COLS)
     .single();
+
+  const recusaNoInsert = recusaDaGuardaDoBanco(ctx, insErr);
+  if (recusaNoInsert) throw recusaNoInsert;
+
+  // ── A PERDA SEM MOTIVO NA PRÓPRIA CRIAÇÃO (issue #2743) ────────────────────
+  //
+  // Nascer numa etapa de perda é o ÚNICO caminho de escrita em que este
+  // handler chega ao trigger `fn_validate_lost_reason_required` sem ter
+  // perguntado nada: o arrasto, o move, o bulk, o encerramento e o `/lose`
+  // decidem `decideMotivoDaPerda` ANTES de escrever, e aqui não há
+  // `lost_reason` no corpo (`CreateLeadInput` nem o declara). O trigger levanta
+  // `22023` — e sem esta linha o catch-all logo abaixo entregava 500
+  // `internal_error` com a mensagem crua do banco, que o Sentry conta como
+  // defeito interno (#2743, medido na prova do #2713).
+  //
+  // É a MESMA rede de segurança que `moveLeadHandler`, `bulk`, `encerramento`
+  // e o arrasto já usam — uma pergunta, uma resposta: a recusa do banco vira
+  // recusa de NEGÓCIO (422 `lost_reason_required`, frase traduzida), e um erro
+  // de banco de outra classe segue intocado no 500.
+  const recusaDeMotivoNoInsert = recusaDeMotivoDaPerdaPeloBanco(insErr, ctx.idioma);
+  if (recusaDeMotivoNoInsert) {
+    throw new ApiError(
+      422,
+      recusaDeMotivoNoInsert.codigo,
+      undefined,
+      ctx.requestId,
+      recusaDeMotivoNoInsert.mensagem,
+    );
+  }
 
   if (insErr || !lead) {
     throw new ApiError(
@@ -329,6 +816,31 @@ export async function createLeadHandler(
       ctx.requestId,
       insErr?.message ?? traduzir("Falha ao criar lead.", ctx.idioma ?? "pt-BR"),
     );
+  }
+
+  if (donoHerdadoDescartado) {
+    const leadId = (lead as { id: string }).id;
+    const atividade = await emitLeadActivity(supabase, {
+      organizationId: ctx.organization_id,
+      leadId,
+      contactId: input.contact_id ?? null,
+      type: "lead_edited",
+      sourceModule: "crm",
+      sourceId: leadId,
+      actor: ctx.actor,
+      reason: "Nasceu sem responsável: quem cuidava do negócio de origem não atende mais nesta empresa",
+      payload: { fields: ["owner_user_id", "owner_agent_id"], motivo: "dono_da_origem_inativo" },
+    });
+    if (!atividade.ok) {
+      await registraFalhaDeAtividade(supabase, {
+        organizationId: ctx.organization_id,
+        leadId,
+        tipo: "lead_edited",
+        origem: "leads/_handler.createLeadHandler",
+        erro: atividade.error,
+        requestId: ctx.requestId,
+      });
+    }
   }
 
   const a = actorAuditPayload(ctx.actor);
@@ -343,7 +855,11 @@ export async function createLeadHandler(
         stage_id: (lead as { stage_id: string }).stage_id,
         title: (lead as { title: string }).title,
       },
-      p_metadata: { request_id: ctx.requestId, ...a.metadataActor },
+      p_metadata: {
+        request_id: ctx.requestId,
+        ...a.metadataActor,
+        ...(input.via_planilha ? { via: ORIGEM_DA_PLANILHA } : {}),
+      },
       p_organization_id: ctx.organization_id,
     })
     .then(({ error }) => {
@@ -365,7 +881,7 @@ export async function createLeadHandler(
     },
   });
 
-  return lead as Record<string, unknown>;
+  return ocultarProvaMetaNaResposta(lead as Record<string, unknown>);
 }
 
 // ---------------------------------------------------------------------------
@@ -407,15 +923,81 @@ export async function updateLeadHandler(
     );
   }
 
+  // ── O PADRÃO (#2730) — a MESMA régua da criação, na EDIÇÃO ───────────────
+  //
+  // O funil é o do PRÓPRIO negócio (a linha já está em mãos), e o julgamento é
+  // sobre o DIFF contra o que está gravado (`camposQueMudaram`, a mesma conta
+  // da auditoria): a ficha do dossiê manda o formulário INTEIRO a cada
+  // salvamento (#2814), e julgar tudo recusaria a gravação por um campo que a
+  // pessoa nem tocou — o caso medido do campo escondido por `mostrar_quando`.
+  // Escopo `negocio` (#2852): o valor de um campo do CONTATO mora em
+  // `contacts.custom_fields`, e o padrão dele é julgado na ficha do contato.
+  // `settingsDoFunil` é fail-open: funil ilegível = lista vazia = grava como hoje.
+  if (input.custom_fields && Object.keys(input.custom_fields).length > 0) {
+    const alterados = camposQueMudaram(
+      input.custom_fields,
+      (existing as { custom_fields?: unknown }).custom_fields,
+    );
+    if (Object.keys(alterados).length > 0) {
+      const settingsDoEdicao = await settingsDoFunil(supabase, existing.pipeline_id);
+      const recusas = recusasDePadrao(
+        defsDoPadraoDoFunil(settingsDoEdicao, "negocio"),
+        alterados,
+        testaComPrazo,
+      );
+      if (recusas.length > 0) throw erroDePadrao(recusas, ctx.requestId, ctx.idioma);
+    }
+  }
+
+  // Reenviar o contato que o lead já tem não é ligar a um contato novo.
+  if (input.contact_id && input.contact_id !== existing.contact_id) {
+    await contatoDaOrgOrThrow(supabase, ctx, input.contact_id);
+  }
+  // ...mas o contato EFETIVO (trocado ou mantido) não pode ser pessoal: sem
+  // esta linha, marcar depois de abrir o negócio deixava a edição passar pela
+  // porta que já estava aberta (spec 21, etapa 12).
+  await recusaPessoalNaEscrita(
+    supabase,
+    ctx,
+    (input.contact_id ?? (existing as { contact_id?: string | null }).contact_id) as
+      | string
+      | null
+      | undefined,
+  );
+
   const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
   if (input.title !== undefined) patch.title = input.title;
   if (input.description !== undefined) patch.description = input.description;
   if (input.contact_id !== undefined) patch.contact_id = input.contact_id;
   if (input.value_cents !== undefined) patch.value_cents = input.value_cents;
+  // O RECORRENTE SÓ É TOCADO quando a requisição o menciona (fatia 1 da #3602):
+  // um PATCH de título que carimbasse `null` nas três apagaria a mensalidade do
+  // negócio em silêncio. E, tocado, vai o TRIO coerente — mandar só
+  // `recurring_months` deixaria duração sem mensalidade no banco.
+  if (mencionaRecorrencia(input)) {
+    // A chave ausente vale o que a linha JÁ tem: o MCP e a REST mandam só o que
+    // mudou, e "a duração agora é 24" não pode apagar a mensalidade gravada.
+    const atual = existing as RecorrenciaNoPatch;
+    const valorDe = <K extends keyof RecorrenciaNoPatch>(k: K) =>
+      input[k] !== undefined ? input[k] : atual[k];
+    Object.assign(
+      patch,
+      recorrenciaParaGravar({
+        recurring_value_cents: valorDe("recurring_value_cents"),
+        recurring_period: valorDe("recurring_period"),
+        recurring_months: valorDe("recurring_months"),
+      }),
+    );
+  }
   if (input.currency !== undefined) patch.currency = input.currency;
   // Dono do negócio (0070): regra em lib/leads/owner-patch.ts, compartilhada
   // com create, bulk e MCP. owner_kind é DERIVADO — nunca lido do body.
-  const ownerPatch = await ownerPatchOrThrow(supabase, ctx, input);
+  const ownerPatch = await ownerPatchOrThrow(
+    supabase,
+    ctx,
+    input,
+    (existing.owner_user_id as string | null) ?? null,
+  );
   if (ownerPatch) {
     Object.assign(patch, ownerPatch);
     if (ownerPatch.owner_user_id !== null || ownerPatch.owner_agent_id !== null) {
@@ -426,13 +1008,26 @@ export async function updateLeadHandler(
     patch.expected_close_date = input.expected_close_date;
   }
   if (input.tags !== undefined) patch.tags = input.tags;
-  if (input.custom_fields !== undefined) {
-    const prev =
-      existing.custom_fields && typeof existing.custom_fields === "object" && !Array.isArray(existing.custom_fields)
-        ? (existing.custom_fields as Record<string, unknown>)
-        : {};
-    patch.custom_fields = { ...prev, ...input.custom_fields };
-  }
+  // ⛔ `custom_fields` NÃO ENTRA NO `patch`, e a ausência é o conserto.
+  //
+  // Isto era `patch.custom_fields = { ...prev, ...input.custom_fields }`, com
+  // `prev` vindo do SELECT lá de cima. Duas escritas simultâneas com chaves
+  // DIFERENTES perdiam uma: a segunda lia `prev` antes de a primeira gravar e
+  // sobrescrevia a coluna inteira com a versão velha mais a chave dela. Sem
+  // erro, sem log, o dado some.
+  //
+  // O PostgREST não sabe dizer `custom_fields = custom_fields || $1` — só sabe
+  // mandar um valor pronto, que é justamente o valor calculado da leitura
+  // velha. Então o merge foi para onde a trava de linha existe: a migration
+  // 0502 (`fn_lead_anotar_campos`), chamada LOGO APÓS o `update` abaixo.
+  //
+  // ⚠️ POR QUE DEPOIS, E NÃO ANTES: o `update` é quem prova que o lead existe e
+  // é desta organização (o 404). Anotar antes gravaria campo num lead que a
+  // requisição ainda vai recusar.
+  //
+  // O que a auditoria vai comparar (ver `camposDaAuditoria` mais abaixo) é o
+  // merge LOCAL, só para saber se esta requisição mudou algum campo. Ele nunca
+  // é gravado.
 
   // O filtro entra AQUI TAMBÉM, e não só no SELECT acima: entre ler e escrever
   // há uma janela, e defesa que depende de uma leitura anterior é defesa que
@@ -440,6 +1035,7 @@ export async function updateLeadHandler(
   const tagServiceOrigin = input.tags !== undefined
     ? ctx.serviceOrigin ?? await observeServiceOrigin(createAdminClient(), ctx.organization_id, input.contact_id ?? existing.contact_id)
     : null;
+  await guardServiceEffect();
   const { data: updated, error: updErr } = await supabase
     .from("crm_leads")
     .update(patch)
@@ -448,6 +1044,8 @@ export async function updateLeadHandler(
     .select(LEAD_COLS)
     .maybeSingle();
 
+  const recusaNoUpdate = recusaDaGuardaDoBanco(ctx, updErr);
+  if (recusaNoUpdate) throw recusaNoUpdate;
   if (updErr) {
     throw new ApiError(500, "internal_error", undefined, ctx.requestId, updErr.message);
   }
@@ -461,11 +1059,46 @@ export async function updateLeadHandler(
     );
   }
 
+  // O MERGE ATÔMICO. `updated` já provou que o lead existe e é da organização,
+  // e `ctx.organization_id` vem de fonte confiável — nunca do body. A função
+  // roda com a chave de serviço (é a única a ter EXECUTE), então o filtro de
+  // organização é o argumento `p_org`.
+  if (input.custom_fields !== undefined) {
+    const { data: mesclados, error: anotarErr } = await createAdminClient().rpc(
+      "fn_lead_anotar_campos",
+      { p_org: ctx.organization_id, p_lead: leadId, p_campos: input.custom_fields },
+    );
+    if (anotarErr) {
+      throw new ApiError(500, "internal_error", undefined, ctx.requestId, anotarErr.message);
+    }
+    // A resposta é o que EXISTE no banco, não o que esta requisição mandou: sob
+    // concorrência as duas coisas diferem, e é a do banco que vale.
+    (updated as Record<string, unknown>).custom_fields =
+      (mesclados as Record<string, unknown> | null) ?? {};
+  }
+
   const a = actorAuditPayload(ctx.actor);
   // O QUE MUDOU, nao o que foi enviado: o formulario do dossie manda o form
   // inteiro a cada salvamento, entao `Object.keys(input)` acusava cinco campos
   // quando a pessoa mexeu em um. Detalhe em lib/leads/campos-alterados.ts.
-  const fields = camposAlterados(patch, existing as Record<string, unknown>);
+  //
+  // `custom_fields` entra por fora porque não passou pelo `patch`: quem mescla é
+  // o banco. Sem esta linha, anotar um campo do funil não deixaria rastro na
+  // auditoria nem na timeline — invisível é pior que errado. A pergunta é a
+  // mesma de antes ("esta requisição mudou algum campo?"), respondida contra o
+  // que ESTA requisição leu (`existing`) e não contra o que outra escrita
+  // concorrente gravou: senão a chave do vizinho apareceria como minha.
+  // ⛔ `patch` NÃO é tocado: já foi enviado ao banco, e escrever nele depois é
+  // confundir "o que pedi" com "o que ficou".
+  const camposDaAuditoria: Record<string, unknown> = { ...patch };
+  if (input.custom_fields !== undefined) {
+    const anteriores =
+      existing.custom_fields && typeof existing.custom_fields === "object" && !Array.isArray(existing.custom_fields)
+        ? (existing.custom_fields as Record<string, unknown>)
+        : {};
+    camposDaAuditoria.custom_fields = { ...anteriores, ...input.custom_fields };
+  }
+  const fields = camposAlterados(camposDaAuditoria, existing as Record<string, unknown>);
 
   // A EDIÇÃO HUMANA ENTRA NA TIMELINE (wave 6). Antes disto, mexer num campo
   // era invisível: a IA deixava rastro e o humano não — meia continuidade
@@ -494,9 +1127,20 @@ export async function updateLeadHandler(
     // reason é RENDERIZADO NA TELA e vai junto em captura, exportação e ticket
     // de suporte; o §9 proíbe PII nova em log, reason ou evidence.
     //
-    // Quem precisa do valor anterior tem `api_audit_log`, que já registra a
-    // mutação SOB CONTROLE DE ACESSO. Duplicar aqui criaria um segundo lugar
-    // com o mesmo dado e menos proteção.
+    // O VALOR DO TÍTULO, DA DESCRIÇÃO, DAS TAGS E DE `custom_fields` NÃO é
+    // guardado em lugar nenhum — nem aqui, nem no `api_audit_log`. Pôr essa
+    // PII lá ficaria fora do alcance da proteção: o audit é append-only
+    // (migration 0258) e a anonimização da LGPD (lib/lgpd/cascata.ts) não o
+    // reescreve — a cascata só insere a linha `lgpd.redact_executed`
+    // (migration 0019, passo 8). O que sobra é o expurgo por retenção (L-10:
+    // 5 anos, migration 0167).
+    //
+    // ANTES-E-DEPOIS SÓ DOS CAMPOS TIPADOS SEM PII vai para o audit desde a
+    // #1755: `value_cents`, `currency`, `owner_user_id`, `owner_agent_id` e
+    // `expected_close_date`, pela lista branca de `lib/leads/valores-audit.ts`
+    // — o mesmo par `{ antes, depois }` que `ai.budget_limit_changed` já grava
+    // e a ida e volta que `lead.moved` já grava em
+    // `from_stage_id`/`to_stage_id`.
     //
     // NÃO confunda com a atividade de autorização vencida (wave 4), que mostra
     // antes-e-depois DE PROPÓSITO: lá o texto é a proposta do PRÓPRIO AGENTE,
@@ -549,6 +1193,34 @@ export async function updateLeadHandler(
     }
   }
 
+  // ── A ÚLTIMA LEITURA VEM DEPOIS DA ÚLTIMA ESCRITA (issue #916) ─────────────
+  //
+  // O mesmo defeito do `moveLeadHandler`, no PATCH do dossiê: `updated` é o
+  // retorno do UPDATE, e a atividade `lead_edited` gravada acima está na lista
+  // positiva de `fn_update_last_activity_at` (supabase/baseline.sql) — o gatilho
+  // faz `update crm_leads` numa transação POSTERIOR, e `fn_set_updated_at` troca
+  // o `updated_at` de novo. Devolver `updated` entregava ao quadro um carimbo
+  // que a própria edição já invalidou: `useEditLead` o grava no cache, e o
+  // arrasto seguinte levava 409 mesmo com o conserto do cliente.
+  const { data: fresh } = await supabase
+    .from("crm_leads")
+    .select(LEAD_COLS)
+    .eq("organization_id", ctx.organization_id)
+    .eq("id", leadId)
+    .maybeSingle();
+
+  // ANTES E DEPOIS DOS CAMPOS TIPADOS, NÃO DO TEXTO (issue #1755).
+  //
+  // A lista branca mora em lib/leads/valores-audit.ts, junto com a medição de
+  // por que é branca (audit append-only que a cascata da LGPD não reescreve).
+  // Título, descrição, tags e `custom_fields` ficam de fora por construção —
+  // `fields`, com os NOMES, continua dizendo que eles mudaram.
+  const valores = valoresAntesDepois(
+    camposDaAuditoria,
+    existing as Record<string, unknown>,
+    fields,
+  );
+
   await audit({
     action: "lead.updated",
     actorUserId: a.actorUserId,
@@ -556,10 +1228,15 @@ export async function updateLeadHandler(
     resourceType: "crm_lead",
     resourceId: leadId,
     requestId: ctx.requestId,
-    metadata: { ...a.metadataActor, fields },
+    metadata: {
+      ...a.metadataActor,
+      fields,
+      // Omitido quando vazio: editar SÓ texto grava a mesma linha de antes.
+      ...(Object.keys(valores).length > 0 ? { valores } : {}),
+    },
   });
 
-  return updated as Record<string, unknown>;
+  return ocultarProvaMetaNaResposta((fresh ?? updated) as Record<string, unknown>);
 }
 
 // ---------------------------------------------------------------------------
@@ -571,6 +1248,23 @@ export interface MoveLeadAdminInput {
   /** Optional fractional position. If omitted, append at end (max + 1000). */
   position_in_stage?: number;
   reason?: string;
+  /**
+   * O motivo da perda, quando a etapa de destino é de perda (issue #917).
+   *
+   * ⚠️ NÃO é o mesmo `reason` de cima, e por isso são dois campos: `reason` é a
+   * nota humana que entra na timeline ("cliente achou caro"), texto livre; este é
+   * o `crm_leads.lost_reason`, que o banco confere contra o vocabulário do funil
+   * (canônico + `settings.lost_reasons` do pipeline). Um valor de texto livre aqui
+   * não é recusado por esta função — é recusado pelo trigger, e a rota devolve a
+   * recusa de negócio (`recusaDeMotivoDaPerdaPeloBanco`). Quem decide se há de
+   * exigir ou não é `lib/leads/motivo-da-perda.ts`, o mesmo dos outros caminhos.
+   */
+  lost_reason?: string | null;
+  /**
+   * O motivo do ganho, quando a etapa de destino fecha o negócio como ganho
+   * (issue #1536) — espelho do `lost_reason`, mesma disciplina de escrita.
+   */
+  won_reason?: string | null;
 }
 
 export async function moveLeadHandler(
@@ -597,10 +1291,16 @@ export async function moveLeadHandler(
       traduzir("Lead não encontrado.", ctx.idioma ?? "pt-BR"),
     );
   }
+  // Mover negócio de pessoal é escrita para fora da operação (spec 21, etapa 12).
+  await recusaPessoalNaEscrita(
+    supabase,
+    ctx,
+    (lead as { contact_id?: string | null }).contact_id,
+  );
 
   const { data: stage, error: stageErr } = await supabase
     .from("crm_stages")
-    .select("id, pipeline_id, organization_id, name")
+    .select("id, pipeline_id, organization_id, name, is_lost, is_won")
     .eq("id", input.to_stage_id)
     .maybeSingle();
   if (stageErr) {
@@ -619,10 +1319,38 @@ export async function moveLeadHandler(
     throw new ApiError(
       422,
       "pipeline_immutable_use_clone",
-      undefined,
+      { use: "/api/v1/leads/{id}/clone" },
       ctx.requestId,
-      traduzir("Move cross-pipeline não é permitido.", ctx.idioma ?? "pt-BR"),
+      traduzir(RECUSA_DE_TROCA_DE_FUNIL, ctx.idioma ?? "pt-BR"),
     );
+  }
+
+  // ── RETOMAR COMO NOVO NEGÓCIO (issue #1538) ────────────────────────────────
+  //
+  // Este handler é o escritor de etapa de TODO cliente que não é o board: IA,
+  // lote (`create_or_move_lead`), automações e a tool MCP
+  // `crm_move_lead_stage`. Nenhum deles pode reabrir um negócio encerrado num
+  // funil `novo_negocio` — a mesma pergunta e a MESMA função da rota de arrasto,
+  // porque duas réguas para a mesma regra é como o defeito nasce.
+  // Vem ANTES da régua de campos, como no arrasto: um encerrado que não reabre
+  // não tem campo de etapa a pedir.
+  const settings = await settingsDoFunil(supabase, lead.pipeline_id);
+  {
+    const recusa = recusaReabertura({
+      modo: modoDeReabertura(settings),
+      statusAtual: (lead as { status?: string }).status,
+      etapaDestino: stage,
+      idioma: ctx.idioma,
+    });
+    if (recusa) {
+      throw new ApiError(
+        409,
+        recusa.codigo,
+        { use: "/api/v1/leads/{id}/retomar", lead_id: leadId },
+        ctx.requestId,
+        recusa.mensagem,
+      );
+    }
   }
 
   let position = input.position_in_stage;
@@ -637,14 +1365,88 @@ export async function moveLeadHandler(
     position = maxRow?.position_in_stage ? Number(maxRow.position_in_stage) + 1000 : 1000;
   }
 
+  // ── A MESMA ETAPA É REORDENAÇÃO, NÃO ENTRADA ────────────────────────────────
+  //
+  // O negócio que já está NA etapa de destino não está ENTRANDO nela: mover para
+  // onde ele já está só troca a posição. A rota do quadro compara o destino com
+  // `lead.stage_id` antes da régua e pula a régua por isso; aqui a comparação
+  // faltava, e este handler é o escritor de etapa de tudo que NÃO é o quadro (o
+  // MCP `crm_move_lead_stage`, a ação `create_or_move_lead`) — reordenar numa
+  // coluna exigente devolvia a frase de campos faltando e a execução aparecia
+  // como failed na aba Atividade.
+  //
+  // Fora da régua, e não dentro dela: `campos-exigidos.ts` segue sem saber o que
+  // é "mesma etapa" — quem sabe é quem lê a etapa atual ao lado do destino.
+  const mesmaEtapa = stage.id === lead.stage_id;
+
+  // ── OS CAMPOS OBRIGATÓRIOS (issue #1536) ────────────────────────────────────
+  //
+  // Este handler é o escritor de etapa de TODOS os clientes que não são o board
+  // (MCP `crm_move_lead_stage`, ações de automação), então a régua é a MESMA do
+  // arrasto, decidida pela MESMA função: o que falta vira 422 com
+  // `details.faltando`, e a tool do MCP devolve a frase ao modelo — que pergunta
+  // ao cliente ou passa para o humano, em vez de mover calado.
+  const vereditoDeCampos = mesmaEtapa
+    ? { faltando: [] }
+    : validaCamposExigidos({
+        lead: lead as Record<string, unknown>,
+        settingsDoFunil: settings,
+        camposComAnexo: await camposComAnexo(supabase, settings, ctx.organization_id, leadId),
+        destino: {
+          stageId: stage.id,
+          desfecho: stage.is_won ? "won" : stage.is_lost ? "lost" : null,
+        },
+        motivoDeGanho: input.won_reason ?? null,
+      });
+  if (vereditoDeCampos.faltando.length > 0) {
+    const recusa = recusaDeCamposObrigatorios(vereditoDeCampos.faltando, ctx.idioma);
+    throw new ApiError(
+      422,
+      recusa.codigo,
+      { faltando: vereditoDeCampos.faltando },
+      ctx.requestId,
+      recusa.mensagem,
+    );
+  }
+  if (stage.is_won) {
+    const recusaGanho = recusaDeMotivoDoGanho({
+      motivo: input.won_reason,
+      settingsDoFunil: settings,
+      idioma: ctx.idioma,
+    });
+    if (recusaGanho) {
+      throw new ApiError(422, recusaGanho.codigo, undefined, ctx.requestId, recusaGanho.mensagem);
+    }
+  }
+
+  // ── O MOTIVO DA PERDA (issue #917) ──────────────────────────────────────────
+  //
+  // Este handler é o escritor de etapa de TODOS os clientes que não são o board
+  // (MCP `crm_move_lead_stage`, ações de automação), e a regra é a mesma do
+  // arrasto: etapa de perda exige motivo, e o motivo sai na mesma escrita.
+  const veredito = decideMotivoDaPerda({
+    etapaDeDestino: stage,
+    motivo: input.lost_reason,
+    motivoAtual: (lead as { lost_reason?: string | null }).lost_reason ?? null,
+    idioma: ctx.idioma,
+  });
+  if (!veredito.ok) {
+    throw new ApiError(422, veredito.codigo, undefined, ctx.requestId, veredito.mensagem);
+  }
+
   const serviceOrigin = ctx.serviceOrigin ?? await observeServiceOrigin(createAdminClient(), ctx.organization_id, lead.contact_id);
   const nowIso = new Date().toISOString();
+  await guardServiceEffect();
   const { data: updated, error: updErr } = await supabase
     .from("crm_leads")
     .update({
       stage_id: input.to_stage_id,
       position_in_stage: position,
       updated_at: nowIso,
+      ...veredito.patch,
+      ...(stage.is_won && input.won_reason?.trim()
+        ? { won_reason: input.won_reason.trim() }
+        : {}),
     })
     .eq("id", leadId)
     .eq("updated_at", lead.updated_at)
@@ -652,6 +1454,12 @@ export async function moveLeadHandler(
     .maybeSingle();
 
   if (updErr) {
+    // Rede de segurança (#917) — mesma da rota de arrasto: recusa do banco por
+    // motivo da perda vira recusa de negócio, nunca 500.
+    const recusa = recusaDeMotivoDaPerdaPeloBanco(updErr, ctx.idioma);
+    if (recusa) {
+      throw new ApiError(422, recusa.codigo, undefined, ctx.requestId, recusa.mensagem);
+    }
     throw new ApiError(500, "internal_error", undefined, ctx.requestId, updErr.message);
   }
   if (!updated) {
@@ -663,13 +1471,6 @@ export async function moveLeadHandler(
       traduzir("Lead foi modificado concorrentemente.", ctx.idioma ?? "pt-BR"),
     );
   }
-
-  const { data: fresh } = await supabase
-    .from("crm_leads")
-    .select("*")
-    .eq("id", leadId)
-    .maybeSingle();
-  const finalLead = (fresh ?? updated) as Record<string, unknown>;
 
   const a = actorAuditPayload(ctx.actor);
   await createAdminClient()
@@ -683,7 +1484,10 @@ export async function moveLeadHandler(
         from_stage_id: lead.stage_id,
         to_stage_id: input.to_stage_id,
         position_in_stage: position,
-        status: (finalLead as { status: string }).status,
+        // `updated` é o retorno do próprio UPDATE, e `trg_crm_lead_close_on_stage`
+        // é BEFORE (baseline.sql): o `status` que o gatilho escreveu já está
+        // aqui. Ler a releitura do fim seria amarrar este evento à ordem dela.
+        status: (updated as { status: string }).status,
       },
       p_metadata: { request_id: ctx.requestId, ...a.metadataActor },
       p_organization_id: lead.organization_id,
@@ -805,6 +1609,28 @@ export async function moveLeadHandler(
     });
   }
 
+  // ── A ÚLTIMA LEITURA VEM DEPOIS DA ÚLTIMA ESCRITA (issue #916) ─────────────
+  //
+  // Reler o lead ANTES de gravar a atividade devolvia um `updated_at` que a
+  // própria requisição já invalidava: o INSERT de `stage_changed` dispara
+  // `trg_update_last_activity_at`, cuja lista positiva inclui `stage_changed`
+  // (baseline.sql), e o `update crm_leads` dele passa por `fn_set_updated_at`
+  // (`new.updated_at := now()`, incondicional). Quem guardar esta resposta para
+  // a próxima trava otimista leva 409 no gesto seguinte.
+  //
+  // Este é o caminho da IA, do lote e das automações — o irmão de
+  // `app/api/v1/leads/[id]/move/route.ts`, onde a mesma inversão já foi
+  // corrigida. `agent_move_corrected` NÃO está na lista positiva, mas a
+  // releitura vem depois dele também: a ordem certa não depende de qual tipo
+  // está na lista hoje.
+  const { data: fresh } = await supabase
+    .from("crm_leads")
+    .select("*")
+    .eq("id", leadId)
+    .eq("organization_id", ctx.organization_id)
+    .maybeSingle();
+  const finalLead = (fresh ?? updated) as Record<string, unknown>;
+
   await audit({
     action: "lead.moved",
     actorUserId: a.actorUserId,
@@ -821,5 +1647,264 @@ export async function moveLeadHandler(
     },
   });
 
-  return finalLead;
+  return ocultarProvaMetaNaResposta(finalLead);
+}
+
+
+export interface RetomarLeadInput {
+  /**
+   * A etapa da NOVA tentativa — a que quem arrastou tentou usar. Sem ela, a
+   * primeira etapa aberta do funil (mesma escolha do clone sem `stage_id`).
+   */
+  stage_id?: string;
+}
+
+/**
+ * RETOMAR UM NEGÓCIO PERDIDO COMO NEGÓCIO NOVO (issue #1538).
+ *
+ * É a porta que o 409 `reabertura_cria_novo` aponta: o negócio encerrado NÃO é
+ * tocado (continua com o status e o motivo dele), e nasce outro lead no MESMO
+ * funil, com o mesmo contato, `source = "retomada"` e
+ * `retomado_de_lead_id` apontando para a origem — a coluna (migration 0425) por
+ * onde "quantas tentativas até fechar" é derivado. A criação passa pelo
+ * `createLeadHandler`, então o `lead.created`, a auditoria e a linha do tempo
+ * são os MESMOS de um lead novo: uma retomada não é um lead de segunda classe.
+ *
+ * Serve a rota `POST /api/v1/leads/{id}/retomar` e a tool MCP
+ * `crm_retomar_lead` — dois call sites, um só caminho, como `/move` ×
+ * `moveLeadHandler`.
+ *
+ * Exige origem ENCRERRADA (`reabertura_lead_aberto`): retomar um negócio que
+ * já está aberto duplicaria o card que já está no quadro. O modo do funil NÃO
+ * entra aqui — em `mesmo_registro` quem decide se um encerrado reabre é o
+ * arrasto; esta porta existe para quem quer a nova tentativa de propósito.
+ */
+export async function retomarLeadHandler(
+  supabase: SB,
+  ctx: HandlerCtx,
+  leadId: string,
+  input: RetomarLeadInput = {},
+): Promise<Record<string, unknown>> {
+  const idioma = ctx.idioma ?? "pt-BR";
+
+  const { data: origem, error: selErr } = await supabase
+    .from("crm_leads")
+    .select("*")
+    .eq("id", leadId)
+    .maybeSingle();
+  if (selErr) {
+    throw new ApiError(500, "internal_error", undefined, ctx.requestId, selErr.message);
+  }
+  if (!origem || origem.organization_id !== ctx.organization_id) {
+    throw new ApiError(404, "not_found", undefined, ctx.requestId, traduzir("Lead não encontrado.", idioma));
+  }
+  const origemTipada = origem as {
+    id: string;
+    pipeline_id: string;
+    status: string;
+    title: string;
+    description?: string | null;
+    contact_id?: string | null;
+    value_cents?: number | null;
+    recurring_value_cents?: number | null;
+    recurring_period?: "monthly" | null;
+    recurring_months?: number | null;
+    currency?: string | null;
+    owner_user_id?: string | null;
+    owner_agent_id?: string | null;
+    expected_close_date?: string | null;
+    tags?: string[] | null;
+    custom_fields?: Record<string, unknown> | null;
+    lost_reason?: string | null;
+  };
+  // Retomar para pessoal abriria um negócio novo para fora da operação: a
+  // retomada é escrita e recusa como as outras (spec 21, etapa 12).
+  await recusaPessoalNaEscrita(supabase, ctx, origemTipada.contact_id);
+  if (origemTipada.status === "open") {
+    throw new ApiError(
+      422,
+      "reabertura_lead_aberto",
+      { use: "/api/v1/leads/{id}/move" },
+      ctx.requestId,
+      traduzir(RECUSA_RETOMADA_LEAD_ABERTO, idioma),
+    );
+  }
+
+  // IDEMPOTÊNCIA: a origem já tem uma retomada ABERTA? Então a resposta é ela —
+  // retomar duas vezes (clique repetido, tool MCP chamada de novo) não abre um
+  // segundo negócio para a mesma tentativa. Retomada já encerrada não conta: aí
+  // uma nova tentativa é legítima.
+  // ponytail: não é atômico sob concorrência (duas chamadas simultâneas ainda
+  // criam duas); o upgrade é um índice único parcial em
+  // (retomado_de_lead_id) where status = 'open'.
+  const { data: jaRetomado, error: jaErr } = await supabase
+    .from("crm_leads")
+    .select("*")
+    .eq("organization_id", ctx.organization_id)
+    .eq("retomado_de_lead_id", origemTipada.id)
+    .eq("status", "open")
+    .limit(1)
+    .maybeSingle();
+  if (jaErr) {
+    throw new ApiError(500, "internal_error", undefined, ctx.requestId, jaErr.message);
+  }
+  if (jaRetomado) return ocultarProvaMetaNaResposta(jaRetomado as Record<string, unknown>);
+
+  const { data: funil, error: funilErr } = await supabase
+    .from("crm_pipelines")
+    .select("settings")
+    .eq("id", origemTipada.pipeline_id)
+    .maybeSingle();
+  if (funilErr) {
+    throw new ApiError(500, "internal_error", undefined, ctx.requestId, funilErr.message);
+  }
+  const settings = (funil as { settings?: unknown } | null)?.settings;
+
+  // A etapa da nova tentativa: a que o chamador pediu (se veio) ou a primeira
+  // aberta do funil. Recusa junta para os dois casos em que ela não serve —
+  // etapa de OUTRO funil, de fechamento ou arquivada — porque a ação é a mesma
+  // (escolher outra), e `stage_pipeline_mismatch` é o código que o clone já
+  // devolve para o mesmo "não está disponível".
+  let etapa: { id: string; is_won: boolean; is_lost: boolean; is_archived: boolean };
+  if (input.stage_id) {
+    const { data, error } = await supabase
+      .from("crm_stages")
+      .select("id, pipeline_id, is_won, is_lost, is_archived")
+      .eq("organization_id", ctx.organization_id)
+      .eq("id", input.stage_id)
+      .maybeSingle();
+    if (error) {
+      throw new ApiError(500, "internal_error", undefined, ctx.requestId, error.message);
+    }
+    if (
+      !data ||
+      data.pipeline_id !== origemTipada.pipeline_id ||
+      data.is_archived ||
+      data.is_won ||
+      data.is_lost
+    ) {
+      throw new ApiError(
+        422,
+        "stage_pipeline_mismatch",
+        undefined,
+        ctx.requestId,
+        traduzir(RECUSA_RETOMADA_ETAPA_INDISPONIVEL, idioma),
+      );
+    }
+    etapa = data;
+  } else {
+    const { data, error } = await supabase
+      .from("crm_stages")
+      .select("id, pipeline_id, is_won, is_lost, is_archived")
+      .eq("organization_id", ctx.organization_id)
+      .eq("pipeline_id", origemTipada.pipeline_id)
+      .eq("is_archived", false)
+      .order("position", { ascending: true });
+    if (error) {
+      throw new ApiError(500, "internal_error", undefined, ctx.requestId, error.message);
+    }
+    const aberta = (data ?? []).find((e) => !e.is_won && !e.is_lost);
+    if (!aberta) {
+      throw new ApiError(
+        422,
+        "pipeline_without_initial_stage",
+        undefined,
+        ctx.requestId,
+        traduzir(RECUSA_RETOMADA_SEM_ETAPA, idioma),
+      );
+    }
+    etapa = aberta;
+  }
+
+  const campos = camposCopiadosNaRetomada(settings);
+  const copia = (campo: string): boolean => (campos as readonly string[]).includes(campo);
+
+  const payload: CreateLeadInput & {
+    custom_fields?: Record<string, unknown>;
+    custom_fields_da_origem?: Record<string, unknown>;
+    source_metadata?: Record<string, unknown>;
+    retomado_de_lead_id?: string;
+    dono_herdado?: boolean;
+  } = {
+    pipeline_id: origemTipada.pipeline_id,
+    stage_id: etapa.id,
+    // O título é o da origem: ele nasce do resolvedor das telas e é o que o
+    // operador reconhece no quadro — "Lead da automação" aqui seria um card
+    // novo sem nome.
+    title: origemTipada.title,
+    contact_id: origemTipada.contact_id ?? null,
+    source: "retomada",
+    tags: copia("tags") ? origemTipada.tags ?? [] : [],
+    custom_fields: copia("custom_fields") ? origemTipada.custom_fields ?? {} : {},
+    custom_fields_da_origem: origemTipada.custom_fields ?? {},
+    retomado_de_lead_id: origemTipada.id,
+    // O ponteiro da coluna é a cadeia; este registro guarda TAMBÉM o desfecho
+    // de origem para a tela, porque a coluna guarda só o id.
+    source_metadata: {
+      retomada_de: {
+        lead_id: origemTipada.id,
+        status: origemTipada.status,
+        lost_reason: origemTipada.lost_reason ?? null,
+      },
+    },
+    ...(copia("description") ? { description: origemTipada.description ?? null } : {}),
+    ...(copia("value_cents") ? { value_cents: origemTipada.value_cents ?? null } : {}),
+    // O RECORRENTE acompanha o valor único quando a retomada copia valores
+    // (fatia 1 da #3602): reabrir o negócio só com o setup entregaria um
+    // contrato pela metade, e a mensalidade sumiria sem erro nenhum.
+    ...(copia("value_cents") && origemTipada.recurring_value_cents != null
+      ? {
+          recurring_value_cents: origemTipada.recurring_value_cents,
+          recurring_period: origemTipada.recurring_period ?? "monthly",
+          recurring_months: origemTipada.recurring_months ?? null,
+        }
+      : {}),
+    ...(copia("currency") && origemTipada.currency ? { currency: origemTipada.currency } : {}),
+    ...(copia("expected_close_date")
+      ? { expected_close_date: origemTipada.expected_close_date ?? null }
+      : {}),
+    ...(copia("owner_user_id") && origemTipada.owner_user_id
+      ? { owner_user_id: origemTipada.owner_user_id }
+      : {}),
+    ...(copia("owner_agent_id") && origemTipada.owner_agent_id
+      ? { owner_agent_id: origemTipada.owner_agent_id }
+      : {}),
+    // Dono copiado é HERDADO, como no clone: se ele saiu da empresa, a retomada
+    // nasce sem dono em vez de virar 422.
+    ...((copia("owner_user_id") && origemTipada.owner_user_id) ||
+    (copia("owner_agent_id") && origemTipada.owner_agent_id)
+      ? { dono_herdado: true }
+      : {}),
+  };
+
+  // A RÉGUA DE CAMPOS OBRIGATÓRIOS (issue #1536): a retomada ENTRA numa etapa,
+  // e a etapa exigente vale para ela como vale para o arrasto. Só conta o que o
+  // negócio novo vai ter — os campos copiados da origem.
+  //
+  // O ARQUIVO não é cobrado (#2829, fatia 2): a retomada CRIA o negócio
+  // (`createLeadHandler` logo abaixo), e o anexo é do negócio que ainda vai
+  // nascer. Passar `semAnexosAinda` aqui é o que faz esta pergunta ser a MESMA
+  // do escritor — sem ela, a retomada recusava com 422 uma etapa que exige
+  // documento e o caminho do `createLeadHandler` (que pula o arquivo, #3433)
+  // nunca era alcançado. A cobrança volta no próximo move, no lote ou no
+  // fechamento, onde `camposComAnexo` é lido de verdade.
+  const vereditoDeCampos = validaCamposExigidos({
+    lead: { custom_fields: payload.custom_fields ?? {} },
+    settingsDoFunil: settings,
+    destino: { stageId: etapa.id, desfecho: null },
+    motivoDeGanho: null,
+    semAnexosAinda: true,
+  });
+  if (vereditoDeCampos.faltando.length > 0) {
+    const recusa = recusaDeCamposObrigatorios(vereditoDeCampos.faltando, idioma);
+    throw new ApiError(
+      422,
+      recusa.codigo,
+      { faltando: vereditoDeCampos.faltando },
+      ctx.requestId,
+      recusa.mensagem,
+    );
+  }
+
+  return createLeadHandler(supabase, ctx, payload);
 }

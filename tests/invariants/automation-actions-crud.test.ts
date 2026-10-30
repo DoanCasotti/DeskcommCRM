@@ -38,7 +38,7 @@ function sqlLiteral(v: unknown): string {
 type QResult = { data: unknown; error: { message: string; code?: string } | null };
 type RowResult = { data: Record<string, unknown> | null; error: { message: string; code?: string } | null };
 
-type FilterOp = "eq" | "is";
+type FilterOp = "eq" | "is" | "neq";
 interface Filter {
   op: FilterOp;
   col: string;
@@ -92,6 +92,28 @@ class FakeQuery implements PromiseLike<QResult> {
     return this;
   }
 
+  /**
+   * `.neq(col, v)` — o ramo irmão que faltava (issue #992).
+   *
+   * O produto passou a usar `neq` em `negocioAbertoEmOutroFunil`
+   * (`lib/automation/actions/create-or-move-lead.ts`), que procura o negócio
+   * ABERTO do contato em OUTRO funil. O dublê de `tests/helpers/stages-db-double.ts`
+   * — o que dá para rodar sem banco — aprendeu o ramo junto com a #992; ESTE, o
+   * dublê próprio da suíte de invariantes, ficou para trás. Sem ele a chamada
+   * estoura `TypeError`, cai no `catch (err)` do `execute` e volta como
+   * `status: "failed"`: o invariante mediria o dublê, não o código — e a suíte
+   * que roda contra o Postgres de verdade é justamente a que não pode medir isso.
+   *
+   * O SQL sai como `<>` de propósito, não como `not (col = v)`: é o que o
+   * PostgREST manda, e os dois divergem em coluna NULA — `col <> v` não é
+   * verdadeiro quando `col` é nulo, então a linha nula NÃO casa. É a semântica
+   * que o produto enxerga contra o banco.
+   */
+  neq(col: string, val: unknown): this {
+    this.filters.push({ op: "neq", col, val });
+    return this;
+  }
+
   order(col: string, opts: { ascending: boolean }): this {
     this.orderCol = col;
     this.orderAsc = opts.ascending;
@@ -106,7 +128,11 @@ class FakeQuery implements PromiseLike<QResult> {
   private buildWhere(): string {
     if (!this.filters.length) return "";
     const clauses = this.filters.map((f) =>
-      f.op === "is" ? `${f.col} is ${f.val === null ? "null" : sqlLiteral(f.val)}` : `${f.col} = ${sqlLiteral(f.val)}`,
+      f.op === "is"
+        ? `${f.col} is ${f.val === null ? "null" : sqlLiteral(f.val)}`
+        : f.op === "neq"
+          ? `${f.col} <> ${sqlLiteral(f.val)}`
+          : `${f.col} = ${sqlLiteral(f.val)}`,
     );
     return ` where ${clauses.join(" and ")}`;
   }
@@ -195,6 +221,26 @@ function fakeAdminClient(): SupabaseClient {
     from: (table: string) => new FakeQuery(table),
     rpc: (name: string, params: Record<string, unknown>): Promise<QResult> => {
       return (async () => {
+        // A JUNÇÃO (#2888, migration 0682): quem soma as etiquetas é a função,
+        // DENTRO do UPDATE. O dublê só a chama — é a mesma instrução que roda em
+        // produção, e o que volta é o que o RETURNING devolveu.
+        if (name === "fn_lead_adicionar_etiquetas" || name === "fn_contato_adicionar_etiquetas") {
+          const p = params as unknown as { p_org: string; p_lead?: string; p_contato?: string; p_etiquetas: string[] };
+          const id = String(name === "fn_lead_adicionar_etiquetas" ? p.p_lead : p.p_contato);
+          try {
+            const saida = sql(
+              `select public.${name}(${sqlString(p.p_org)}::uuid, ${sqlString(id)}::uuid, ${sqlLiteral(
+                p.p_etiquetas,
+              )});`,
+            );
+            // Linha ausente ou de outra organização: a função devolve nulo e o
+            // psql imprime linha vazia.
+            if (!saida) return { data: null, error: null };
+            return { data: JSON.parse(saida), error: null };
+          } catch (err) {
+            return { data: null, error: { message: (err as Error).message } };
+          }
+        }
         if (name !== "emit_event") {
           throw new Error(`fakeAdminClient: unsupported rpc ${name}`);
         }

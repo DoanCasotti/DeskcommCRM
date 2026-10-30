@@ -6,13 +6,22 @@
  */
 import { z } from "zod";
 import { flowGraphSchema } from "./graph-schema";
+import { MAX_THRESHOLD_MINUTES, MIN_THRESHOLD_MINUTES } from "./gap-de-retorno";
+import { BASES_DA_PAUSA, MAX_PAUSA_DE_REENTRADA_MINUTES } from "./pausa-de-reentrada";
 
-/** Vocabulário da coluna `surface` (0167). A UI não recorta mais por ela. */
-export const FOLLOWUP_FLOW_SURFACES = ["followup", "crm_automation"] as const;
+/**
+ * Vocabulário da coluna `surface` (0167; `atendimento` na 0394 — roteiro de
+ * perguntas conduzido no turno, módulo opcional `fluxos_atendimento`). A UI não
+ * recorta mais por ela; o CHECK do banco espelha esta tupla.
+ */
+export const FOLLOWUP_FLOW_SURFACES = ["followup", "crm_automation", "atendimento"] as const;
 export type FollowupFlowSurface = (typeof FOLLOWUP_FLOW_SURFACES)[number];
 
 export const createFollowupFlowSchema = z.strictObject({
   name: z.string().trim().min(1).max(80),
+  // Superfície do fluxo (default do banco = 'followup'). A tela de Atendimento
+  // cria com 'atendimento'; a de Follow-ups, sem o campo.
+  surface: z.enum(FOLLOWUP_FLOW_SURFACES).optional(),
 });
 
 // `cancel_on_reply` (Task 5.2 — reatividade): se true, um enrollment `waiting_reply`
@@ -28,6 +37,11 @@ export const triggerConfigSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("manual"), ...CANCEL_ON_REPLY }),
   z.strictObject({ kind: z.literal("webhook"), ...CANCEL_ON_REPLY }),
   z.strictObject({
+    kind: z.literal("lead_created"),
+    params: z.strictObject({}).optional(),
+    ...CANCEL_ON_REPLY,
+  }),
+  z.strictObject({
     kind: z.literal("stage_change"),
     params: z.strictObject({ stage_id: z.string().uuid() }),
     ...CANCEL_ON_REPLY,
@@ -36,6 +50,41 @@ export const triggerConfigSchema = z.discriminatedUnion("kind", [
     kind: z.literal("silence"),
     params: z.strictObject({
       threshold_minutes: z.number().int().min(5).max(10_080),
+      segments: z.array(z.string()).optional(),
+      // Pausa antes de o fluxo recomeçar para quem já encerrou uma inscrição
+      // nele (`lib/followup/pausa-de-reentrada.ts`). Ausente ou 0 = sem pausa.
+      reentry_pause_minutes: z.number().int().min(0).max(MAX_PAUSA_DE_REENTRADA_MINUTES).optional(),
+      // Teto do silêncio: com ele, o fluxo só começa enquanto o silêncio for
+      // RECENTE (entre `threshold_minutes` e este valor). Sem ele, a varredura
+      // pega todo contato calado há mais que o mínimo — horas ou dias — e um
+      // fluxo de "10 minutos depois" disparava de uma vez para todos ao ser ligado.
+      max_silence_minutes: z.number().int().min(5).max(10_080).optional(),
+      // De onde a pausa conta (`pausa-de-reentrada.ts`). Ausente = `ultima_mensagem`.
+      reentry_pause_basis: z.enum(BASES_DA_PAUSA).optional(),
+      // Só alcança quem a EQUIPE já respondeu: na conversa que guarda o inbound
+      // mais recente, tem de haver outbound DEPOIS dele. Ausente ou `false` = o
+      // comportamento de sempre, byte a byte — ver a seção "Dívida da equipe não
+      // é silêncio do cliente" no cabeçalho de `silence-sweep.ts`.
+      exige_resposta_da_equipe: z.boolean().optional(),
+      /**
+       * Quantas vezes NO TOTAL este fluxo pode recomeçar para o mesmo contato.
+       * Ausente = sem teto (o comportamento de sempre).
+       *
+       * A pausa de reentrada só ESPAÇA as repetições; quem nunca responde
+       * continua elegível para sempre, porque nada atualiza a última mensagem
+       * dele. Sem teto, o fluxo recomeça a cada pausa — 24 h, 48 h, 72 h —
+       * indefinidamente.
+       */
+      max_enrollments_por_contato: z.number().int().min(1).max(50).optional(),
+    }),
+    ...CANCEL_ON_REPLY,
+  }),
+  z.strictObject({
+    kind: z.literal("inbound_after_silence"),
+    params: z.strictObject({
+      // Piso 1h / teto 90 dias: `lib/followup/gap-de-retorno.ts`. A tela pede
+      // valor + unidade; o fio guarda só minutos.
+      threshold_minutes: z.number().int().min(MIN_THRESHOLD_MINUTES).max(MAX_THRESHOLD_MINUTES),
       segments: z.array(z.string()).optional(),
     }),
     ...CANCEL_ON_REPLY,
@@ -57,6 +106,23 @@ export const triggerConfigSchema = z.discriminatedUnion("kind", [
   }),
 ]);
 export type TriggerConfig = z.infer<typeof triggerConfigSchema>;
+
+/**
+ * Instalar um modelo pronto (`lib/followup/modelos/`). O corpo é mínimo de
+ * propósito: nome, textos, prazos e política de handoff vêm do MODELO, nunca do
+ * cliente — quem manda o grafo é o catálogo, e um body que pudesse mandar o seu
+ * seria a mesma porta do PATCH com outro nome.
+ *
+ * `stage_id` só é lido por modelo de gatilho de etapa (`pedeEtapa`), e é
+ * conferido contra a organização ativa antes de gravar: etapa de outra org no
+ * body é o anti-pattern nº 10 do CLAUDE.md.
+ */
+export const instalarModeloSchema = z.strictObject({
+  model_id: z.string().trim().min(1).max(80),
+  stage_id: z.string().uuid().optional(),
+  /** Renomear na hora de instalar — duas clínicas na mesma instalação, dois nomes. */
+  name: z.string().trim().min(1).max(80).optional(),
+});
 
 export const patchFollowupFlowSchema = z.strictObject({
   name: z.string().trim().min(1).max(80).optional(),

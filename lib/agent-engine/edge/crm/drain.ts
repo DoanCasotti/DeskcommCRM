@@ -9,16 +9,26 @@
  *     (organization_id, source_event_id) em job_queue com captura de 23505;
  *   - coalescência de rajada: mensagens do MESMO contato dentro da janela de
  *     debounce viram UM job (o turno lê o histórico completo e responde a todas);
- *   - grupos @g.us: skip (regra dura nº 12) — evento marcado done sem job;
+ *   - grupos @g.us: skip (regra dura nº 12), exceto quando a chave POR GRUPO
+ *     `ia_responde` liberou a IA (#2729) — evento marcado done sem job;
  *   - eventos 'processing' órfãos (crash do worker) voltam a 'pending' por timeout.
  */
 import { z } from 'zod';
 import type pg from 'pg';
 
+import { loadConversationAgentConfig } from '../../agent/agent-config';
+import { insertInboxItem } from '../../db/repository';
 import type { Logger } from '../../obs/logger';
 import { enqueueJob } from '../../queue/queue';
+import { decidirRajada, debounceEfetivo } from './debounce';
+import { avisoDeEventoMorto, IA_QUE_NAO_RESPONDEU } from '@/lib/event-log/aviso-de-evento-morto';
+import { canalDesativado } from '@/lib/channels/desativado';
 import { TIPOS_DERIVAVEIS, DERIVACAO_TERMINADA } from '@/lib/messaging/media/derivable';
+import { haQuemAtendaASessao } from '@/lib/ai/agents/quem-atende-a-sessao';
 import { decidirElegibilidadeDaConversa } from '@/lib/ai/elegibilidade/consulta-pg';
+import { deveCederTurnoAoRetorno } from '@/lib/followup/ceder-turno-ao-retorno';
+import { grupoLiberaIa } from '@/lib/grupos/ia-no-grupo';
+import { ehOperante } from '@/lib/organizacao/operante';
 
 const DRAIN_CONSUMER = 'agent-engine';
 
@@ -60,7 +70,9 @@ const ALLOWLIST_TTL_MS_PADRAO = 21 * 24 * 60 * 60 * 1000;
 
 /** Um tick do drain: claima um lote de eventos e os transforma em jobs. */
 export async function drainTick(pool: pg.Pool, knobs: DrainKnobs, log: Logger): Promise<number> {
-  // Reaper de eventos órfãos — barato (update indexado), roda a cada tick.
+  // Reaper de eventos órfãos, a cada tick. Quem o serve é o parcial
+  // `event_log_processing_por_tipo_idx` (event_type where status='processing',
+  // migration 0585); o `= any(consumed_by)` é filtro e não usa o GIN.
   await pool.query(
     `update event_log set status = 'pending', updated_at = now()
      where event_type = 'ai_agent.dispatch_requested'
@@ -117,9 +129,59 @@ export async function drainTick(pool: pg.Pool, knobs: DrainKnobs, log: Logger): 
         [event.id, terminal ? 'dead' : 'pending', message],
       );
       log.error('drain: evento falhou', { event_id: event.id, terminal, error: message });
+      if (terminal) await avisarDespachoMorto(pool, event, message, log);
     }
   }
   return events.length;
+}
+
+/**
+ * O DESPACHO DA IA QUE MORRE AVISA A CENTRAL — como o dreno de handlers já avisa.
+ *
+ * `lib/event-log/drain.ts` passou a abrir `event_dead` quando desiste de um
+ * evento; este dreno marca `dead` o `ai_agent.dispatch_requested` pelo mesmo
+ * critério (5 tentativas) e seguia sem avisar ninguém. É o pior dos dois
+ * silêncios: o efeito que não aconteceu é a resposta ao cliente.
+ *
+ * Mesmo texto do outro dreno, mas dedupe POR TÍTULO (`kind_e_titulo`), só
+ * enquanto houver um aberto: um `event_dead` de mídia ou de automação aberto não
+ * engole este, que é o único que diz que um cliente ficou sem resposta (ver
+ * `aviso-de-evento-morto.ts`, "as duas famílias"). SQL de uma instrução
+ * (`insertInboxItem`, `insert … where not exists`) em vez de consulta seguida
+ * de insert. Mil despachos mortos numa pane abrem um aviso, não mil: medido em
+ * `tests/invariants/evento-morto-nao-inunda-a-central.test.ts`; o aviso de
+ * outra família aberto não cala este: medido em
+ * `tests/invariants/aviso-da-ia-nao-some-atras-de-outro-evento-morto.test.ts`.
+ *
+ * Fire-and-forget: falhar ao avisar não pode derrubar o tick, que ainda tem o
+ * resto do lote para drenar.
+ */
+async function avisarDespachoMorto(
+  pool: pg.Pool,
+  event: EventRow,
+  motivo: string,
+  log: Logger,
+): Promise<void> {
+  const { title, body } = avisoDeEventoMorto({
+    eventType: 'ai_agent.dispatch_requested',
+    // `attempts` já foi incrementado no claim: é a contagem com esta tentativa.
+    tentativas: event.attempts,
+    motivo,
+    efeito: IA_QUE_NAO_RESPONDEU,
+  });
+  try {
+    await insertInboxItem(
+      pool,
+      event.organization_id,
+      { kind: 'event_dead', severity: 'critical', title, body },
+      'kind_e_titulo',
+    );
+  } catch (err) {
+    log.error('drain: aviso de despacho morto falhou', {
+      event_id: event.id,
+      error: (err instanceof Error ? err.message : String(err)).slice(0, 300),
+    });
+  }
 }
 
 /** Quanto esperar entre uma checagem e outra da derivação de mídia. */
@@ -143,6 +205,45 @@ const TETO_ESPERA_DERIVACAO_MS = 120_000;
 
 type DesfechoEvento = 'processado' | 'adiar';
 
+/**
+ * Janela de rajada EFETIVA para o evento: a configurada na versão do agente
+ * desta conversa (#1856), com o `INBOUND_DEBOUNCE_MS` da instalação como
+ * default e clamp no teto de 60s (`debounceEfetivo`).
+ *
+ * A resolução é a de `loadConversationAgentConfig` — o `active_ai_agent_id` da
+ * conversa quando há dono explícito, senão o agente publicado da sessão. NÃO é
+ * a resolução completa do turno (`resolveTurnAgent`: router, classificador,
+ * campanha): numa conversa que o turno entregaria a outro agente sem torná-lo
+ * dono, vale a janela do agente da sessão (ou a env). Com o campo vazio
+ * (default de toda instalação) o valor vira o da env — regressão zero.
+ *
+ * Falha da consulta NÃO derruba o evento: degrada para a env, como a checagem
+ * de elegibilidade acima. A janela é afinação, não motivo para retry.
+ */
+async function debounceDoEvento(
+  pool: pg.Pool,
+  event: EventRow,
+  p: { conversation_id: string; channel_session_id: string },
+  padraoInstalacao: number,
+  log: Logger,
+): Promise<number> {
+  try {
+    const agentConfig = await loadConversationAgentConfig(
+      pool,
+      event.organization_id,
+      p.conversation_id,
+      p.channel_session_id,
+    );
+    return debounceEfetivo(agentConfig?.inboundDebounceMs ?? null, padraoInstalacao);
+  } catch (err) {
+    log.warn('drain: janela de rajada do agente não resolveu — usando a da instalação', {
+      event_id: event.id,
+      error: (err instanceof Error ? err.message : String(err)).slice(0, 160),
+    });
+    return padraoInstalacao;
+  }
+}
+
 async function processEvent(
   pool: pg.Pool,
   event: EventRow,
@@ -160,25 +261,68 @@ async function processEvent(
   }
   const p = parsed.data;
 
-  // Spec 14: org em modo 'external' tem agente EXTERNO como dono da conversa —
-  // o engine não responde por cima. Evento é consumido (done) sem job.
-  const { rows: modeRows } = await pool.query<{ mode: string | null }>(
-    `select settings->>'ai_dispatch_mode' as mode from organizations where id = $1`,
+  // Organização parada (suspensa, redigida, arquivada) não gera turno: o evento
+  // é consumido sem job. Vai na MESMA consulta do modo externo — uma ida ao banco
+  // por evento, não duas — e vem ANTES do `canAssist`, que desliga o gate.
+  const { rows: modeRows } = await pool.query<{ mode: string | null; status: string | null }>(
+    `select settings->>'ai_dispatch_mode' as mode, status from organizations where id = $1`,
     [event.organization_id],
   );
+  if (!ehOperante(modeRows[0]?.status)) {
+    log.info('drain: organização não operante — evento consumido sem job', { event_id: event.id });
+    return 'processado';
+  }
+  // Spec 14: org em modo 'external' tem agente EXTERNO como dono da conversa —
+  // o engine não responde por cima. Evento é consumido (done) sem job.
   if (modeRows[0]?.mode === 'external') {
     log.info('drain: org em modo external (spec 14) — evento pulado', { event_id: event.id });
     return 'processado';
   }
 
-  // Grupos: skip, sem exceção (regra dura nº 12).
-  const { rows: convRows } = await pool.query<{ is_group: boolean }>(
-    'select is_group from conversations where organization_id = $1 and id = $2',
+  // Canal desativado pelo operador: defesa em profundidade do `pedirDespachoDoAgente`
+  // (que já não emite para desativado). Evento antigo em voo ou emit direto cai
+  // aqui e é consumido sem job, antes de qualquer custo.
+  if (p.channel_session_id) {
+    const { rows: canalRows } = await pool.query<{ metadata: unknown }>(
+      'select metadata from channel_sessions where organization_id = $1 and id = $2',
+      [event.organization_id, p.channel_session_id],
+    );
+    const meta = canalRows[0]?.metadata;
+    if (canalDesativado(meta)) {
+      log.info('drain: canal desativado — evento consumido sem job', { event_id: event.id });
+      return 'processado';
+    }
+  }
+
+  // Grupos: skip, com UMA exceção estreita (regra dura nº 12 + #2729) — o
+  // evento marcado done sem job continua sendo o padrão de 100% das
+  // instalações.
+  // A consulta já traz a chave POR GRUPO (`channel_session_groups.ia_responde`)
+  // junto do `is_group`, por um LEFT JOIN no MESMO select: é a leitura que o
+  // ingest do grupo também faz, e a régua que decide é a MESMA função
+  // (`grupoLiberaIa`, `=== true`, falha fechada) — divergência entre as duas
+  // leituras é como a régua local do worker já passou a discordar da tela em
+  // produção (ver `pos-entrada.ts`). Conversa sem linha na fila (LEFT JOIN sem
+  // par) chega com `ia_responde` nulo, que é "não sei se liberaram" — e não sei
+  // não responde.
+  const { rows: convRows } = await pool.query<{ is_group: boolean; ia_responde: boolean | null }>(
+    `select c.is_group, g.ia_responde
+       from conversations c
+       left join channel_session_groups g
+         on g.organization_id = c.organization_id
+        and g.channel_session_id = c.channel_session_id
+        and g.group_chat_id = c.group_chat_id
+      where c.organization_id = $1 and c.id = $2`,
     [event.organization_id, p.conversation_id],
   );
   if (convRows[0]?.is_group !== false) {
-    log.info('drain: conversa de grupo ou inexistente — evento pulado', { event_id: event.id });
-    return 'processado';
+    if (!grupoLiberaIa(convRows[0]?.ia_responde)) {
+      log.info('drain: conversa de grupo sem a chave da IA liberada — evento pulado', { event_id: event.id });
+      return 'processado';
+    }
+    log.info('drain: grupo liberado pela chave por grupo (#2729) — turno segue o caminho normal', {
+      event_id: event.id,
+    });
   }
 
   // Ninguém para atender: NÃO gastar. Sem agente publicado para esta sessão e
@@ -204,51 +348,12 @@ async function processEvent(
   // EXISTÊNCIA da linha deixava o portão aberto para um roteador cujos membros
   // foram todos pausados — exatamente o caso que o parágrafo acima diz estar
   // cobrindo, entrando pela outra porta.
-  const { rows: capacidade } = await pool.query<{
-    tem_agente: boolean;
-    tem_roteador: boolean;
-  }>(
-    `select
-       exists(
-         select 1 from ai_agents a
-         join ai_agent_versions v on v.id = a.published_version_id
-         where a.organization_id = $1 and a.archived_at is null
-           and v.status = 'published' and v.channel_session_id = $2
-       ) as tem_agente,
-       exists(
-         select 1 from ai_routers r
-         where r.organization_id = $1 and r.is_active
-           and r.channel_session_id = $2
-           and (
-             -- O fallback e os membros contam pelo que PODEM EXECUTAR, não por
-             -- existirem. A versão anterior media fallback_agent_id is not null
-             -- e a existência de LINHA em ai_router_members — e as duas
-             -- sobrevivem à pausa do agente, que só limpa published_version_id.
-             -- Um roteador cujos membros foram todos pausados continuava
-             -- abrindo o portão: a organização pagava o classificador e o turno
-             -- inteiro por mensagem recebida, para responder pelo genérico.
-             -- O predicado aqui é o MESMO que loadConversationAgentConfigById
-             -- aplica na hora de executar (agent-config.ts) — é o que garante
-             -- que o portão não promete um agente que o resolvedor vai recusar.
-             exists (
-               select 1 from ai_agents fa
-               join ai_agent_versions fv on fv.id = fa.published_version_id
-               where fa.id = r.fallback_agent_id and fa.organization_id = $1
-                 and fa.archived_at is null and fv.status = 'published'
-             )
-             or exists (
-               select 1 from ai_router_members m
-               join ai_agents ma on ma.id = m.agent_id
-               join ai_agent_versions mv on mv.id = ma.published_version_id
-               where m.router_id = r.id and ma.organization_id = $1
-                 and ma.archived_at is null and mv.status = 'published'
-             )
-           )
-       ) as tem_roteador`,
-    [event.organization_id, p.channel_session_id],
-  );
-  const cap = capacidade[0];
-  if (cap !== undefined && !cap.tem_agente && !cap.tem_roteador) {
+  //
+  // A pergunta mora em `haQuemAtendaASessao` porque o worker de clima faz a
+  // MESMA antes de perguntar ao Jev pelos pedidos do cliente: ele só conta um
+  // pedido que a regra de hoje deixou passar onde este turno rodaria.
+  const haQuem = await haQuemAtendaASessao(pool, event.organization_id, p.channel_session_id);
+  if (haQuem === false) {
     log.info('drain: nenhum agente publicado para a sessão — turno pulado (sem gasto)', {
       event_id: event.id,
       channel_session_id: p.channel_session_id,
@@ -284,6 +389,23 @@ async function processEvent(
       event_id: event.id,
       inbound_message_id: p.inbound_message_id,
       ultima_inbound_id: ultimaInbound[0].id,
+    });
+    return 'processado';
+  }
+
+  // UMA VOZ: se o gatilho "cliente voltou" enrollaria neste inbound, o LLM
+  // não responde por cima. Fail-open dentro do helper — consulta falha = turno segue.
+  if (
+    await deveCederTurnoAoRetorno(pool, {
+      organizationId: event.organization_id,
+      contactId: p.contact_id,
+      conversationId: p.conversation_id,
+      messageId: p.inbound_message_id,
+    })
+  ) {
+    log.info('drain: turno cedido ao follow-up de retorno — inbound_turn pulado', {
+      event_id: event.id,
+      contact_id: p.contact_id,
     });
     return 'processado';
   }
@@ -343,56 +465,88 @@ async function processEvent(
   // baixado e transcrito — e o cliente recebia "recebi seu áudio, mas não
   // consigo ouvi-lo" segundos ANTES de a transcrição ficar pronta. Medido nesta
   // VPS: dispatch às 20:24:22, derivação só pedida às 20:25:03.
-  const { rows: msgRows } = await pool.query<{
+  //
+  // ─── A espera olha a CONVERSA, não a mensagem que disparou o evento ────────
+  //
+  // Antes olhava só `p.inbound_message_id`. Quando o cliente manda a FOTO e,
+  // logo depois, a pergunta em TEXTO ("isso é de vocês?"), o turno dispara pelo
+  // TEXTO — que não é derivável — e seguia sem esperar a visão da foto. O
+  // cliente recebia "me conta o que aparece nela?" sobre uma foto cujo texto
+  // derivado o próprio sistema terminou de gerar 3s depois. Medido nesta VPS,
+  // 24/09/2026: foto 13:28:16 · texto 13:28:19 · turno enfileirado 13:28:28 ·
+  // derivação concluída 13:28:35.
+  //
+  // O caso que isso quebra é o mais comum de todos: o cliente manda o
+  // COMPROVANTE e escreve "já paguei, e vocês estão me cobrando". A evidência e
+  // a alegação chegam em mensagens separadas, e o turno precisa das duas.
+  //
+  // A âncora do teto passou a ser a hora DA MÍDIA, não a do evento: é a idade
+  // da derivação que diz se ainda vale esperar. Mídia antiga e travada não segura
+  // o turno para sempre — sai do teto e o turno segue com o marcador `[tipo]`.
+  //
+  // E a hora da mídia é `created_at` — quando ELA CHEGOU A NÓS —, nunca
+  // `sent_at`. No inbound, `sent_at` é o timestamp do WhatsApp, o relógio do
+  // aparelho (a ingestão do canal, `dataDoTimestamp(p.timestamp)`): uma foto
+  // entregue com atraso (aparelho offline, canal reconectando) nasceria "além do
+  // teto" e o turno seguiria sem esperar a leitura que acabou de começar.
+  //
+  // `media_url is not null` é a pré-condição de TODA a esteira: sem ela o
+  // `media.persist_requested` nem é emitido, a derivação nunca é pedida e o
+  // status fica null para sempre — esperar por ela só atrasaria a resposta.
+  const { rows: midias } = await pool.query<{
     type: string;
     media_derived_status: string | null;
+    quando: string;
   }>(
-    `select type, media_derived_status from messages
-     where organization_id = $1 and id = $2`,
-    [event.organization_id, p.inbound_message_id],
+    `select type, media_derived_status, created_at as quando
+       from messages
+      where organization_id = $1
+        and conversation_id = $2
+        and direction = 'inbound'
+        and type = any($3::text[])
+        and media_url is not null
+      order by created_at desc
+      limit 20`,
+    [event.organization_id, p.conversation_id, [...TIPOS_DERIVAVEIS]],
   );
-  const msg = msgRows[0];
-  if (
-    msg !== undefined &&
-    TIPOS_DERIVAVEIS.has(msg.type) &&
-    !DERIVACAO_TERMINADA.has(msg.media_derived_status ?? '')
-  ) {
-    const esperandoHa = Date.now() - new Date(event.created_at).getTime();
+  // A mais RECENTE que ainda não terminou: é ela que o turno não pode perder.
+  const midia = midias.find((m) => !DERIVACAO_TERMINADA.has(m.media_derived_status ?? ''));
+  if (midia !== undefined) {
+    const esperandoHa = Date.now() - new Date(midia.quando).getTime();
     if (esperandoHa < TETO_ESPERA_DERIVACAO_MS) {
       log.info('drain: mídia ainda sendo transcrita — turno adiado', {
         event_id: event.id,
-        tipo: msg.type,
+        tipo: midia.type,
         esperando_ha_ms: esperandoHa,
       });
       return 'adiar';
     }
     log.warn('drain: derivação não concluiu no teto — seguindo sem o texto', {
       event_id: event.id,
-      tipo: msg.type,
+      tipo: midia.type,
       esperando_ha_ms: esperandoHa,
     });
   }
 
   // Coalescência: já existe job PENDING futuro deste contato → esta mensagem
   // entra de carona (o turno lê o histórico completo). Evento vira done.
-  if (knobs.debounceMs > 0) {
-    const { rows: pendingRows } = await pool.query<{ id: string }>(
-      `select id from job_queue
-       where organization_id = $1 and contact_id = $2
-         and kind = 'inbound_turn' and status = 'pending' and run_after > now()
-       limit 1`,
-      [event.organization_id, p.contact_id],
-    );
-    if (pendingRows[0]) {
-      log.info('drain: rajada coalescida em job pendente', {
-        event_id: event.id,
-        job_id: pendingRows[0].id,
-      });
-      return 'processado';
-    }
+  //
+  // A janela e a exclusão do job em HOLD (`held_run_after` no payload — a lição
+  // do #830) moram em ./debounce.ts, com teste próprio.
+  const rajada = await decidirRajada(
+    pool,
+    { organizationId: event.organization_id, contactId: p.contact_id },
+    await debounceDoEvento(pool, event, p, knobs.debounceMs, log),
+  );
+  if (rajada.tipo === 'coalescido') {
+    log.info('drain: rajada coalescida em job pendente', {
+      event_id: event.id,
+      job_id: rajada.jobId,
+    });
+    return 'processado';
   }
 
-  const runAfter = knobs.debounceMs > 0 ? new Date(Date.now() + knobs.debounceMs) : undefined;
+  const runAfter = rajada.runAfter;
   const { job, deduped } = await enqueueJob(pool, event.organization_id, {
     kind: 'inbound_turn',
     leadId: p.contact_id,
@@ -410,6 +564,66 @@ async function processEvent(
   return 'processado';
 }
 
+/**
+ * Quantos ciclos OCIOSOS sem um tick CONCLUÍDO contam como "laço parado"
+ * (issue #2505).
+ *
+ * O default da instalação é `idle = 15s`, então 20 ciclos = **5 minutos**. A
+ * folga é dupla de propósito: o carimbo é do FIM do tick (um tick de lote cheio
+ * demora mais que o intervalo) e o custo de um falso positivo é um `/healthz`
+ * vermelho, que o operador investiga — contra o custo do falso negativo, que
+ * foi o do caso real: DOIS DIAS de laço travado com o worker dizendo `ok`
+ * (#2501), enquanto as mensagens se acumulavam com `attempts=0`.
+ */
+export const TICKS_PARA_PARADO = 20;
+
+/**
+ * O carimbo de vida do laço, lido de FORA dele (hoje: o `/healthz` do worker).
+ *
+ * `ultimoTickEm = null` significa "o laço ainda não começou" — não é parado,
+ * é um worker que acabou de subir; quem nunca deu a primeira volta não pode
+ * ser acusado de ter parado. `limiteMs` nasce do `idleIntervalMs` DA INSTALAÇÃO
+ * quando o laço começa, então um `.env` com intervalo maior ganha o mesmo
+ * número de ciclos de folga, não o mesmo relógio.
+ */
+interface VigilanciaDoDrain {
+  ultimoTickEm: number | null;
+  limiteMs: number | null;
+}
+const vigilancia: VigilanciaDoDrain = { ultimoTickEm: null, limiteMs: null };
+
+/** Resposta do `/healthz` sobre o laço do drain — nomes para a máquina. */
+export interface ProntidaoDoDrainDaIa {
+  /** Há quanto tempo o último tick concluiu; `null` = o laço não começou. */
+  ultimo_tick_ha_ms: number | null;
+  /** Limite em vigor (idle da instalação × `TICKS_PARA_PARADO`); `null` antes de começar. */
+  limite_ms: number | null;
+  /** `true` quando o carimbo passou do limite — o laço travou NO MEIO de um tick. */
+  parado: boolean;
+}
+
+/**
+ * Estado do laço para quem pergunta de fora. Nunca lança: o `/healthz` não pode
+ * ser o motivo de o worker cair — quem está degradado não ganha o direito de
+ * derrubar o resto.
+ *
+ * `agoraMs` é injetável para o teste medir o LIMITE sem esperar o relógio.
+ */
+export function prontidaoDoDrainDaIa(agoraMs: number = Date.now()): ProntidaoDoDrainDaIa {
+  const { ultimoTickEm, limiteMs } = vigilancia;
+  if (ultimoTickEm === null || limiteMs === null) {
+    return { ultimo_tick_ha_ms: null, limite_ms: limiteMs, parado: false };
+  }
+  const ha = Math.max(0, agoraMs - ultimoTickEm);
+  return { ultimo_tick_ha_ms: ha, limite_ms: limiteMs, parado: ha > limiteMs };
+}
+
+/** Só para teste: volta ao estado de "o laço ainda não começou". */
+export function _reiniciarVigilanciaDoDrain(): void {
+  vigilancia.ultimoTickEm = null;
+  vigilancia.limiteMs = null;
+}
+
 /** Loop do drain — polling com backoff adaptativo (ocioso = tick mais lento). */
 export async function runDrainLoop(
   pool: pg.Pool,
@@ -417,6 +631,11 @@ export async function runDrainLoop(
   log: Logger,
   signal: AbortSignal,
 ): Promise<void> {
+  // O carimbo de vida (#2505): o limite nasce do intervalo ocioso DA INSTALAÇÃO
+  // e o carimbo é gravado quando o laço começa e ao FIM de cada volta — um tick
+  // que travar deixa o carimbo envelhecer, e é isso que o `/healthz` lê.
+  vigilancia.limiteMs = knobs.idleIntervalMs * TICKS_PARA_PARADO;
+  vigilancia.ultimoTickEm = Date.now();
   while (!signal.aborted) {
     let drained = 0;
     try {
@@ -426,17 +645,26 @@ export async function runDrainLoop(
         error: (err instanceof Error ? err.message : String(err)).slice(0, 300),
       });
     }
-    const waitMs = drained > 0 ? knobs.intervalMs : knobs.idleIntervalMs;
+    // O laço DEU A VOLTA — sucesso e erro capturado são a mesma prova de vida.
+    vigilancia.ultimoTickEm = Date.now();
+    if (signal.aborted) break;
+    // Lote CHEIO é sinal de backlog: há mais evento esperando do que caberia no
+    // lote, e pagar o intervalo antes de voltar só empurra a fila para frente.
+    // Ocioso e lote parcial mantêm o ritmo de sempre — este ramo não muda o
+    // custo de quem não tem atendimento nenhum.
+    const waitMs =
+      drained >= knobs.batchSize ? 0 : drained > 0 ? knobs.intervalMs : knobs.idleIntervalMs;
     await new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, waitMs);
-      signal.addEventListener(
-        'abort',
-        () => {
-          clearTimeout(timer);
-          resolve();
-        },
-        { once: true },
-      );
+      // O listener é REMOVIDO no fim de cada espera. Sem isso, um loop de dias
+      // acumula um listener por tick no mesmo AbortSignal — vazamento que só
+      // aparece como memória crescendo no worker, sem erro nenhum.
+      const finish = (): void => {
+        clearTimeout(timer);
+        signal.removeEventListener('abort', finish);
+        resolve();
+      };
+      const timer = setTimeout(finish, waitMs);
+      signal.addEventListener('abort', finish, { once: true });
     });
   }
 }

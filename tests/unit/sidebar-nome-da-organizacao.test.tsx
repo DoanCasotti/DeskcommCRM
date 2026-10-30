@@ -24,13 +24,17 @@ import { MarcaDaInstalacaoProvider } from "@/lib/branding/contexto";
  * mostrasse os dois passaria.
  */
 
-vi.mock("next/navigation", () => ({ usePathname: () => "/app/inbox" }));
+vi.mock("next/navigation", () => ({ usePathname: () => "/app/inbox", useRouter: () => ({ prefetch: vi.fn() }) }));
 vi.mock("@/app/actions/shell/toggleSidebar", () => ({ toggleSidebar: vi.fn() }));
 vi.mock("@/hooks/i18n/useT", () => ({ useT: () => (chave: string) => chave }));
 // Os dois buscam estado do servidor e não têm nada a ver com o nome da marca.
 vi.mock("@/components/connections/ConnectionHealthDot", () => ({
   ConnectionHealthDot: () => null,
 }));
+// O contador de casos lê a fila pelo React Query; aqui não há provider, e o
+// número não é o objeto destes casos (o dele mora em contador-de-casos.test.tsx).
+vi.mock("@/components/shell/ContadorDeCasos", () => ({ ContadorDeCasos: () => null }));
+vi.mock("@/components/shell/ContadorDaFila", () => ({ ContadorDaFila: () => null }));
 vi.mock("@/components/shell/VersionFooter", () => ({ VersionFooter: () => null }));
 
 /**

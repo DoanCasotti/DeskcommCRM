@@ -29,6 +29,10 @@ export const CHANNEL_CAPABILITIES: Record<ProviderDeMensagem, ChannelCapabilitie
     voiceNote: "server-convert",
     groups: "full",
     costPerMessage: false,
+    alteraMensagemEnviada: true,
+    // É a linha que conversa com um APARELHO pareado: a agenda salva no
+    // celular está lá dentro, e o `contacts/all` a devolve paginada (#2736).
+    phonebook: true,
   },
   // Hetero-restrição: não me banem, mas a Meta me proíbe e me cobra.
   meta_cloud: {
@@ -42,6 +46,10 @@ export const CHANNEL_CAPABILITIES: Record<ProviderDeMensagem, ChannelCapabilitie
     voiceNote: "opus-only",
     groups: "limited",
     costPerMessage: true,
+    alteraMensagemEnviada: false,
+    // Nenhuma destas linhas conversa com um aparelho pareado — não existe
+    // agenda de celular a ler, e dizer `true` aqui seria um botão que só falha.
+    phonebook: false,
   },
   // Mesma hetero-restrição do canal oficial, por baixo: é um BSP: a WABA é da
   // Meta, os templates são aprovados pela Meta e a janela de 24h é da Meta. O
@@ -66,6 +74,20 @@ export const CHANNEL_CAPABILITIES: Record<ProviderDeMensagem, ChannelCapabilitie
   //
   // O detalhe que engana: mandar um template NÃO abre a janela. Só o cliente
   // abre, respondendo. Quem ler o 200 como "enviado" acha que funciona.
+  zernio_social: {
+    freeformOutsideWindow: false,
+    requiresTemplates: false,
+    canManageTemplates: false,
+    banRisk: false,
+    minIntervalMs: 1000,
+    voiceNote: "server-convert",
+    groups: "none",
+    costPerMessage: true,
+    alteraMensagemEnviada: false,
+    // Nenhuma destas linhas conversa com um aparelho pareado — não existe
+    // agenda de celular a ler, e dizer `true` aqui seria um botão que só falha.
+    phonebook: false,
+  },
   zernio: {
     freeformOutsideWindow: false,
     requiresTemplates: true,
@@ -75,6 +97,33 @@ export const CHANNEL_CAPABILITIES: Record<ProviderDeMensagem, ChannelCapabilitie
     voiceNote: "opus-only",
     groups: "limited",
     costPerMessage: true,
+    alteraMensagemEnviada: false,
+    // Nenhuma destas linhas conversa com um aparelho pareado — não existe
+    // agenda de celular a ler, e dizer `true` aqui seria um botão que só falha.
+    phonebook: false,
+  },
+  // Parceiro homologado pela Meta que espelha a Cloud API (recorte do #1130):
+  // a WABA, a janela de 24h e o custo são da Meta. O parceiro muda o TRANSPORTE
+  // (host, token), não o que o WhatsApp permite — então o perfil é o do canal
+  // oficial.
+  //
+  // `canManageTemplates: true`: os modelos são os da Cloud API e o parceiro
+  // expõe os mesmos endpoints de catálogo; a tela cria e sincroniza por lá.
+  // `requiresTemplates: true` porque a regra da Meta é real: fora da janela de
+  // 24h, só modelo aprovado passa.
+  datafy: {
+    freeformOutsideWindow: false,
+    requiresTemplates: true,
+    canManageTemplates: true,
+    banRisk: false,
+    minIntervalMs: 6000,
+    voiceNote: "opus-only",
+    groups: "limited",
+    costPerMessage: true,
+    alteraMensagemEnviada: false,
+    // Nenhuma destas linhas conversa com um aparelho pareado — não existe
+    // agenda de celular a ler, e dizer `true` aqui seria um botão que só falha.
+    phonebook: false,
   },
 };
 
@@ -96,9 +145,21 @@ export const DEFAULT_CHANNEL_PROVIDER: ChannelProvider = "waha";
  */
 export const CHANNEL_PROVIDER_WAHA: ChannelProvider = "waha";
 export const CHANNEL_PROVIDER_META: ChannelProvider = "meta_cloud";
+export const CHANNEL_PROVIDER_SOCIAL: ChannelProvider = "zernio_social";
 export const CHANNEL_PROVIDER_ZERNIO: ChannelProvider = "zernio";
+/** Parceiro que espelha a Cloud API — canal opcional da instalação, desligado por padrão. */
+export const CHANNEL_PROVIDER_DATAFY: ChannelProvider = "datafy";
 /** Chamada de voz WhatsApp (spec 18). Não transporta mensagem — ver abaixo. */
 export const CHANNEL_PROVIDER_WACALLS: ChannelProvider = "wacalls";
+
+/**
+ * O provider em que o NÚMERO é a conexão: pareado por QR, a linha só vira
+ * conexão quando um aparelho lê o código. A linha morta (`FAILED`/`STOPPED`)
+ * sem número, ali, é QR que ninguém leu e não ocupa a vaga do plano (#3416);
+ * nos outros provedores o número não identifica a conexão. É a mesma régua dos
+ * gatilhos `fn_trava_canais_do_plano` e `fn_vaga_ao_reviver_canal`.
+ */
+export const PROVIDER_EM_QUE_O_NUMERO_E_A_CONEXAO: ChannelProvider = CHANNEL_PROVIDER_WAHA;
 
 /**
  * Os providers por onde MENSAGEM entra e sai — a única lista que responde
@@ -119,7 +180,30 @@ export const PROVIDERS_DE_MENSAGEM = [
   "waha",
   "meta_cloud",
   "zernio",
+  "zernio_social",
+  "datafy",
 ] as const satisfies readonly ProviderDeMensagem[];
+
+/**
+ * Os providers que alcançam um APARELHO: o endereço é o TELEFONE.
+ *
+ * É um recorte de `PROVIDERS_DE_MENSAGEM`, e a diferença é a das REDES SOCIAIS
+ * (`zernio_social`): o Instagram e o Facebook só falam com quem já escreveu, o
+ * contato de lá é outro endereço (handle) e não existe telefone a discar. Quem
+ * tem um número na mão e escolhe a sessão social escolheu um canal que NÃO
+ * alcança o destino — e o envio fora da janela de 24h é recusado (#3358,
+ * medido: "O canal recusou o envio. Confira a conexão em Conexões.").
+ *
+ * `satisfies` sobre o recorte declara a relação entre as duas listas: um
+ * provider que não seja de mensagem não pode entrar aqui, e um provider social
+ * que apareça nesta lista reprova em compilação, não em produção.
+ */
+export const PROVIDERS_DE_TELEFONE = [
+  "waha",
+  "meta_cloud",
+  "zernio",
+  "datafy",
+] as const satisfies readonly Exclude<(typeof PROVIDERS_DE_MENSAGEM)[number], "zernio_social">[];
 
 /**
  * `true` quando a linha de `channel_sessions` é um canal de mensagem.
@@ -169,6 +253,46 @@ void _todoProviderFoiClassificado;
 /** `true` só para provider conhecido cuja natureza não é mensagem. */
 export function canalConhecidoSemMensagem(provider: string | null | undefined): boolean {
   return (PROVIDERS_SEM_MENSAGEM as readonly string[]).includes(provider ?? "");
+}
+
+/**
+ * Como uma CAMPANHA fala por este canal: texto livre (`text`), modelo aprovado
+ * (`template`) ou não fala (`null`).
+ *
+ * Campanha é contato que a empresa inicia — quase sempre fora das 24 horas da
+ * última mensagem do cliente. Por isso a pergunta é `freeformOutsideWindow`, e
+ * não "aceita texto": o número oficial aceita texto, mas só dentro da janela.
+ * Canal que nem manda texto fora da janela nem tem modelo (as redes sociais)
+ * não serve para campanha nenhuma.
+ *
+ * Tolerante como `transportaMensagem`: provider que esta imagem não conhece
+ * responde `null` em vez de lançar — a tela de campanha lista conexões, e um
+ * throw apagaria a lista inteira.
+ */
+export function modoDeCampanhaDoCanal(provider: string | null | undefined): "text" | "template" | null {
+  if (!transportaMensagem(provider)) return null;
+  try {
+    const caps = capabilitiesOf(provider as ProviderDeMensagem);
+    if (caps.freeformOutsideWindow) return "text";
+    if (caps.requiresTemplates) return "template";
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * O canal corre risco de banimento por volume (número por QR)? É o que liga o
+ * aquecimento e o teto anti-ban do ritmo. Desconhecido responde `true`: no
+ * ritmo, errar para o lado de mandar devagar é o erro barato.
+ */
+export function canalTemRiscoDeBanimento(provider: string | null | undefined): boolean {
+  if (!transportaMensagem(provider)) return true;
+  try {
+    return capabilitiesOf(provider as ProviderDeMensagem).banRisk;
+  } catch {
+    return true;
+  }
 }
 
 export function capabilitiesOf(provider: ChannelProvider): ChannelCapabilities {

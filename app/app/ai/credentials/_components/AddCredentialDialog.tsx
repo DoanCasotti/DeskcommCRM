@@ -30,23 +30,38 @@ import {
 } from "@/components/ui/select";
 import { apiClient } from "@/lib/api/client";
 import { showApiError } from "@/components/feedback/ApiErrorToast";
+import { credentialsListQueryKey, type CredentialRow, type ServiceProvider } from "@/hooks/ai/useCredentials";
 import {
-  credentialsListQueryKey,
-  type AnyProvider,
-  type CredentialRow,
-} from "@/hooks/ai/useCredentials";
-import { IDS_DE_PROVEDOR, PROVEDORES } from "@/lib/ai/pontos/provedores";
+  IDS_COM_CHAVE,
+  PROVEDORES_COM_CHAVE,
+  PROVEDOR_POR_ASSINATURA,
+  type ProvedorComChave,
+} from "@/lib/ai/pontos/provedores";
 import { IDS_DE_SERVICO, PROVEDORES_DE_SERVICO } from "@/lib/ai/pontos/provedores-de-servico";
 import { descreverErroDeValidacao } from "@/lib/ai/credenciais/erro-de-validacao";
 import { useT } from "@/hooks/i18n/useT";
 
+/**
+ * A frase da casa para o provedor da assinatura — a MESMA que a rota devolve
+ * quando alguém tenta cadastrar a conta colando uma chave
+ * (`MENSAGEM_ASSINATURA_SO_PELO_LOGIN`, em `lib/ai/credenciais/guardar.ts`).
+ * Aqui ela vem antes do POST: a tela já sabe disso sem gastar a volta (#2952).
+ */
+const MENSAGEM_DA_ASSINATURA =
+  "A conta do ChatGPT não se cadastra colando uma chave: ela se conecta pelo botão de login em IA › Credenciais.";
+
 const formSchema = z.object({
-  // Derivado da lista única de cada mundo (`lib/ai/pontos/provedores.ts` e
-  // `provedores-de-servico.ts`), como a rota — mesma credencial, mesma tabela,
-  // vocabulário de quem pode ser escolhido separado em dois arquivos.
-  provider: z.enum([...IDS_DE_PROVEDOR, ...IDS_DE_SERVICO]),
-  label: z.string().trim().min(1, "Obrigatório").max(80),
-  api_key: z.string().trim().min(8, "API key muito curta").max(2048),
+  // Derivado das listas (`lib/ai/pontos/provedores.ts` e `provedores-de-servico.ts`), como a rota.
+  provider: z.enum([...IDS_COM_CHAVE, ...IDS_DE_SERVICO]),
+  // Opcional: o leigo cola só a chave. Em branco, o nome vira o do provedor
+  // (ver `onSubmit`) — o banco exige um, e a pessoa não precisa inventá-lo.
+  label: z.string().trim().max(80),
+  // O mínimo de 8 caracteres é cobrado no `onSubmit`: a assinatura do ChatGPT
+  // é a única em que NÃO há chave a colar (#2952), então o schema não pode
+  // recusá-la antes de o formulário saber de quem se trata.
+  api_key: z.string().trim().max(2048),
+  /** Só o provedor personalizado (#1642) tem — vira campo quando ele é escolhido. */
+  base_url: z.string().trim().max(500),
 });
 
 type FormValues = z.infer<typeof formSchema>;
@@ -55,29 +70,49 @@ interface CreateResponse {
   data: CredentialRow;
 }
 
+interface TestResponse {
+  ok: boolean;
+  models: string[];
+  error: string | null;
+}
+
 interface Props {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** O cartão do Jev abre o diálogo já nele; a tela de Credenciais, na Anthropic. */
+  providerInicial?: ProvedorComChave;
+  /** Chamado depois de gravar, para quem abriu o diálogo fora de Credenciais reler o que mostra. */
+  aoSalvar?: () => void;
 }
 
-export function AddCredentialDialog({ open, onOpenChange }: Props) {
+export function AddCredentialDialog({ open, onOpenChange, providerInicial = "anthropic", aoSalvar }: Props) {
   const t = useT();
   const router = useRouter();
   const qc = useQueryClient();
-  const [provider, setProvider] = useState<AnyProvider>("anthropic");
+  const [provider, setProvider] = useState<ProvedorComChave | ServiceProvider>(providerInicial);
   const [label, setLabel] = useState("");
   const [apiKey, setApiKey] = useState("");
+  /** O endereço da API compatível com a OpenAI — só o provedor personalizado tem. */
+  const [baseUrl, setBaseUrl] = useState("");
+  /** O resultado do teste de conectividade que roda ANTES de salvar. */
+  const [conexao, setConexao] = useState<{ ok: boolean; modelos: number; erro: string | null } | null>(
+    null,
+  );
   const [submitting, setSubmitting] = useState(false);
   const [errors, setErrors] = useState<Partial<Record<keyof FormValues, string>>>({});
   const provedor =
-    PROVEDORES.find((p) => p.id === provider) ??
+    PROVEDORES_COM_CHAVE.find((p) => p.id === provider) ??
     PROVEDORES_DE_SERVICO.find((p) => p.id === provider) ??
-    PROVEDORES[0];
+    PROVEDORES_COM_CHAVE[0];
+  /** A conta do ChatGPT se conecta pelo login, não por chave colada (#2952). */
+  const ehAssinatura = provider === PROVEDOR_POR_ASSINATURA;
 
   const reset = () => {
-    setProvider("anthropic");
+    setProvider(providerInicial);
     setLabel("");
     setApiKey("");
+    setBaseUrl("");
+    setConexao(null);
     setErrors({});
   };
 
@@ -85,7 +120,21 @@ export function AddCredentialDialog({ open, onOpenChange }: Props) {
     e.preventDefault();
     setErrors({});
 
-    const parsed = formSchema.safeParse({ provider, label, api_key: apiKey });
+    // A chave curta é cobrada aqui, e não no schema: é o único ponto que
+    // sabe se o provedor é o da assinatura, onde nada se cola (#2952).
+    if (!ehAssinatura && apiKey.trim().length < 8) {
+      setErrors({ api_key: t("Chave muito curta") });
+      return;
+    }
+
+    if (provider === "custom" && !/^https?:\/\/\S+$/.test(baseUrl.trim())) {
+      setErrors({
+        base_url: t("Informe o endereço (base URL) começando com http:// ou https://."),
+      });
+      return;
+    }
+
+    const parsed = formSchema.safeParse({ provider, label, api_key: apiKey, base_url: baseUrl });
     if (!parsed.success) {
       const flat = parsed.error.flatten().fieldErrors;
       setErrors({
@@ -96,17 +145,62 @@ export function AddCredentialDialog({ open, onOpenChange }: Props) {
       return;
     }
 
+    // A assinatura do ChatGPT não tem chave: a credencial nasce do login
+    // (PKCE) e a rota recusa a chave colada por desenho
+    // (`assinatura_so_pelo_login`). O formulário aceita o campo vazio aqui,
+    // mas não inventa um POST para receber a recusa que já está na tela: o
+    // caminho é o painel de login, e é ele que a frase diz (#2952).
+    if (ehAssinatura) {
+      toast.error(t(MENSAGEM_DA_ASSINATURA));
+      return;
+    }
+
+    // O provedor personalizado é o único em que o ENDEREÇO é escolha do
+    // operador, então há algo a provar antes de gravar: sem a rede falando,
+    // salvar seria prometer uma integração que ninguém viu funcionar. Os
+    // nativos passam por aqui sem nada — o deles é intrínseco e já é provado
+    // pela validação em segundo plano.
+    if (provider === "custom") {
+      setConexao(null);
+      const testando = toast.loading(t("Testando a conexão com o provedor…"));
+      try {
+        const teste = await apiClient.post<{ data: TestResponse }>("/api/v1/ai/credentials/test", {
+          base_url: baseUrl.trim(),
+          api_key: apiKey,
+        });
+        toast.dismiss(testando);
+        if (!teste.data.ok) {
+          // A tela fica ABERTA com a frase do código, e nada é gravado: o
+          // conserto é o campo que está ali, em cima do erro.
+          setConexao({ ok: false, modelos: 0, erro: teste.data.error });
+          toast.error(t("Não consegui falar com este endereço. Confira a base URL e a chave."));
+          return;
+        }
+        setConexao({ ok: true, modelos: teste.data.models.length, erro: null });
+        toast.success(t("Conexão confirmada com o provedor."));
+      } catch (err) {
+        toast.dismiss(testando);
+        showApiError(err);
+        return;
+      }
+    }
+
     setSubmitting(true);
     const validatingToast = toast.loading(t("Credencial salva. Validando…"));
     try {
-      const res = await apiClient.post<CreateResponse>(
-        "/api/v1/ai/credentials",
-        parsed.data,
-      );
+      const { base_url, ...semEndereco } = parsed.data;
+      const res = await apiClient.post<CreateResponse>("/api/v1/ai/credentials", {
+        ...semEndereco,
+        label: parsed.data.label || provedor.rotulo,
+        // Só quando é do provedor personalizado: os nativos continuam mandando
+        // exatamente o corpo de antes.
+        ...(base_url.trim() !== "" ? { base_url: base_url.trim() } : {}),
+      });
       toast.dismiss(validatingToast);
       toast.success(t("Credencial salva. Validação em segundo plano."));
       reset();
       onOpenChange(false);
+      aoSalvar?.();
 
       // Poll uma vez após ~3s para refletir validated_at no card.
       setTimeout(async () => {
@@ -123,7 +217,7 @@ export function AddCredentialDialog({ open, onOpenChange }: Props) {
             `${t("Validada")} — ${justCreated.models_available.length} ${substantivo}`,
           );
         } else if (justCreated?.validation_error) {
-          const erro = descreverErroDeValidacao(justCreated.validation_error);
+          const erro = descreverErroDeValidacao(justCreated.validation_error, justCreated.provider);
           toast.error(
             erro.generico
               ? `${t("Falha na validação")} (${justCreated.validation_error}).`
@@ -154,19 +248,19 @@ export function AddCredentialDialog({ open, onOpenChange }: Props) {
         <DialogHeader>
           <DialogTitle>{t("Adicionar credencial")}</DialogTitle>
           <DialogDescription>
-            {t("A chave é cifrada (AES-GCM) antes de gravar e nunca é retornada em texto claro.")}
+            {t("A chave é guardada cifrada. Depois de salva, só os quatro últimos caracteres aparecem na tela.")}
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={onSubmit} className="space-y-4">
           <div className="space-y-2">
             <Label htmlFor="cred-provider">{t("Provedor")}</Label>
-            <Select value={provider} onValueChange={(v) => setProvider(v as AnyProvider)}>
+            <Select value={provider} onValueChange={(v) => setProvider(v as ProvedorComChave | ServiceProvider)}>
               <SelectTrigger id="cred-provider">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
                 <SelectGroup>
-                  {PROVEDORES.map((p) => (
+                  {PROVEDORES_COM_CHAVE.map((p) => (
                     <SelectItem key={p.id} value={p.id}>
                       {p.rotulo}
                     </SelectItem>
@@ -189,30 +283,69 @@ export function AddCredentialDialog({ open, onOpenChange }: Props) {
             )}
           </div>
 
+          {provider === "custom" && (
+            <div className="space-y-2">
+              <Label htmlFor="cred-base-url">{t("Endereço (base URL)")}</Label>
+              <Input
+                id="cred-base-url"
+                value={baseUrl}
+                onChange={(e) => {
+                  setBaseUrl(e.target.value);
+                  setConexao(null);
+                }}
+                placeholder={t("Obrigatório — ex.: https://seu-gateway.example/v1")}
+                autoComplete="off"
+                required
+              />
+              {errors.base_url && <p className="text-xs text-destructive">{errors.base_url}</p>}
+              {conexao && !conexao.ok && (
+                <p className="text-xs text-destructive">
+                  {conexao.erro === null
+                    ? ""
+                    : (() => {
+                        const descrito = descreverErroDeValidacao(conexao.erro, provider);
+                        return descrito.generico
+                          ? `${t("Falha na validação")} (${conexao.erro}).`
+                          : t(descrito.frase);
+                      })()}
+                </p>
+              )}
+              {conexao?.ok && (
+                <p className="text-xs text-muted-foreground">
+                  {`${t("Conexão OK")} — ${conexao.modelos} ${t("modelos disponíveis.")}`}
+                </p>
+              )}
+            </div>
+          )}
+
           <div className="space-y-2">
             <Label htmlFor="cred-label">{t("Nome")}</Label>
             <Input
               id="cred-label"
               value={label}
               onChange={(e) => setLabel(e.target.value)}
-              placeholder={t("Ex: Produção")}
+              placeholder={t("Opcional — ex.: Chave da clínica")}
               maxLength={80}
-              required
             />
             {errors.label && <p className="text-xs text-destructive">{errors.label}</p>}
           </div>
 
           <div className="space-y-2">
             <div className="flex items-baseline justify-between">
-              <Label htmlFor="cred-key">{t("API key")}</Label>
-              <a
-                className="text-xs underline underline-offset-4"
-                href={provedor.ondePegarAChave}
-                target="_blank"
-                rel="noreferrer"
-              >
-                {t("Pegar chave em")} {provedor.rotulo}
-              </a>
+              <Label htmlFor="cred-key">{t("Chave")}</Label>
+              {/* Provedor personalizado não tem portal de chave: quem emite é o
+                  gateway do próprio operador. O link sumiria com um endereço que
+                  não leva a lugar nenhum. */}
+              {provider !== "custom" && (
+                <a
+                  className="text-xs underline underline-offset-4"
+                  href={provedor.ondePegarAChave}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  {t("Onde pegar a chave")}
+                </a>
+              )}
             </div>
             <Input
               id="cred-key"
@@ -221,8 +354,11 @@ export function AddCredentialDialog({ open, onOpenChange }: Props) {
               onChange={(e) => setApiKey(e.target.value)}
               placeholder={provedor.prefixoDaChave}
               autoComplete="off"
-              required
+              required={!ehAssinatura}
             />
+            {ehAssinatura && (
+              <p className="text-xs text-muted-foreground">{t(MENSAGEM_DA_ASSINATURA)}</p>
+            )}
             {errors.api_key && (
               <p className="text-xs text-destructive">{errors.api_key}</p>
             )}

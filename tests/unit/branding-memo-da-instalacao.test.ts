@@ -55,25 +55,54 @@ const banco = vi.hoisted(() => ({
    * lost-update observável sem `sleep` e sem depender de timing.
    */
   portao: null as { liberar: () => void; esperar: Promise<void> } | null,
+  /**
+   * O banco que NÃO FALOU. `null` = leitura normal (todos os casos que já
+   * existiam aqui). Com um código armado, `maybeSingle` devolve `error` e
+   * `lerLinha` passa a responder "erro" — é a terceira saída da leitura, e é
+   * ela que o caso da falha pós-escrita mede.
+   */
+  erro: null as { code: string; message: string } | null,
+  /**
+   * UM render RSC em andamento. `null` = fora de render (todos os casos que já
+   * existiam aqui). Armado, o dublê faz o que `createDedupeFetch` do Next faz
+   * (`next/dist/server/lib/dedupe-fetch.js`, aplicado ao `fetch` global por
+   * `patchFetch`): dentro do mesmo render, um GET com a mesma URL e os mesmos
+   * cabeçalhos recebe a resposta GUARDADA da primeira ida — a menos que leve um
+   * `signal`, que é o opt-out documentado ali.
+   */
+  render: null as { linhaGuardada: Record<string, unknown> | null; respondido: boolean } | null,
 }));
+
+/** O `maybeSingle` do dublê. `sinal` = o que `.abortSignal()` pôs na requisição. */
+async function lerDoBanco(sinal: AbortSignal | undefined) {
+  const render = banco.render;
+  if (render && !sinal && render.respondido) {
+    // Deduplicado: nenhuma ida ao banco, e a linha é a de quando o render leu.
+    return { data: render.linhaGuardada, error: null };
+  }
+  banco.leituras += 1;
+  // A linha é capturada AGORA, antes de esperar o portão — é o que um banco
+  // real faz: a consulta sai antes da escrita, e a resposta que volta é a de
+  // antes dela. Ler `banco.linha` depois do `await` faria a leitura "em voo"
+  // enxergar o valor NOVO e o caso não reproduziria corrida nenhuma (foi o
+  // primeiro jeito que escrevi, e a asserção de controle o pegou).
+  const capturada = banco.linha;
+  if (banco.portao) await banco.portao.esperar;
+  if (banco.erro) return { data: null, error: banco.erro };
+  if (render && !sinal) {
+    render.respondido = true;
+    render.linhaGuardada = capturada;
+  }
+  return { data: capturada, error: null };
+}
 
 vi.mock("@/lib/supabase/admin", () => ({
   createAdminClient: () => ({
     from: () => ({
       select: () => ({
         eq: () => ({
-          maybeSingle: async () => {
-            banco.leituras += 1;
-            // A linha é capturada AGORA, antes de esperar o portão — é o que um
-            // banco real faz: a consulta sai antes da escrita, e a resposta que
-            // volta é a de antes dela. Ler `banco.linha` depois do `await` faria
-            // a leitura "em voo" enxergar o valor NOVO e o caso não reproduziria
-            // corrida nenhuma (foi o primeiro jeito que escrevi, e a asserção de
-            // controle o pegou).
-            const capturada = banco.linha;
-            if (banco.portao) await banco.portao.esperar;
-            return { data: capturada, error: null };
-          },
+          maybeSingle: () => lerDoBanco(undefined),
+          abortSignal: (sinal: AbortSignal) => ({ maybeSingle: () => lerDoBanco(sinal) }),
         }),
       }),
     }),
@@ -239,5 +268,146 @@ describe("uma escrita DURANTE a leitura não pode ser desfeita pela leitura", ()
       expect(banco.leituras, "a segunda leitura tem de vir do memo").toBe(depoisDaPrimeira);
       expect(depoisDaPrimeira, "a primeira tem de ter ido ao banco").toBeGreaterThan(primeira);
     })();
+  });
+});
+
+/**
+ * ═══ A JANELA QUE A GERAÇÃO NÃO COBRE: a leitura que FALHOU depois da escrita ═══
+ *
+ * A guarda de geração compara o número antes e depois do `await`. Ela fecha a
+ * leitura que volta velha porque começou ANTES da invalidação. Ela NÃO fecha — e
+ * por construção não pode fechar — a leitura que FALHA DEPOIS dela: ali a
+ * geração não mudou na segunda conferência, a guarda passa, e `null` entra no
+ * memo com TTL novo.
+ *
+ * O sintoma é o mesmo do bloco anterior, por outra porta. `null` significa "o
+ * banco não falou" — contrato declarado de `marcaDaInstalacao` —, o resolvedor
+ * cai na camada do `.env` e a barra lateral passa a desenhar a marca do PRODUTO:
+ * `aside img` não existe, e por até 30s, atrás do MESMO toast verde de "Logo
+ * atualizado.".
+ *
+ * É a única ordem que `invalidarMarcaDaInstalacao()` não alcança, e é a que a
+ * issue #895 mede: POST 200 às 10:44:02.163Z, e 15s depois a barra lateral ainda
+ * sem logo.
+ */
+describe("a leitura que FALHOU depois da escrita não vira fato memoizado", () => {
+  beforeEach(async () => {
+    banco.linha = COM_LOGO;
+    banco.leituras = 0;
+    banco.portao = null;
+    banco.erro = null;
+    (await instancia()).invalidarMarcaDaInstalacao();
+  });
+
+  it("o render seguinte PERGUNTA ao banco de novo, e enxerga o logo subido", async () => {
+    const tela = await instancia();
+    const rota = await instancia();
+
+    // 1. O upload terminou: 200 e invalidação, na ordem real da rota
+    //    (`gravarCaminho` grava e SÓ DEPOIS invalida).
+    rota.invalidarMarcaDaInstalacao();
+
+    // 2. E é DEPOIS dela que a leitura do render falha — um pooler sem
+    //    resposta, no exato instante em que a tela vai desenhar a barra.
+    banco.erro = { code: "503", message: "pooler sem resposta" };
+    expect(await tela.marcaDaInstalacao(), "na falha vale o `.env` deste render").toBeNull();
+    expect(banco.leituras, "controle: a leitura falhando foi ao banco uma vez").toBe(1);
+
+    // 3. O banco volta. A leitura seguinte TEM de ir ao banco: se a falha tiver
+    //    sido memoizada, ela devolve `null` do memo e a barra lateral continua
+    //    desenhando a marca do produto por um TTL inteiro. É esta asserção que
+    //    fica vermelha sem o conserto.
+    banco.erro = null;
+    const linha = await tela.marcaDaInstalacao();
+    expect(
+      banco.leituras,
+      "a falha não pode ser servida do memo como se fosse leitura",
+    ).toBe(2);
+    expect(linha?.logo_path, "o logo recém-subido tem de aparecer no render seguinte").toBe(
+      CAMINHO_SUBIDO,
+    );
+  });
+
+  it("CONTROLE: leitura bem-sucedida continua sendo memoizada", async () => {
+    // Sem este caso, o conserto passaria verde com o memo simplesmente DESLIGADO
+    // — e aí toda tela pagaria uma consulta por render sem ninguém notar.
+    const tela = await instancia();
+    expect((await tela.marcaDaInstalacao())?.logo_path).toBe(CAMINHO_SUBIDO);
+    await tela.marcaDaInstalacao();
+    expect(banco.leituras, "uma ida ao banco por TTL continua sendo o contrato").toBe(1);
+  });
+});
+
+/**
+ * ═══ A DEDUPLICAÇÃO DE FETCH DO NEXT DENTRO DE UM RENDER ═══
+ *
+ * A guarda de geração confere o número antes e depois da ida ao banco, e por
+ * isso fecha toda leitura que COMEÇA antes da invalidação. Ela não enxerga a
+ * leitura que começa DEPOIS da invalidação e ainda assim devolve a linha de
+ * ANTES dela — e é isso que o `fetch` do servidor do Next faz dentro de um
+ * render: `patchFetch` embrulha o `fetch` global com `createDedupeFetch`, que
+ * guarda por render (via `React.cache`) a resposta de cada GET e a serve de novo
+ * a quem repetir URL e cabeçalhos. O `select` de `lerLinha` é sempre o mesmo GET.
+ *
+ * Um render chama `marcaDaInstalacao()` várias vezes (`generateMetadata`,
+ * `EstiloDaMarca`, `MarcaDosClientComponents`, o layout de `/app`), espalhadas
+ * por centenas de milissegundos de autenticação e consulta. Se o memo vence no
+ * começo desse render, a primeira chamada vai ao banco e guarda a linha velha;
+ * o upload grava e invalida no meio; a chamada seguinte do MESMO render pega a
+ * geração NOVA, recebe a resposta VELHA deduplicada, a guarda passa — e o memo
+ * fica com a linha sem logo por 30s, atrás do toast "Logo atualizado.".
+ *
+ * O que os traces do CI mostram (não o que provam): nos vermelhos de
+ * `logo-moldura-no-tema-escuro.spec.ts` (1) e de `marca-logo.spec.ts` ("o nome
+ * trocado…"), a escrita da marca correu DENTRO de uma rajada de prefetch RSC de
+ * `/admin/*` e `/app` — renders vivos atravessando a escrita.
+ */
+describe("a deduplicação de fetch do render não ressuscita a linha pré-escrita", () => {
+  beforeEach(async () => {
+    banco.linha = SEM_LOGO;
+    banco.leituras = 0;
+    banco.portao = null;
+    banco.erro = null;
+    banco.render = null;
+    (await instancia()).invalidarMarcaDaInstalacao();
+  });
+
+  it("a chamada do MESMO render feita depois da invalidação lê o banco de verdade", async () => {
+    const tela = await instancia();
+    const rota = await instancia();
+
+    // 1. Um prefetch RSC começa com o memo vencido: a primeira chamada vai ao banco.
+    banco.render = { linhaGuardada: null, respondido: false };
+    expect((await tela.marcaDaInstalacao())?.logo_path).toBeNull();
+
+    // 2. No meio desse render, o upload grava e invalida.
+    banco.linha = COM_LOGO;
+    rota.invalidarMarcaDaInstalacao();
+
+    // 3. O mesmo render chama de novo (o layout seguinte da árvore).
+    await tela.marcaDaInstalacao();
+    banco.render = null;
+
+    // 4. O render seguinte — o GET de `/app/inbox` — tem de ver o logo. É esta
+    //    asserção que fica vermelha quando a leitura não sai do dedupe.
+    expect(
+      (await tela.marcaDaInstalacao())?.logo_path,
+      "o memo guardou a resposta deduplicada de ANTES do upload",
+    ).toBe(CAMINHO_SUBIDO);
+  });
+
+  it("CONTROLE: o dublê deduplica de verdade quem não leva sinal", async () => {
+    // Sem este caso, o de cima passaria verde com um dublê que nunca deduplica —
+    // e não estaria medindo nada.
+    const { createAdminClient } = await import("@/lib/supabase/admin");
+    const consulta = () =>
+      createAdminClient().from("platform_branding").select("*").eq("id", 1).maybeSingle();
+    banco.render = { linhaGuardada: null, respondido: false };
+    expect((await consulta()).data?.logo_path).toBeNull();
+    banco.linha = COM_LOGO;
+    expect(
+      (await consulta()).data?.logo_path,
+      "sem sinal, o render recebe a resposta guardada",
+    ).toBeNull();
   });
 });

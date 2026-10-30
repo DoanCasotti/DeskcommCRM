@@ -7,13 +7,19 @@
  * follow-up. Trigger Postgres NUNCA faz HTTP; este cron TS é quem consome via
  * admin client, no mesmo contrato dos demais crons.
  *
- * Depois do tick, roda `runSilenceSweep` (lib/followup/silence-sweep.ts) NO
- * MESMO tick — gatilho TIME-DRIVEN (varredura periódica, não event-driven):
- * acha pointers `trigger_config.kind='silence'` ativos, gateia via
- * `isPointerEnabledForAutomaticTrigger` (só enrolla se algum agente publicado
- * da org tem o pointer habilitado), acha contatos silenciosos e cria
- * enrollment. Falha do sweep NUNCA aborta a resposta do tick (try/catch
+ * Depois do tick, `runSilenceSweep` (lib/followup/silence-sweep.ts) NO MESMO
+ * tick — gatilho TIME-DRIVEN (varredura periódica, não event-driven): acha
+ * pointers `trigger_config.kind='silence'` ativos, decide o agente pelo grafo
+ * (`decidirAgenteDoEnrollmentAutomatico`: texto fixo segue sem agente; nó de
+ * IA exige agente publicado armando o pointer), acha contatos silenciosos e
+ * cria enrollment. Falha do sweep NUNCA aborta a resposta do tick (try/catch
  * isolado, só loga) — o cron sempre devolve o resultado de `runFollowupTick`.
+ *
+ * No fim, drena texto fixo pendente (`enviarTextoFixoPendente`) — o mesmo
+ * atalho do relógio HTTP. Onde não há `agent-worker` (instalação sem o
+ * contêiner `worker`), sem isto o job `followup_turn` fica `pending` e o
+ * no_reply nunca vira mensagem. O ledger (job_id, seq) impede envio em dobro no
+ * self-host, onde o worker também consome a fila.
  *
  * Auth: Bearer INTERNAL_CRON_SECRET|INTERNAL_SECRET, fail-closed. Audit
  * agregada por tick (`followup.worker_run` + `followup.silence_sweep_run`),
@@ -24,12 +30,14 @@ import type { NextRequest } from "next/server";
 
 import { ok, fail } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
-import { env } from "@/lib/env";
 import { logger } from "@/lib/logger";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createSupabaseAdminClient, runFollowupTick, type FollowupJobRequest } from "@/lib/followup/engine";
 import { createSupabaseFollowupGateDb } from "@/lib/followup/agent-followup-gate";
+import { enviarTextoFixoPendente } from "@/lib/followup/enviar-texto-fixo";
+import { encerrarRoteirosVencidos } from "@/lib/followup/atendimento";
 import { createSupabaseSilenceSweepDb, runSilenceSweep } from "@/lib/followup/silence-sweep";
+import { autorizaCron } from "@/lib/auth/cron-auth";
 
 export const dynamic = "force-dynamic";
 
@@ -49,11 +57,7 @@ async function enqueueJob(job: FollowupJobRequest): Promise<void> {
 async function handle(req: NextRequest): Promise<Response> {
   const requestId = randomUUID();
 
-  const auth = req.headers.get("authorization") ?? "";
-  const bearer = auth.startsWith("Bearer ") ? auth.slice("Bearer ".length).trim() : "";
-  const provided = bearer || (req.headers.get("x-cron-secret")?.trim() ?? "");
-  const accepted = [env.INTERNAL_CRON_SECRET, env.INTERNAL_SECRET].filter(Boolean);
-  if (accepted.length === 0 || !provided || !accepted.includes(provided)) {
+  if (!autorizaCron(req)) {
     return fail("forbidden", "Cron secret missing or invalid.", 403, { requestId });
   }
 
@@ -64,9 +68,13 @@ async function handle(req: NextRequest): Promise<Response> {
     enqueueJob,
   };
 
-  const confirmation=await admin.rpc("fn_appointment_confirmation_sweep",{});
-  if(confirmation.error) return fail("internal_error","Não foi possível verificar as confirmações de presença.",500,{requestId});
-  if(Number(confirmation.data)>0) void audit({action:"agenda.confirmation_sweep_run",organizationId:null,bypassedRls:true,requestId,metadata:{avisos:Number(confirmation.data)}});
+  // A varredura de confirmação de presença pega carona neste cron, mas é OUTRO
+  // assunto: antes, um erro só nela devolvia 500 ANTES do motor rodar, e o
+  // follow-up de todas as orgs parava junto com a agenda. Agora a falha fica
+  // isolada aqui (log + Sentry + trilha) e volta na resposta em
+  // `confirmation_sweep`, sem esconder — mas sem derrubar o tick.
+  const confirmationSweep = await varrerConfirmacoesDePresenca(admin, requestId);
+
   let summary;
   try {
     summary = await runFollowupTick(deps);
@@ -117,6 +125,12 @@ async function handle(req: NextRequest): Promise<Response> {
       gateDb: createSupabaseFollowupGateDb(admin),
       clock: () => new Date(),
     });
+    // `skipped_cooldown` NÃO entra aqui de propósito (revisão do PR): por
+    // definição ele é "nada aconteceu" — incluí-lo faria o audit log escrever
+    // uma linha por tick (1×/min) durante toda a janela de cooldown de cada
+    // enrollment concluído, o mesmo anti-padrão que este arquivo já existe
+    // para evitar (ver "Audit log" no CLAUDE.md, o histórico do
+    // routing-worker/attendant-heartbeat).
     if (sweepSummary.enrolled || sweepSummary.pointers_gated_out || sweepSummary.skipped_existing) {
       void audit({
         action: "followup.silence_sweep_run",
@@ -133,7 +147,116 @@ async function handle(req: NextRequest): Promise<Response> {
     logger.error("[followup-flow-worker.cron] runSilenceSweep threw", { error: detail, requestId });
   }
 
-  return ok(summary, { requestId });
+  // Roteiro de atendimento com o prazo vencido (0397). Audita só quando houve
+  // efeito — rodada que não encerrou nada não é mutação.
+  try {
+    const expirados = await encerrarRoteirosVencidos(admin);
+    if (expirados > 0) {
+      void audit({
+        action: "followup.roteiros_expirados",
+        organizationId: null,
+        bypassedRls: true,
+        metadata: { expirados },
+        requestId,
+      });
+    }
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    logger.error("[followup-flow-worker.cron] encerrarRoteirosVencidos threw", { error: detail, requestId });
+  }
+
+  // ponytail: instalação sem `agent-worker` (relógio HTTP, cron puro) não tem
+  // quem consuma a fila. Sem este dreno o no_reply avança o grafo e a mensagem
+  // seguinte fica pending. Teto: jobs sem fixed_body (mode ai_message) continuam
+  // precisando do worker.
+  try {
+    await enviarTextoFixoPendente(admin);
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    logger.error("[followup-flow-worker.cron] enviarTextoFixoPendente threw", { error: detail, requestId });
+  }
+
+  return ok({ ...summary, confirmation_sweep: confirmationSweep }, { requestId });
+}
+
+/**
+ * Resultado da varredura de confirmação de presença, devolvido na resposta do
+ * tick. `ok: false` é a falha PARCIAL: o motor de follow-up rodou, a agenda não.
+ */
+type ResultadoDaVarreduraDeConfirmacao = { ok: true; avisos: number } | { ok: false; erro: string };
+
+/**
+ * Roda `fn_appointment_confirmation_sweep` sem nunca lançar. Cobre os dois
+ * jeitos de falhar: `error` devolvido pelo PostgREST e exceção do próprio
+ * client (rede, fetch abortado) — os dois teriam o mesmo efeito de parar o tick.
+ *
+ * A falha AUDITA (mesma action, `falhou: true`), como o `claim_falhou` do
+ * motor: senão a rodada que não conseguiu varrer fica idêntica, na trilha, à
+ * rodada que não tinha aviso a abrir.
+ */
+async function varrerConfirmacoesDePresenca(
+  admin: ReturnType<typeof createAdminClient>,
+  requestId: string,
+): Promise<ResultadoDaVarreduraDeConfirmacao> {
+  let resultado: ResultadoDaVarreduraDeConfirmacao;
+  let causa: unknown;
+  try {
+    const confirmation = await admin.rpc("fn_appointment_confirmation_sweep", {});
+    if (confirmation.error) {
+      causa = new Error(confirmation.error.message);
+      resultado = { ok: false, erro: confirmation.error.message };
+    } else {
+      resultado = { ok: true, avisos: Number(confirmation.data) || 0 };
+    }
+  } catch (err) {
+    causa = err;
+    resultado = { ok: false, erro: err instanceof Error ? err.message : String(err) };
+  }
+
+  if (resultado.ok && resultado.avisos > 0) {
+    void audit({
+      action: "agenda.confirmation_sweep_run",
+      organizationId: null,
+      bypassedRls: true,
+      requestId,
+      metadata: { avisos: resultado.avisos },
+    });
+  }
+  if (!resultado.ok) {
+    logger.error("[followup-flow-worker.cron] fn_appointment_confirmation_sweep falhou", {
+      error: resultado.erro,
+      requestId,
+    });
+    avisaSentry(causa, requestId);
+    void audit({
+      action: "agenda.confirmation_sweep_run",
+      organizationId: null,
+      bypassedRls: true,
+      requestId,
+      metadata: { falhou: true, erro: resultado.erro },
+    });
+  }
+  return resultado;
+}
+
+/**
+ * Sentry por import DINÂMICO com `.catch`, como em
+ * `app/api/v1/cron/webhook-log-retention/route.ts`: sem SENTRY_DSN a import
+ * pode nem carregar, e o aviso não pode virar a segunda falha da rodada.
+ */
+function avisaSentry(err: unknown, requestId: string): void {
+  const detalhe = err instanceof Error ? err.message : String(err);
+  void import("@sentry/nextjs")
+    .then((Sentry) => {
+      Sentry.captureException(err instanceof Error ? err : new Error(detalhe), {
+        level: "error",
+        tags: { subsystem: "agenda", varredura: "confirmation_sweep" },
+        extra: { request_id: requestId },
+      });
+    })
+    .catch(() => {
+      /* sem Sentry configurado: o logger.error e a linha de trilha bastam */
+    });
 }
 
 export async function GET(req: NextRequest): Promise<Response> {

@@ -19,10 +19,20 @@
  *
  * ## Onde a sonda olha
  *
- * No EFEITO: a linha que chega a `event_log` pelo dublê do Supabase. Não na
+ * No EFEITO: o evento que chega a `event_log` pelo dublê do Supabase. Não na
  * chamada de `fecharOLaco`, não em `gatilhoDaTransicao` — a função pura já tem
  * cerca própria (`lib/agenda/laco.gatilho.test.ts`) e decidir o gatilho certo
  * não prova que o payload dele serve para alguma coisa.
+ *
+ * ## O dublê é o cliente da SESSÃO, e recusa o INSERT como a RLS recusa
+ *
+ * Issue #877. A versão anterior deste dublê ACEITAVA `insert` em `event_log`, e
+ * era por isso que os quatro casos ficavam verdes com o gatilho morrendo em
+ * produção: pela tela o handler recebe o cliente da sessão, `event_log` não tem
+ * policy permissiva de INSERT para `authenticated`, e toda marcação e
+ * confirmação registrava `new row violates row-level security policy for table
+ * "event_log"` — medido na QA do lote 8. O evento só chega por `emit_event`, e
+ * é esse o único caminho que o dublê deixa passar.
  *
  * ## Por que os QUATRO, e não um
  *
@@ -53,7 +63,12 @@ vi.mock("@/lib/agenda/consulta", async (original) => {
   return { ...real, horariosLivresDaOrg: vi.fn() };
 });
 
+vi.mock("@/lib/logger", () => ({
+  logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() },
+}));
+
 const { horariosLivresDaOrg } = await import("@/lib/agenda/consulta");
+const { logger } = await import("@/lib/logger");
 const { marcarAgendamentoHandler, alterarAgendamentoHandler, cancelarAgendamentoHandler } =
   await import("@/app/api/v1/agenda/agendamentos/_handler");
 
@@ -81,6 +96,10 @@ interface Banco {
   agendamento: Linha | null;
   criado: Linha | null;
   inserido: Record<string, Linha[]>;
+  /** O que chegou a `event_log` pelo único caminho que a RLS deixa: `emit_event`. */
+  emitidos: Linha[];
+  /** Quando preenchido, `emit_event` devolve este erro — o banco recusou. */
+  recusaDoEmit: { message: string } | null;
 }
 
 let banco: Banco;
@@ -120,13 +139,18 @@ function dadoDaTabela(tabela: string): unknown {
 function cliente(): SupabaseClient {
   const leitura = (tabela: string) => {
     const cadeia: Record<string, unknown> = {};
-    for (const m of ["eq", "neq", "in", "is", "not", "or", "gte", "lte", "order", "limit"]) {
+    for (const m of ["eq", "neq", "in", "is", "not", "or", "gte", "lte", "lt", "gt", "order", "limit"]) {
       cadeia[m] = () => cadeia;
     }
     const resposta = () => ({ data: dadoDaTabela(tabela), error: null });
     cadeia.maybeSingle = async () => resposta();
     cadeia.single = async () => resposta();
-    cadeia.then = (r: (v: unknown) => unknown) => r(resposta());
+    // Leitura em LISTA de `calendar_appointments` é a ocupação que o encaixe de
+    // uma pessoa confere (`coletaOQueOcupa`) — e lista é array, nunca a linha
+    // solta que `maybeSingle` devolve. Agenda vazia: este arquivo não é sobre
+    // sobreposição (essa mora em `pessoa-marca-fora-da-grade.test.ts`).
+    cadeia.then = (r: (v: unknown) => unknown) =>
+      r(tabela === "calendar_appointments" ? { data: [], error: null } : resposta());
     return cadeia;
   };
 
@@ -134,6 +158,21 @@ function cliente(): SupabaseClient {
     from: (tabela: string) => ({
       select: () => leitura(tabela),
       insert: (linha: Linha) => {
+        if (tabela === "event_log") {
+          // O que o Postgres responde ao cliente da sessão: não há policy
+          // permissiva de INSERT em `event_log` para `authenticated`.
+          const recusa = {
+            data: null,
+            error: {
+              code: "42501",
+              message: 'new row violates row-level security policy for table "event_log"',
+            },
+          };
+          return {
+            select: () => ({ single: async () => recusa, maybeSingle: async () => recusa }),
+            then: (r: (v: unknown) => unknown) => r(recusa),
+          };
+        }
         (banco.inserido[tabela] ??= []).push(linha);
         const resposta = { data: banco.criado ?? linha, error: null };
         return {
@@ -155,6 +194,11 @@ function cliente(): SupabaseClient {
       if (fn === "fn_appointment_change") {
         return { data: { ...banco.agendamento, ...(args.p_patch as Linha), revision: 2 }, error: null };
       }
+      if (fn === "emit_event") {
+        if (banco.recusaDoEmit) return { data: null, error: banco.recusaDoEmit };
+        banco.emitidos.push(args);
+        return { data: "evento-1", error: null };
+      }
       return { data: null, error: null };
     },
   } as unknown as SupabaseClient;
@@ -168,19 +212,21 @@ const ctx: HandlerCtx = {
 
 /** Os gatilhos de agenda que chegaram ao `event_log`. */
 function gatilhos(): Linha[] {
-  return (banco.inserido["event_log"] ?? []).filter(
-    (l) => l.entity_kind === ENTIDADE_DO_AGENDAMENTO,
-  );
+  return banco.emitidos.filter((l) => l.p_entity_kind === ENTIDADE_DO_AGENDAMENTO);
 }
 
 /** O único gatilho da rodada — e a asserção de que houve exatamente um. */
-function oGatilho(): { event_type: string; payload: Linha } {
+function oGatilho(): { event_type: string; payload: Linha; organizacao: unknown } {
   expect(
     gatilhos(),
     "a transição não emitiu gatilho nenhum: o motor de regras não fica sabendo do compromisso e nenhuma automação de agenda roda — sem erro e sem log",
   ).toHaveLength(1);
   const linha = gatilhos()[0]!;
-  return { event_type: linha.event_type as string, payload: linha.payload as Linha };
+  return {
+    event_type: linha.p_event_type as string,
+    payload: linha.p_payload as Linha,
+    organizacao: linha.p_organization_id,
+  };
 }
 
 beforeEach(() => {
@@ -215,6 +261,8 @@ beforeEach(() => {
       time_zone: "America/Sao_Paulo",
     },
     inserido: {},
+    emitidos: [],
+    recusaDoEmit: null,
   };
   vi.mocked(horariosLivresDaOrg).mockImplementation(async () => coletaOk());
 });
@@ -282,8 +330,45 @@ describe("os quatro gatilhos de agenda levam o tipo de atendimento real", () => 
 
     expect(oGatilho().payload.event_type_name).toBe("Agendamento");
     expect(
-      banco.inserido["event_log"],
+      banco.emitidos,
       "o cancelamento caiu junto com a leitura do tipo: um compromisso fica sem desmarcar porque uma linha de catálogo sumiu",
-    ).toBeDefined();
+    ).not.toHaveLength(0);
+  });
+});
+
+/**
+ * Issue #877 — o gatilho atravessa a RLS pela tela.
+ *
+ * Os casos acima já rodam com o cliente da sessão recusando o INSERT; estes
+ * dois dizem, cada um, a metade da propriedade que eles não nomeiam.
+ */
+describe("pela tela, o gatilho chega apesar da RLS de event_log", () => {
+  it("confirmar pela tela emite pelo emit_event, com a organização do CONTEXTO", async () => {
+    banco.agendamento!.status = "pending";
+
+    await alterarAgendamentoHandler(cliente(), ctx, { id: AGENDAMENTO, status: "confirmed" });
+
+    const { event_type, organizacao } = oGatilho();
+    expect(event_type).toBe("appointment.confirmed");
+    expect(
+      organizacao,
+      "o evento saiu sem a organização do contexto autenticado: emit_event cairia na primeira organização do usuário, ou em nenhuma",
+    ).toBe(ORG);
+  });
+
+  it("emit_event recusado não desfaz a marcação — e deixa rastro no log", async () => {
+    banco.recusaDoEmit = { message: "caller_not_authorized_for_org" };
+
+    const criado = await marcarAgendamentoHandler(cliente(), ctx, {
+      event_type_id: TIPO,
+      starts_at: HORARIO,
+      contact_id: CONTATO,
+    });
+
+    expect(criado, "falhar em emitir derrubou um compromisso já gravado").toBeTruthy();
+    expect(logger.error).toHaveBeenCalledWith(
+      "[agenda] gatilho de automação não foi emitido",
+      expect.objectContaining({ error: "caller_not_authorized_for_org", organization_id: ORG }),
+    );
   });
 });

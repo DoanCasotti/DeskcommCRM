@@ -118,7 +118,7 @@ it('refreshes agenda read state for each candidate while writes stay proposals',
   const p = preview();
   p.contactId = 'actual-contact';
   let called = false;
-  const ctx = { ...gate(), agenda: { active: true, podeMarcar: false, toolCalledThisTurn: false } };
+  const ctx = { ...gate(), agenda: { active: true, ferramentas: ['crm_find_free_slots'], toolCalledThisTurn: false } };
   const tools = applyPreviewPolicy(
     {
       crm_find_free_slots: definition(() => {
@@ -131,7 +131,7 @@ it('refreshes agenda read state for each candidate while writes stay proposals',
     ctx,
     () => [],
     undefined,
-    () => ({ agenda: { active: true, podeMarcar: false, toolCalledThisTurn: called } }),
+    () => ({ agenda: { active: true, ferramentas: ['crm_find_free_slots'], toolCalledThisTurn: called } }),
   );
   await execute(tools, 'send_message', { body: 'Vou verificar o horário para você.' });
   expect(p.result.impediments.some((i) => i.code === 'agenda_stall_sem_ferramenta')).toBe(true);
@@ -143,4 +143,29 @@ it('uses only supplied in-memory sample contact in sandbox', () => {
   const context = scenarioContext([], { name: 'Maria Cenário', phone: '+5511999999999' });
   expect(context.context.contact.name).toBe('Maria Cenário');
   expect(context.context.contact.phone).toBe('+5511999999999');
+});
+
+
+describe('proteção comercial: ferramenta e prévia concordam', () => {
+  it.each(['Os óculos custam R$ 299,90.', 'Pode pagar em 10x.', 'Temos desconto de 15%.'])
+    ('barra o mesmo texto sem acionar transporte: %s', async body => {
+      const p = preview(), send = vi.fn(), ctx = { ...gate(), body, commercialRestrictionEnforced: true };
+      const direto = evaluateBeforeSend(ctx);
+      const tools = applyPreviewPolicy({ send_message: definition(send) }, p, ctx, () => []);
+      await execute(tools, 'send_message', { body });
+      expect(direto.veto?.code).toBe('commercial_requires_human');
+      expect(p.result.impediments[0]?.code).toBe(direto.veto?.code);
+      expect(p.result.candidates).toEqual([]);
+      expect(p.result.proposals).toContainEqual({ tool: 'crm_request_human_handoff', arguments: {
+        reason: 'Valores e negociação: atendimento exclusivamente humano.',
+      } });
+      expect(send).not.toHaveBeenCalled();
+    });
+  it('mantém endereço literal e não altera organizações sem essa restrição', async () => {
+    const p = preview(), body = 'Rua das Flores, 2054';
+    await execute(applyPreviewPolicy({ send_message: definition(vi.fn()) }, p,
+      { ...gate(), commercialRestrictionEnforced: true }, () => []), 'send_message', { body });
+    expect(p.result.candidates[0]?.body).toBe(body);
+    expect(evaluateBeforeSend({ ...gate(), body: 'São R$ 299,90.' }).veto).toBeNull();
+  });
 });

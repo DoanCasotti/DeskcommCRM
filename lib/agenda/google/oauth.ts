@@ -3,7 +3,16 @@
  *
  * Sem rede, sem `process.env` e sem relógio próprio: quem chama injeta a
  * configuração do app e o instante. É o que permite provar, em teste de
- * unidade, as três armadilhas que matam esta integração em produção.
+ * unidade, as três primeiras armadilhas desta integração em produção — e a
+ * GUARDA contra a quarta. São quatro, e elas não se dividem só pelo estrago
+ * (três matam a conexão em silêncio, a quarta tranca quem tem a agenda num
+ * e-mail diferente do login do CRM): dividem-se também pelo que um teste de
+ * unidade alcança. Nas três primeiras o mecanismo É o que enviamos, então
+ * medir o que sai mede a armadilha inteira. Na quarta o mecanismo é a tela do
+ * Google pular o seletor — daqui só se prova que `select_account` SAI, nunca
+ * que o seletor aparece. O teste irmão já faz essa distinção, e o cabeçalho
+ * não pode desfazê-la: `tests/unit/agenda-google-oauth.test.ts` abre com
+ * "três armadilhas medidas" e só depois com "e uma quarta".
  *
  * ─── Armadilha 1: sem `prompt=consent` não vem `refresh_token` ────────────
  *
@@ -27,6 +36,17 @@
  * número relativo dá um token eternamente novo — a validade nunca chega. Aqui
  * ele vira instante absoluto na leitura, usando o `agora` injetado, e o valor
  * relativo não sobrevive à fronteira desta função.
+ *
+ * ─── Armadilha 4: sem `select_account` o `login_hint` vira imposição ───────
+ *
+ * `login_hint` SUGERE a conta, não obriga. Com uma sessão do Google já aberta
+ * no navegador e `prompt=consent` sozinho, o Google autoriza aquela conta e
+ * pula o seletor: quem tem a agenda de trabalho num e-mail diferente do login
+ * do CRM chega na tela, autoriza, e a agenda que volta para o CRM é a do login
+ * — sem caminho nenhum para trocar. `select_account` PEDE o seletor de volta, e
+ * o `login_hint` continua junto como sugestão. O que a tela do Google faz com
+ * essa sugestão — destacar a conta, pré-selecionar, ignorar — é decisão dele, e
+ * ninguém deste lado observou: daqui só se prova o que SAI (ver o topo).
  */
 
 /**
@@ -44,8 +64,75 @@ export const ESCOPOS_OBRIGATORIOS: readonly string[] = [
   "https://www.googleapis.com/auth/calendar.readonly",
 ];
 
+/**
+ * Escopos OPCIONAIS que entram no consentimento só quando a organização liga a
+ * opção que os exige (#2063).
+ *
+ * `meetings.space.created` permite criar espaços de reunião abertos pela API do
+ * Meet. NÃO vem em `ESCOPOS_OBRIGATORIOS` de propósito: exigir o escopo novo
+ * derrubaria toda conexão existente em `scope_missing` e pediria reconexão a
+ * cada operador no `update.sh`, o que a doutrina de packaging proíbe. Sem o
+ * escopo na conexão, o comportamento atual é preservado byte a byte.
+ */
+export const ESCOPOS_OPCIONAIS: readonly string[] = [
+  "https://www.googleapis.com/auth/meetings.space.created",
+];
+
+/** O escopo do Meet pedido por #2063, isolado para o gate do executor. */
+export const ESCOPO_MEET_ESPACO_ABERTO: string = ESCOPOS_OPCIONAIS[0]!;
+
+/** Um `scope` concedido contém o escopo do espaço aberto do Meet? */
+export function temEscopoDeEspacoAberto(concedidos: string[] | string | null | undefined): boolean {
+  const lista =
+    typeof concedidos === "string"
+      ? concedidos.split(/\s+/).filter(Boolean)
+      : Array.isArray(concedidos)
+        ? concedidos.filter((s): s is string => typeof s === "string")
+        : [];
+  return lista.map((s) => s.trim()).includes(ESCOPO_MEET_ESPACO_ABERTO);
+}
+
+/**
+ * O gate do executor (#2063): o espaço aberto SÓ é criado quando a opção da
+ * organização está LIGADA **e** a conexão tem o escopo opcional.
+ *
+ * Sem o gate duplo a feature ligava (e corria o risco de "quem tiver o link
+ * entra") numa conexão que nem pediu o escopo; e sem ele o escopo obrigatório
+ * teria que mudar. As duas condições juntas, contrato fechado, nunca lança.
+ */
+export function deveCriarEspacoAberto(opcao: { ligada: boolean }, escoposConcedidos: string[] | string | null | undefined): boolean {
+  return opcao.ligada && temEscopoDeEspacoAberto(escoposConcedidos);
+}
+
 export const ENDERECO_DE_CONSENTIMENTO = "https://accounts.google.com/o/oauth2/v2/auth";
 export const ENDERECO_DE_TOKEN = "https://oauth2.googleapis.com/token";
+
+/**
+ * O conjunto de caracteres de um client secret do Google — e o guarda contra a
+ * colagem errada.
+ *
+ * Um client secret do Google só contém `[A-Za-z0-9_-]`. A cerca é no CONJUNTO
+ * de caracteres de propósito, e não no prefixo `GOCSPX-`: secrets antigos não o
+ * têm, e o Google pode mudar o formato. O que não muda é que aspa, vírgula,
+ * espaço e chave nunca pertencem a um secret.
+ *
+ * O defeito que isto fecha foi medido em produção: colar, no campo da tela, o
+ * secret JUNTO com o resto da linha do arquivo JSON de credenciais —
+ * `GOCSPX-xxxx","redirect_uris` — que carrega aspa e vírgula. O campo é
+ * `type="password"` e nunca volta a aparecer, então ninguém relê o que ficou
+ * gravado; a única pista chegava lá na frente, na troca do código, como
+ * `invalid_client` do Google — um erro que aponta para o Google e não para a
+ * colagem.
+ *
+ * Pura, sem rede e sem `process.env`: a server action que grava e o formulário
+ * que avisa na hora bebem da MESMA regra, para não divergirem.
+ */
+export const FORMATO_DO_CLIENT_SECRET = /^[A-Za-z0-9_-]+$/;
+
+/** `true` quando o texto (já aparado) tem o formato de um client secret do Google. */
+export function clientSecretTemFormato(secret: string): boolean {
+  return FORMATO_DO_CLIENT_SECRET.test(secret.trim());
+}
 
 /**
  * Renovar com folga, não no vencimento.
@@ -74,7 +161,7 @@ export interface AppDoGoogle {
  */
 export function montarUrlDeConsentimento(
   app: AppDoGoogle,
-  opcoes: { state: string; contaSugerida?: string | null },
+  opcoes: { state: string; contaSugerida?: string | null; escoposOpcionais?: readonly string[] },
 ): string {
   const clientId = app.clientId?.trim();
   const redirectUri = app.redirectUri?.trim();
@@ -86,17 +173,25 @@ export function montarUrlDeConsentimento(
     client_id: clientId,
     redirect_uri: redirectUri,
     response_type: "code",
-    scope: ESCOPOS_OBRIGATORIOS.join(" "),
+    scope: [...ESCOPOS_OBRIGATORIOS, ...(opcoes.escoposOpcionais ?? [])].join(" "),
     // Sem `offline` não vem refresh_token nenhum; sem `consent` ele some na
-    // segunda vez. Os dois juntos, sempre — ver o cabeçalho.
+    // segunda vez; sem `select_account` o Google pula o seletor de contas e
+    // autoriza direto a conta do `login_hint`. Os três juntos, sempre — ver o
+    // cabeçalho.
     access_type: "offline",
-    prompt: "consent",
+    prompt: "consent select_account",
     state: opcoes.state,
   });
 
   // Cada atendente conecta a agenda DELE. Sugerir a conta evita o erro mais
   // comum do fluxo: autorizar com a conta pessoal que já estava logada no
   // navegador e ver a agenda errada aparecer no CRM.
+  //
+  // Sugerir NÃO é decidir: quem tem a agenda de trabalho num e-mail diferente do
+  // login do CRM precisa conseguir escolher o dele na tela do Google — é o
+  // `select_account` acima que mantém o seletor de pé. Como o Google desenha a
+  // sugestão DENTRO do seletor é com ele; o que garantimos é que o seletor é
+  // pedido.
   const conta = opcoes.contaSugerida?.trim();
   if (conta) parametros.set("login_hint", conta);
 
@@ -117,7 +212,12 @@ export type MotivoDeTokenIlegivel = "resposta_invalida" | "erro_do_google" | "se
 
 export type LeituraDeToken =
   | { ok: true; token: TokenDoGoogle }
-  | { ok: false; motivo: MotivoDeTokenIlegivel; detalhe: string };
+  /**
+   * `status` é o HTTP da resposta quando HOUVE uma; `null` quando o Google não
+   * respondeu (rede). Quem classifica precisa dos dois lados: sem ele, uma
+   * recusa 400 do Google chegava ao cron como "sem resposta" (#2393).
+   */
+  | { ok: false; motivo: MotivoDeTokenIlegivel; detalhe: string; status: number | null };
 
 function texto(v: unknown): string | null {
   return typeof v === "string" && v.trim() ? v.trim() : null;
@@ -128,22 +228,29 @@ function texto(v: unknown): string | null {
  *
  * Não lança: a resposta vem da rede, e um `throw` aqui viraria 500 numa rota que
  * precisa redirecionar o navegador com um motivo legível.
+ *
+ * O `status` chega de fora porque esta camada é pura: quem fala com a rede
+ * (`token.ts`) é quem o tem em mãos. Sem ele, `null` — "o Google não respondeu".
  */
-export function lerRespostaDeToken(bruto: unknown, opcoes: { agora: Date }): LeituraDeToken {
+export function lerRespostaDeToken(
+  bruto: unknown,
+  opcoes: { agora: Date; status?: number | null },
+): LeituraDeToken {
+  const status = opcoes.status ?? null;
   if (typeof bruto !== "object" || bruto === null) {
-    return { ok: false, motivo: "resposta_invalida", detalhe: `resposta não é objeto: ${typeof bruto}` };
+    return { ok: false, motivo: "resposta_invalida", detalhe: `resposta não é objeto: ${typeof bruto}`, status };
   }
   const r = bruto as Record<string, unknown>;
 
   const erro = texto(r.error);
   if (erro) {
     const descricao = texto(r.error_description);
-    return { ok: false, motivo: "erro_do_google", detalhe: descricao ? `${erro}: ${descricao}` : erro };
+    return { ok: false, motivo: "erro_do_google", detalhe: descricao ? `${erro}: ${descricao}` : erro, status };
   }
 
   const accessToken = texto(r.access_token);
   if (!accessToken) {
-    return { ok: false, motivo: "sem_access_token", detalhe: "resposta sem `access_token`" };
+    return { ok: false, motivo: "sem_access_token", detalhe: "resposta sem `access_token`", status };
   }
 
   // Sem validade declarada, tratamos como JÁ vencido. É o desfecho conservador:

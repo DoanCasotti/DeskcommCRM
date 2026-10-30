@@ -28,6 +28,10 @@ export interface EtapaDeGatilho {
   stageName: string;
   pipelineId: string;
   pipelineName: string;
+  /** `is_lost` do agent-mapping: a etapa fecha o negócio como perda e exige motivo. */
+  isPerda: boolean;
+  /** `settings` do funil na lista de funis — o vocabulário de motivos extras. */
+  settingsDoFunil: unknown;
 }
 
 export interface EtapasDeGatilho {
@@ -35,6 +39,38 @@ export interface EtapasDeGatilho {
   etapas: EtapaDeGatilho[];
   /** `true` enquanto QUALQUER funil ainda não respondeu — o seletor não deve mentir "vazio". */
   carregando: boolean;
+  /**
+   * `true` quando alguma leitura FALHOU. Lista vazia por falha e lista vazia por
+   * não haver etapa são estados diferentes, e quem lê precisa distinguir: sem
+   * isto, uma consulta que caiu vira "esta etapa não existe" na tela — acusação
+   * falsa sobre uma regra sadia, no momento em que o produto está pior.
+   */
+  falhou: boolean;
+}
+
+/**
+ * «Etapa · Funil». Todo funil nasce com «Novo / Em andamento / Ganho / Perdido»:
+ * dois funis bastam para quatro pares homônimos, então o nome da etapa sozinho
+ * não identifica nada — o funil viaja junto em toda superfície que dura.
+ */
+export function nomeDaEtapa(etapa: EtapaDeGatilho): string {
+  return `${etapa.stageName} · ${etapa.pipelineName}`;
+}
+
+/** Agrupa por funil preservando a ordem em que as etapas chegaram (a ordem do funil). */
+export function etapasPorFunil(
+  etapas: EtapaDeGatilho[],
+): Array<{ id: string; nome: string; etapas: EtapaDeGatilho[] }> {
+  const funis: Array<{ id: string; nome: string; etapas: EtapaDeGatilho[] }> = [];
+  for (const etapa of etapas) {
+    let grupo = funis.find((f) => f.id === etapa.pipelineId);
+    if (!grupo) {
+      grupo = { id: etapa.pipelineId, nome: etapa.pipelineName, etapas: [] };
+      funis.push(grupo);
+    }
+    grupo.etapas.push(etapa);
+  }
+  return funis;
 }
 
 export function useEtapasDeGatilho(habilitado = true): EtapasDeGatilho {
@@ -80,6 +116,8 @@ export function useEtapasDeGatilho(habilitado = true): EtapasDeGatilho {
         stageName: etapa.name,
         pipelineId: funil.id,
         pipelineName: funil.name,
+        isPerda: etapa.is_lost === true,
+        settingsDoFunil: (funil as { settings?: unknown }).settings ?? null,
       });
     }
   });
@@ -87,5 +125,6 @@ export function useEtapasDeGatilho(habilitado = true): EtapasDeGatilho {
   return {
     etapas,
     carregando: funis.isLoading || porFunil.some((q) => q.isLoading),
+    falhou: funis.isError || porFunil.some((q) => q.isError),
   };
 }

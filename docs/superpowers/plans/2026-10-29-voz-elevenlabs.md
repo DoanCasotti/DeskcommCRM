@@ -235,8 +235,8 @@ vai de carona nesta frente.
 | 3 — Scribe plugado no worker | ✅ feito | commit `d684a1f9f` |
 | 4 — preço por caractere (`custoDeVozCents`) | ✅ feito (sem migration) | commit `d58e399d0` |
 | 5 — `texto-falavel.ts` + `sintetizar.ts` | ✅ feito, **deliberadamente ÓRFÃOS** | commit `d58e399d0` |
-| 6a — `sendTurnMessage` aprende a mandar voz (idempotente, com custo) | ✅ feito | commit `ccf267718`, migration 0252 |
-| 6b — o AGENTE decide falar (`inbound-turn.ts` + `ai_agent_versions`) | ✅ feito | migration 0253, ver "o que foi construído" abaixo |
+| 6a — `sendTurnMessage` aprende a mandar voz (idempotente, com custo) | ✅ feito | commit `ccf267718`, migration 9051 (nasceu 0252; renumerada no merge da main de 2026-10-30) |
+| 6b — o AGENTE decide falar (`inbound-turn.ts` + `ai_agent_versions`) | ✅ feito | migration 9052 (nasceu 0253), ver "o que foi construído" abaixo |
 | 7 — tela de configuração (ligar voz, escolher voice_id, ouvir prévia) | ✅ feito | ver "Fase 7" abaixo |
 
 **Por que a Fase 5 está "órfã" de propósito.** `sintetizarVoz()` e `custoDeVozCents()` são reais,
@@ -311,7 +311,7 @@ uma nota de voz é UMA mensagem, não três. Então a decisão "falar" precisa D
 **O que foi de fato construído na 6b** (depois do mapeamento acima ser confirmado por leitura
 direta do código, e com confirmação explícita do usuário antes de editar o motor de turnos):
 
-- Migration 0253: `ai_agent_versions.voz_enabled`/`voz_quando`, com o trigger de imutabilidade de
+- Migration 9052 (nasceu 0253): `ai_agent_versions.voz_enabled`/`voz_quando`, com o trigger de imutabilidade de
   versão publicada (`fn_ai_agent_version_content_immutable`, estendido pelas migrations 0125/0181)
   ensinado a conhecer as duas colunas — senão ficariam editáveis numa versão já publicada sem
   virar draft nova, reabrindo o buraco que 0125/0181 fecharam para as colunas delas.
@@ -366,6 +366,37 @@ ainda não escrito. Os outros 4 achados (pacing/digitando ausente na voz, exceç
 rotineiro do ledger, duplicação no worker de transcrição e no painel, ida dupla ao ledger por
 envio) também continuam em aberto.
 
+**Merge da `main` (2026-10-30), antes do PR.** A branch estava a mais de mil commits da `main`;
+30 arquivos em conflito. O que mudou de desenho, e por quê:
+
+1. **Transcrição: o menu Whisper/Scribe virou o degrau 0 da escada.** A `main` trocou o ponto
+   fixo `transcricao_de_audio` por uma ESCADA (`lib/messaging/media/escada-de-transcricao.ts`,
+   #2171/#2190) que decide quem ouve cada áudio — serviço da instalação → chave OpenAI →
+   OpenRouter → modelo de conversa com `audio` → nada com motivo. Fixar "Whisper" como padrão
+   apagaria esses degraus. O menu (`fixo.opcoes`) ficou com "Automático" (a escada inteira; o par
+   `openai/whisper-1` é só a etiqueta gravada, porque não há como apagar um binding pela tela) e
+   "ElevenLabs (Scribe)", que vira o degrau 0 (`elevenlabsEscolhido`, origem
+   `elevenlabs_escolhido`). Sem chave do ElevenLabs utilizável, o degrau 0 some e a escada segue —
+   nunca um áudio mudo por uma escolha impossível. Painel e worker passam o MESMO degrau.
+2. **Envio da voz: dentro de `enviarComFotos`, no lugar de `sendInBubbles`.** A `main` passou o
+   envio do turno por saída configurável da prospecção → fotos do produto → bolhas, e moveu o
+   "digitando…" e a pausa humana para `esperaForaDoLock` (#654), que roda antes de QUALQUER envio.
+   A voz entra no `enviarTexto`: herda rodapé de saída, teto do turno e o "digitando…" — isto
+   fecha o achado de revisão "pacing/digitando ausente na voz". Foto com legenda segue foto.
+3. **`corpoDoEnvio`** (extraído na `main`) ganhou o parâmetro da voz resolvida; e o texto derivado
+   (`aiVoiceDerivedText`) só vai quando a voz de fato saiu — falha de síntese que cai para texto
+   não grava mais `media_derived_text` numa mensagem de texto.
+4. **`send-ledger`:** a extração `resolverChaveDoLedger` (branch) + a regra da `main` de só procurar
+   a mensagem existente em retentativa (`replay`) — `row` não nulo é exatamente esse caso.
+5. **Migrations renumeradas: 0252→9051, 0253→9052.** A `main` já tinha 0252/0253 com outro
+   conteúdo. Descrição agora no `-- manifest:` do próprio `.sql` (o MANIFEST.md virou histórico).
+   A 9052 recria `fn_ai_agent_version_content_immutable` a partir da última definição em vigor
+   (0616: `handoff_legal_enabled`, `proposal_ai_draft_enabled`, `inbound_debounce_ms`,
+   `search_path = ''`) mais as duas colunas de voz; o apêndice do baseline fica antes da VARREDURA.
+6. **Credenciais:** a `main` criou `PROVEDORES_COM_CHAVE` (chat + Jev). A lista de serviço
+   (ElevenLabs) continua separada — `provedores-de-decisao-catraca` exige que aquela seja só as
+   duas — e as telas usam a união.
+
 ---
 
 ## 5. Ordem de execução
@@ -401,7 +432,7 @@ Onboarding (`app/onboarding/setup-ai/_form.tsx`) **não** muda: voz é configura
 - Testes novos: pareamento de serviços, `texto-falavel`, voz-dentro-do-teto, voz-idempotente.
 - Spec e2e registrada em `SPECS_PARTE_*` ou em `FORA_DO_CI` **com motivo escrito** —
   `tests/unit/e2e-cobertura-completa.test.ts` reprova spec órfã.
-- Evidência visual em `.superpowers/evidence/` (doutrina de QA visual, `CLAUDE.md:384`): áudio
+- Evidência visual em `evidence/voz-elevenlabs/` (versionado — doutrina de QA visual em `CLAUDE.md`): áudio
   recebido virando texto, e nota de voz saindo no WhatsApp real.
 
 ---

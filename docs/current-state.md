@@ -119,9 +119,9 @@ o contrato de governança para agentes de IA externos.
 
 | Épico | Estado relatado | O que falta |
 |---|---|---|
-| **Follow-up inteligente** (`HANDOFF.md`) | Ondas 1–7 ✅; Onda 8 **em andamento** (8.1 gatilho de silêncio ✅, 8.3 jornada E2E ✅) | gatilho `stage_change`, flywheel, e o fechamento do checklist DoD/PRD da 8.3 |
-| **Evolução do harness** (`HANDOFF-harness-evolution.md`) | **ÉPICO COMPLETO** — Fases 0–4 fecharam, a última (Painel de Evolução) em 2026-07-27. Mais duas continuações entregues: mapeamento de funil do agente (27/jul) e gerenciar etapas do funil (28/jul) | **uma prova em aberto, e é do dono:** ninguém mandou uma mensagem real de WhatsApp fechando o ciclo completo. Receita de 1 min no fim do HANDOFF |
-| **Operação visível** (`HANDOFF-operacao-visivel.md`) | F1, F2(i), F2(ii), F3 ✅ localhost com evidência Playwright | prova na VPS após publicar (cada feature exige prova dupla: localhost **e** VPS) |
+| **Follow-up inteligente** (`docs/handoffs/HANDOFF.md`) | Ondas 1–7 ✅; Onda 8 **em andamento** (8.1 gatilho de silêncio ✅, 8.3 jornada E2E ✅) | gatilho `stage_change`, flywheel, e o fechamento do checklist DoD/PRD da 8.3 |
+| **Evolução do harness** (`docs/handoffs/HANDOFF-harness-evolution.md`) | **ÉPICO COMPLETO** — Fases 0–4 fecharam, a última (Painel de Evolução) em 2026-07-27. Mais duas continuações entregues: mapeamento de funil do agente (27/jul) e gerenciar etapas do funil (28/jul) | **uma prova em aberto, e é do dono:** ninguém mandou uma mensagem real de WhatsApp fechando o ciclo completo. Receita de 1 min no fim do HANDOFF |
+| **Operação visível** (`docs/handoffs/HANDOFF-operacao-visivel.md`) | F1, F2(i), F2(ii), F3 ✅ localhost com evidência Playwright | prova na VPS após publicar (cada feature exige prova dupla: localhost **e** VPS) |
 | **Casos humanos** (`docs/handoffs/HANDOFF-casos-humanos.md`) | Waves 1–6 ✅ e revisadas; Wave 7 (prova E2E) relatada PARCIAL — interrompida por limite de API, não por bug | **A CONFIRMAR** se fechou: o HANDOFF saiu da raiz para `docs/handoffs/`, o que normalmente sinaliza épico encerrado |
 | **Inbox multimodal** (`docs/handoffs/HANDOFF-inbox-multimodal.md`) | Ondas 0–3.1 ✅ com prova real (WhatsApp real, mídia real) | **A CONFIRMAR** o estado das ondas 4–6. **Bloqueios externos que valem revalidar:** chave Google era de gateway (gemini real inacessível) e credencial Anthropic era placeholder (`last4 1234`) — o agente multimodal foi provado só em OpenAI/gpt-4o |
 | **Fase FG / Vendaval** | Não iniciada | O gatilho era a aprovação de G6, que existe (`G6.approved`). O README **não lista mais** a Fase FG em "Próximo" — **A CONFIRMAR** se saiu de escopo ou foi absorvida |
@@ -169,6 +169,18 @@ protection em 2026-08-13 e saiu desta lista em 2026-08-14.)*
 
 ### 4.1 Os E2E quase não rodam no CI 🟠 — parcialmente resolvido em 2026-07-30
 
+> **Atualização (2026-09-19, PR #983):** a `vps-fresh-onboarding` saiu da `FORA_DO_CI` e passou
+> a rodar no CI, na `SPECS_PARTE_4` do `e2e.yml`, sozinha numa parte. Tudo abaixo que a dá como
+> fora, ou que conclui que "`e2e` verde não prova a instalação fresca", é registro de antes
+> dessa data. Uma ressalva continua valendo: PR que não alcança o `e2e` (regra em
+> `scripts/pr-alcanca-o-e2e.sh`) pula as partes, e ali o verde não prova tela nenhuma. O que
+> fica fora hoje não se lê deste documento — meça:
+>
+> ```bash
+> git show origin/main:.github/workflows/e2e.yml | \
+>   python3 -c "import sys,re; y=sys.stdin.read(); print(sorted({s for _,c in re.findall(r'(FORA_DO_CI):\s*>-\n((?:[ ]{8,}.*\n)+)',y) for s in re.findall(r'[a-z0-9-]+\.spec\.ts',c)}))"
+> ```
+>
 > **Atualização (2026-08-14 @ `741c4ec8`):** `e2e.yml` roda **45 das 46 specs**, e o `e2e` **é
 > check obrigatório** na branch protection desde 2026-08-08 (junto com `verify`,
 > `build-and-size`, `invariants` e `imagens-ok` — **cinco**). A única spec fora é
@@ -192,7 +204,8 @@ O que continua fora (2026-08-14): **1 das 46 specs Playwright**. A
 rodar** no `e2e.yml`. Mas a `vps-fresh-onboarding.spec.ts` — a jornada que a doutrina de QA
 Visual classifica como o caminho mais crítico do produto — continua fora, porque exige WAHA +
 Redis + Resend + Nuvemshop no runner. Regressão nela passa sem detecção (issue #63), e é por
-isso que **`e2e` verde não prova a instalação fresca**.
+isso que **`e2e` verde não prova a instalação fresca**. *(Superado em 2026-09-19 pelo PR #983 —
+ver a atualização no topo desta seção.)*
 
 O `e2e` **é** check obrigatório desde 2026-08-08; um PR que o quebre não entra na `main`.
 
@@ -209,9 +222,9 @@ e o nome do script sugere cobertura total que o conteúdo não entrega.
 
 ### 4.3 Rate limit HTTP praticamente inexistente 🔴
 
-`checkRateLimit` (`lib/ai/dispatcher/rate-limit.ts`) é chamado em **2** lugares:
-o webhook público de captação e o dispatcher de IA. Sem proteção: `/login`, `/signup`,
-`/team/accept-invite/:token`, os crons, `/api/internal/*`, `/api/mcp`, webhooks WAHA
+`checkRateLimit` (`lib/ai/dispatcher/rate-limit.ts`) tem mais de um chamador —
+reconte, não cite: `grep -rln 'checkRateLimit(' app lib --include='*.ts' | grep -v '\.test\.'`. Sem proteção: `/login`, `/signup`,
+`/team/accept-invite/:token`, os crons, `/api/mcp`, webhooks WAHA
 e Nuvemshop. Detalhe e impacto em [`threat-model.md`](threat-model.md).
 
 ### 4.4 `node_modules` deste checkout está incompleto 🟠
@@ -250,9 +263,9 @@ Registrado porque a primeira passada desta auditoria apontou 11 PNGs de evidênc
 commitados na raiz. **Já foram movidos**: hoje há **zero** PNGs rastreados na raiz — a
 evidência vive em `evidence/` (85, contando as subpastas), `docs/evidence/` (18) e
 `loop/checkpoints/evidence/` (13) — **116** no total.
-Dois HANDOFFs também migraram para `docs/handoffs/`. Restam 3 na raiz (`HANDOFF.md`,
-`-harness-evolution`, `-operacao-visivel`), o que é consistente com "épico vivo fica visível,
-épico encerrado é arquivado".
+Desde a #638 nenhum HANDOFF fica na raiz: `git ls-files "HANDOFF*.md" | wc -l` devolve 0,
+e todos vivem em `docs/handoffs/`, com índice em `docs/handoffs/README.md`. Um teste
+(`tests/unit/handoff-na-raiz-nao-volta.test.ts`) reprova a volta.
 
 ### 4.9 Divergências de estado nos HANDOFFs 🟡
 
@@ -284,15 +297,25 @@ consequência natural de trabalho em branches paralelas, mas ilustra a regra:
 5. **`lib/agent-engine/agent/inbound-turn.ts` com 1789 linhas** — 2,4× o segundo maior arquivo
    de lógica (`AgentForm.tsx`, 746), e é o hot path do produto. Cresceu ~200 linhas desde a
    primeira medição desta auditoria.
-6. **NENHUM cron roda no deploy Vercel.** Os 14 crons do produto são agendados exclusivamente
-   pelo `crond` do serviço `scheduler` do `docker-compose.prod.yml` — e **não existe
-   `vercel.json` neste repo** (medido: `ls vercel.json` → ausente). Como a Vercel é a produção
-   real de quem mantém (ver `project_dois_ambientes_de_producao`), tudo que depende de
-   agendamento está **dormente lá**: `event-log-drain`, `agent-dispatcher`, `followup-flow-worker`,
-   `recover-stuck-messages`, `sync-model-catalog`, `contact-proposals-watcher`, etc. O sintoma
-   nunca é um erro — a tela só fica velha, a fila só não anda. Está escrito aqui porque cada
-   frente nova repetia a suposição de que "o cron roda"; a decisão (portar para Vercel Cron ou
-   assumir que a Vercel é vitrine e a VPS é a operação) é do dono do repo.
+6. **Cron parado não dá erro — a tela só fica velha e a fila só não anda.** Está escrito aqui
+   porque cada frente nova repete a suposição de que "o cron roda" sem olhar quem bate. No
+   self-host quem bate é o `crond` do serviço `scheduler`, e a lista de rotas mora em
+   `docker/scheduler/entrypoint.sh` — não no `docker-compose.prod.yml` (a de hoje sai de
+   `grep -oE 'api/v1/cron/[a-z0-9-]+' docker/scheduler/entrypoint.sh | sort -u`). Cada linha
+   descarta a saída do `curl` (`>/dev/null 2>&1`), então o resultado da batida não chega ao
+   log do scheduler. Quem instala sem agendador próprio tem um segundo caminho, que roda
+   **parte** dessas tarefas dentro do processo do app (`lib/relogio/executar.ts`).
+   A cerca contra rota que nasce sem agendamento é
+   `tests/unit/cron-routes-scheduled.test.ts`: ele compara o diretório `app/api/v1/cron/` com
+   esse crontab nas duas direções — reprova rota de cron sem agendamento e agendamento
+   apontando para rota que não existe. **Decidido em 2026-09-17, e por isso não há mais
+   decisão em aberto aqui:** a operação é a instalação em VPS e a Vercel ficou só com a
+   landing page; o projeto Vercel do CRM foi desvinculado do GitHub, e no mesmo dia saiu da
+   raiz o `vercel.ts` — o inventário de crons daquele destino — junto com a trava que
+   obrigava toda rota de cron nova a ser cadastrada nele. Para conferir o desvínculo, olhe os
+   status do último commit da `main` — enquanto o projeto esteve ligado, aparecia ali um
+   check `Vercel`:
+   `gh api repos/melgarafael/DeskcommCRM/commits/main/status --jq '[.statuses[].context]'`.
 
 ---
 
@@ -346,3 +369,8 @@ Duas lições que valem para quem mantiver este documento:
 2. **Este arquivo apodrece rápido.** O repo moveu 556 commits em poucos dias. Trate as datas
    do frontmatter como prazo de validade, não como enfeite — e prefira reconferir os números
    com os comandos citados a confiar na tabela.
+
+
+### Conversões de anúncios: confirmação e reprocessamento
+
+A integração de vendas oferece Data Manager nas novas autorizações do Google, preserva conexões anteriores e acompanha protocolos assíncronos. Configurações → Conversões mostra falhas temporárias, teste Meta e pendências com ação de reprocessamento. Contratos, limites e roteiro de piloto: [conversões de anúncios](runbooks/conversoes-de-anuncios.md). A captura web oferece links nomeados e script por número; regras Google por etapa, histórico e diagnóstico ficam em Configurações → Conversões. Os testes e limites de validação desta continuação estão no mapa de jornadas. Entrega real às plataformas exige um piloto com credenciais e recibos da conta.

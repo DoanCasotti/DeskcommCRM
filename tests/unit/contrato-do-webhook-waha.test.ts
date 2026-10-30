@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
  * O CONTRATO do webhook deste canal — e as duas maneiras de errar ao escrevê-lo.
@@ -29,10 +29,13 @@ const despachados: unknown[] = [];
 vi.mock("@/lib/supabase/admin", () => ({
   createAdminClient: () => ({
     from: () => ({
-      insert: async (linha: Record<string, unknown>) => {
+      // A rota lê o id da linha arquivada (`insert().select("id")`) e depois grava
+      // o desfecho nela (`update().eq("id", …)`) — ver `lib/waha/desfecho-do-webhook.ts`.
+      insert: (linha: Record<string, unknown>) => {
         arquivados.push(linha);
-        return { error: null };
+        return { select: () => ({ maybeSingle: async () => ({ data: { id: "log-1" }, error: null }) }) };
       },
+      update: () => ({ eq: async () => ({ error: null }) }),
     }),
     rpc: async () => ({ data: "segredo-decifrado-longo", error: null }),
   }),
@@ -59,6 +62,10 @@ vi.mock("@/lib/waha/ingest", async (original) => ({
 import { conferirContratoWaha, lerRoteamentoWaha } from "@/lib/waha/envelope";
 import { parseChatId } from "@/lib/waha/ingest";
 import { POST } from "@/app/api/v1/webhooks/waha/route";
+import { limparMemoriaDeSessoes } from "@/lib/waha/sessao-do-webhook";
+
+// A sessão `default` é reutilizada entre casos.
+beforeEach(() => limparMemoriaDeSessoes());
 
 /**
  * Transcrição de `webhook_events_log` da produção (2026-08-06) — a mesma fonte
@@ -70,8 +77,8 @@ const REAL = {
   event: "message.any",
   session: "default",
   payload: {
-    id: "false_70192801575156@lid_3A60443E83484256AF03",
-    from: "70192801575156@lid",
+    id: "false_100000000000001@lid_3A60443E83484256AF03",
+    from: "100000000000001@lid",
     fromMe: false,
     body: "oi, tudo bem?",
     timestamp: 1_760_000_000,
@@ -81,9 +88,9 @@ const REAL = {
       key: {
         id: "3A60443E83484256AF03",
         fromMe: false,
-        remoteJid: "70192801575156@lid",
+        remoteJid: "100000000000001@lid",
         participant: "",
-        remoteJidAlt: "558183647258@s.whatsapp.net",
+        remoteJidAlt: "5511900000001@s.whatsapp.net",
         addressingMode: "lid",
       },
       message: { conversation: "oi, tudo bem?" },

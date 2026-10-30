@@ -2,9 +2,9 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useForm, type Resolver } from "react-hook-form";
+import { useForm, useWatch, type Resolver } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useTransition, useState } from "react";
+import { useState } from "react";
 
 import { useT } from "@/hooks/i18n/useT";
 import {
@@ -17,6 +17,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { signUp } from "@/app/actions/auth/signUp";
+import { Eye, EyeSlash } from "@/lib/ui/icons";
+import { PasswordStrength } from "@/components/auth/PasswordStrength";
+import { AvisoSemResposta, useEnvioComTeto } from "@/components/auth/teto-da-espera";
+import type { PlanoDoCadastro } from "@/lib/cobranca/cadastro";
 
 /**
  * Convite em curso: a conta está sendo criada para ACEITAR um convite, não para
@@ -29,17 +33,29 @@ export interface ConviteDoSignup {
   email: string;
 }
 
-export function SignupForm({ convite }: { convite?: ConviteDoSignup }) {
+export function SignupForm({
+  convite,
+  planos = [],
+  planoInicial,
+}: {
+  convite?: ConviteDoSignup;
+  planos?: readonly PlanoDoCadastro[];
+  /** O plano padrão quando ele é oferecido — "sem mexer, vale o padrão" —, senão o primeiro. */
+  planoInicial?: string;
+}) {
   const t = useT();
   const router = useRouter();
-  const [isPending, startTransition] = useTransition();
+  const { pendente: isPending, semResposta, enviar } = useEnvioComTeto();
   const [serverError, setServerError] = useState<string | null>(null);
   const [contaExistente, setContaExistente] = useState(false);
   const [sentTo, setSentTo] = useState<string | null>(null);
+  const [showPassword, setShowPassword] = useState(false);
+  const [showPasswordConfirm, setShowPasswordConfirm] = useState(false);
 
   const {
     register,
     handleSubmit,
+    control,
     formState: { errors },
   } = useForm<SignupInput & { full_name: string }>({
     // O formulário tem UM tipo e DOIS contratos, e agora os dois contratos têm
@@ -55,26 +71,27 @@ export function SignupForm({ convite }: { convite?: ConviteDoSignup }) {
     defaultValues: {
       full_name: "",
       org_name: "",
+      cobranca_plan_id: planoInicial,
       email: convite?.email ?? "",
       password: "",
       password_confirm: "",
     },
   });
+  const password = useWatch({ control, name: "password" });
 
   const onSubmit = (values: SignupInput & { full_name: string }) => {
     setServerError(null);
-    startTransition(async () => {
-      // No modo convite o e-mail do formulário é readonly, e readonly no
-      // cliente não vale nada: quem confere de novo é o servidor.
-      const entrada: SignupInput | SignupComConviteInput = convite
-        ? {
-            full_name: values.full_name,
-            email: convite.email,
-            password: values.password,
-            password_confirm: values.password_confirm,
-          }
-        : values;
-      const res = await signUp(entrada, convite?.token);
+    // No modo convite o e-mail do formulário é readonly, e readonly no
+    // cliente não vale nada: quem confere de novo é o servidor.
+    const entrada: SignupInput | SignupComConviteInput = convite
+      ? {
+          full_name: values.full_name,
+          email: convite.email,
+          password: values.password,
+          password_confirm: values.password_confirm,
+        }
+      : values;
+    void enviar(() => signUp(entrada, convite?.token), (res) => {
       if (res.ok) {
         /**
          * ⚠️ O PROVEDOR JÁ DEIXOU A PESSOA ENTRAR — não existe e-mail para ela
@@ -95,9 +112,7 @@ export function SignupForm({ convite }: { convite?: ConviteDoSignup }) {
          * de tentativas — e não uma segunda porta de provisionamento.
          */
         if (res.sessao_ativa) {
-          router.replace(
-            convite ? `/team/accept-invite/${convite.token}` : "/get-started",
-          );
+          router.replace(convite ? `/team/accept-invite/${convite.token}` : "/get-started");
           return;
         }
         setSentTo(values.email);
@@ -106,7 +121,17 @@ export function SignupForm({ convite }: { convite?: ConviteDoSignup }) {
       if (res.error === "rate_limited") {
         setServerError(t("Muitas tentativas. Aguarde alguns minutos."));
       } else if (res.error === "validation_error") {
-        setServerError(t("Dados inválidos. Confira os campos."));
+        // As recusas do plano dizem o que fazer: "confira os campos" não diz.
+        const recusaDoPlano = (res.details?.cobranca_plan_id as string[] | undefined)?.[0];
+        setServerError(
+          t(
+            recusaDoPlano === "plano_indisponivel"
+              ? "Esse plano não está mais disponível. Recarregue a página e escolha outro."
+              : recusaDoPlano === "plano_obrigatorio"
+                ? "Não foi possível carregar os planos agora. Recarregue a página e escolha um plano."
+                : "Dados inválidos. Confira os campos.",
+          ),
+        );
       } else if (res.error === "conta_ja_existe" && convite) {
         // Ramo próprio porque o `else` mandava "Tente novamente" — e tentar de
         // novo nunca funciona quando a conta já existe. Em vez da mensagem,
@@ -114,6 +139,24 @@ export function SignupForm({ convite }: { convite?: ConviteDoSignup }) {
         // não na tela inicial (que, para quem foi revogado, é a tela de acesso
         // revogado, com um botão Sair e mais nada).
         setContaExistente(true);
+      } else if (res.error === "somente_convite") {
+        // Ramo próprio porque o `else` diria "Tente novamente", e aqui tentar
+        // de novo nunca vai funcionar — é política, não falha transitória.
+        setServerError(
+          t(
+            "Esta instalação aceita cadastro apenas por convite. Se você foi convidado, use o link que chegou no seu e-mail.",
+          ),
+        );
+      } else if (res.error === "email_indisponivel") {
+        // Sem "Tente novamente": o e-mail de confirmação não sai enquanto a
+        // instalação não tiver e-mail configurado, e só quem administra resolve.
+        setServerError(
+          t(
+            convite
+              ? "Não conseguimos enviar o e-mail de confirmação, porque o envio de e-mails desta instalação não está configurado. Tentar de novo não resolve: avise quem convidou você."
+              : "Não conseguimos enviar o e-mail de confirmação, porque o envio de e-mails desta instalação não está configurado. Tentar de novo não resolve: avise quem administra o sistema.",
+          ),
+        );
       } else {
         setServerError(t("Não foi possível criar a conta. Tente novamente."));
       }
@@ -137,10 +180,7 @@ export function SignupForm({ convite }: { convite?: ConviteDoSignup }) {
 
   if (sentTo) {
     return (
-      <div
-        className="space-y-2 rounded-md border bg-muted/40 px-4 py-6 text-center"
-        role="status"
-      >
+      <div className="space-y-2 rounded-md border bg-muted/40 px-4 py-6 text-center" role="status">
         <p className="text-sm font-medium">{t("Confirme seu e-mail")}</p>
         <p className="text-sm text-muted-foreground">
           {t("Enviamos um link de confirmação para")} <strong>{sentTo}</strong>.{" "}
@@ -159,39 +199,52 @@ export function SignupForm({ convite }: { convite?: ConviteDoSignup }) {
         nomeia (medido no diálogo de transferir conversa, em produção).
       */}
       {convite && (
-      <div className="space-y-1.5">
-        <Label htmlFor="full_name">{t("Seu nome")}</Label>
-        <Input
-          id="full_name"
-          type="text"
-          autoComplete="name"
-          autoFocus
-          aria-invalid={errors.full_name ? true : undefined}
-          {...register("full_name")}
-        />
-        {errors.full_name && (
-          <p className="text-xs text-destructive">{t(errors.full_name.message ?? "")}</p>
-        )}
-      </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="full_name">{t("Seu nome")}</Label>
+          <Input
+            id="full_name"
+            type="text"
+            autoComplete="name"
+            autoFocus
+            aria-invalid={errors.full_name ? true : undefined}
+            {...register("full_name")}
+          />
+          {errors.full_name && (
+            <p className="text-xs text-destructive">{t(errors.full_name.message ?? "")}</p>
+          )}
+        </div>
       )}
       {!convite && (
-      <div className="space-y-1.5">
-        <Label htmlFor="org_name">{t("Nome da empresa")}</Label>
-        <Input
-          id="org_name"
-          type="text"
-          autoComplete="organization"
-          autoFocus
-          aria-invalid={errors.org_name ? true : undefined}
-          {...register("org_name")}
-        />
-        {errors.org_name && (
-          <p className="text-xs text-destructive">{t(errors.org_name.message ?? "")}</p>
-        )}
-      </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="org_name">{t("Nome da empresa")}</Label>
+          <Input
+            id="org_name"
+            type="text"
+            autoComplete="organization"
+            autoFocus
+            aria-invalid={errors.org_name ? true : undefined}
+            {...register("org_name")}
+          />
+          {errors.org_name && (
+            <p className="text-xs text-destructive">{t(errors.org_name.message ?? "")}</p>
+          )}
+        </div>
+      )}
+      {!convite && planos.length > 0 && (
+        <div className="space-y-1.5">
+          <Label htmlFor="cobranca_plan_id">{t("Plano")}</Label>
+          <select id="cobranca_plan_id" className="h-10 w-full rounded-md border bg-background px-3 text-sm" {...register("cobranca_plan_id")}>
+            {planos.map((plano) => (
+              <option key={plano.id} value={plano.id}>
+                {plano.nome} — {new Intl.NumberFormat(undefined, { style: "currency", currency: "BRL" }).format(plano.preco_cents / 100)} / {plano.intervalo === "ano" ? t("ano") : t("mês")}
+                {plano.trial_dias > 0 ? ` · ${plano.trial_dias} ${t("dias de teste")}` : ` · ${t("sem período de teste")}`}
+              </option>
+            ))}
+          </select>
+        </div>
       )}
       <div className="space-y-1.5">
-        <Label htmlFor="email">Email</Label>
+        <Label htmlFor="email">{t("Email")}</Label>
         <Input
           id="email"
           type="email"
@@ -208,26 +261,62 @@ export function SignupForm({ convite }: { convite?: ConviteDoSignup }) {
       </div>
       <div className="space-y-1.5">
         <Label htmlFor="password">{t("Senha")}</Label>
-        <Input
-          id="password"
-          type="password"
-          autoComplete="new-password"
-          aria-invalid={errors.password ? true : undefined}
-          {...register("password")}
-        />
+        <div className="relative">
+          <Input
+            id="password"
+            type={showPassword ? "text" : "password"}
+            autoComplete="new-password"
+            className="pr-12"
+            aria-invalid={errors.password ? true : undefined}
+            {...register("password")}
+          />
+          <button
+            type="button"
+            className="absolute inset-y-0 right-0 flex w-11 items-center justify-center rounded-r-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:outline-hidden focus-visible:ring-inset"
+            aria-pressed={showPassword}
+            onClick={() => setShowPassword((visible) => !visible)}
+          >
+            {/* Nome em sr-only, não aria-label: getByLabel(/senha/i) casa aria-label e acharia o botão junto do campo. */}
+            <span className="sr-only">{t(showPassword ? "Ocultar senha" : "Mostrar senha")}</span>
+            {showPassword ? <EyeSlash size={20} aria-hidden /> : <Eye size={20} aria-hidden />}
+          </button>
+        </div>
         {errors.password && (
           <p className="text-xs text-destructive">{t(errors.password.message ?? "")}</p>
         )}
+        <PasswordStrength password={password} />
       </div>
       <div className="space-y-1.5">
         <Label htmlFor="password_confirm">{t("Confirmar senha")}</Label>
-        <Input
-          id="password_confirm"
-          type="password"
-          autoComplete="new-password"
-          aria-invalid={errors.password_confirm ? true : undefined}
-          {...register("password_confirm")}
-        />
+        <div className="relative">
+          <Input
+            id="password_confirm"
+            type={showPasswordConfirm ? "text" : "password"}
+            autoComplete="new-password"
+            className="pr-12"
+            aria-invalid={errors.password_confirm ? true : undefined}
+            {...register("password_confirm")}
+          />
+          <button
+            type="button"
+            className="absolute inset-y-0 right-0 flex w-11 items-center justify-center rounded-r-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:outline-hidden focus-visible:ring-inset"
+            aria-pressed={showPasswordConfirm}
+            onClick={() => setShowPasswordConfirm((visible) => !visible)}
+          >
+            <span className="sr-only">
+              {t(
+                showPasswordConfirm
+                  ? "Ocultar confirmação da senha"
+                  : "Mostrar confirmação da senha",
+              )}
+            </span>
+            {showPasswordConfirm ? (
+              <EyeSlash size={20} aria-hidden />
+            ) : (
+              <Eye size={20} aria-hidden />
+            )}
+          </button>
+        </div>
         {errors.password_confirm && (
           <p className="text-xs text-destructive">{t(errors.password_confirm.message ?? "")}</p>
         )}
@@ -240,6 +329,7 @@ export function SignupForm({ convite }: { convite?: ConviteDoSignup }) {
           {serverError}
         </div>
       )}
+      {semResposta && <AvisoSemResposta />}
       <Button type="submit" className="w-full" disabled={isPending}>
         {isPending ? t("Criando conta...") : t("Criar conta")}
       </Button>

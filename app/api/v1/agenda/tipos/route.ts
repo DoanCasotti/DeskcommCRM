@@ -32,23 +32,38 @@ import { requireSupportWrite } from "@/lib/impersonate/support";
  * durante toda a vida dele e recebeu 422 "Nenhum campo para alterar." — uma
  * recusa que não nomeia o que foi descartado. Quem vigia a travessia hoje é
  * `tests/unit/agenda-reativar-tipo.test.ts`.
+ *
+ * Auth: sessão de navegador OU Bearer `dsk_...` (api_tokens) via
+ * `lib/api/auth-dual.ts` — a mesma dualidade das demais rotas de configuração
+ * que aceitam token. No ramo do token, a org sai da linha do token.
  */
+import { randomUUID } from "node:crypto";
 import { type NextRequest } from "next/server";
 import { z } from "zod";
 
+import { resolveAuthDual, tetoDeEscritaDoToken } from "@/lib/api/auth-dual";
 import { fail, ok } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
-import { requireRole } from "@/lib/auth/require-role";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { listaTiposDeAtendimento } from "@/lib/agenda/consulta";
+import { TETO_DE_LEMBRETES_EXTRAS } from "@/lib/agenda/lembretes";
+import { transportaMensagem } from "@/lib/channels/capabilities";
 import { traduzir } from "@/lib/i18n/dicionario";
 
 export const dynamic = "force-dynamic";
 
 /** As dez do CHECK da tabela. Fora daqui o Postgres recusa — melhor recusar antes. */
 const CATEGORIAS = [
-  "consulta", "procedimento", "retorno", "visita", "vistoria",
-  "reuniao", "call", "orcamento", "demonstracao", "outro",
+  "consulta",
+  "procedimento",
+  "retorno",
+  "visita",
+  "vistoria",
+  "reuniao",
+  "call",
+  "orcamento",
+  "demonstracao",
+  "outro",
 ] as const;
 
 const LOCAIS = ["in_person", "phone", "whatsapp", "video_link", "google_meet"] as const;
@@ -90,6 +105,7 @@ const camposDoTipo = {
    * mensagem para o telefone de um cliente é irreversível.
    */
   reminder_enabled: z.boolean().optional(),
+  reminder_channel_session_id: z.string().uuid().nullish(),
   /**
    * ⚠️ ESTA FAIXA É MAIS ESTREITA QUE O CHECK DO BANCO, E ISSO CONTRARIA O
    * PARÁGRAFO ACIMA DE PROPÓSITO.
@@ -112,18 +128,97 @@ const camposDoTipo = {
    * o default da 0177 é 1440) segue valendo no banco e o cron a respeita: o que
    * ela perde é poder ser reenviada por esta rota sem entrar na faixa.
    */
+  /**
+   * O PREÇO PADRÃO do serviço, em centavos.
+   *
+   * Opcional e sem default: nem todo negócio tem preço fixo, e obrigar um número
+   * faria quem cobra por hora inventar um. Vazio significa "digite na hora".
+   *
+   * É semente do item da comanda, nunca o preço dele — o item congela o seu.
+   */
+  default_price_cents: z.number().int().min(0).max(100_000_000).nullish(),
   reminder_minutes_before: z
     .number()
     .int()
     .min(15, { message: "O lembrete precisa sair pelo menos 15 minutos antes do compromisso." })
     .max(10_080, { message: "O lembrete não pode sair mais de 7 dias (10080 minutos) antes." })
     .optional(),
+  /**
+   * Os degraus ADICIONAIS — o "e de novo três horas antes" que faltava.
+   *
+   * `reminder_minutes_before` continua sendo o degrau principal; estes somam a
+   * ele. Vazio é o comportamento anterior, um lembrete só, e por isso o campo
+   * não tem `.default()`: quem não manda não ganha aviso nenhum a mais.
+   *
+   * O teto é o mesmo do CHECK (`fn_degraus_de_lembrete_validos`): guarda contra
+   * laço de formulário, não contra a operação. Quem decide quantos avisos o
+   * cliente recebe é quem edita o tipo.
+   */
+  reminder_extra_offsets_minutes: z
+    .array(
+      z
+        .number()
+        .int()
+        .min(15, { message: "O lembrete precisa sair pelo menos 15 minutos antes do compromisso." })
+        .max(10_080, { message: "O lembrete não pode sair mais de 7 dias (10080 minutos) antes." }),
+    )
+    .max(TETO_DE_LEMBRETES_EXTRAS, {
+      message: `No máximo ${TETO_DE_LEMBRETES_EXTRAS} lembretes adicionais por tipo.`,
+    })
+    // Duplicata não é erro de quem preenche, é ruído: dois degraus iguais
+    // produziriam o mesmo aviso duas vezes se algum dia alguém lesse a lista
+    // sem deduplicar. Some aqui, uma vez, em vez de virar guarda em cada leitor.
+    .transform((v) => [...new Set(v)].sort((a, b) => b - a))
+    .optional(),
 };
 
 const criarSchema = z.object(camposDoTipo);
+// Somente a criação pode nascer como serviço em rascunho. O PATCH legado não
+// ganha uma porta de ativação: a programação é validada pelo núcleo de serviços.
+const criarComRascunhoSchema = criarSchema.extend({ service_draft: z.boolean().optional() });
 // `.partial()` em vez de repetir os doze campos como opcionais: repetir criaria
 // duas listas para manter em sincronia, e a segunda envelhece calada.
-const alterarSchema = criarSchema.partial().extend({ id: z.string().uuid() });
+const alterarSchema = criarSchema.partial().extend({
+  id: z.string().uuid(),
+  /**
+   * O TEXTO que o cron manda. Vazio/nulo = a frase padrão. Distinto de
+   * `reminder_template_name` (nome do template no provedor oficial).
+   *
+   * Mora só no PATCH de propósito: o tipo nasce com a frase de fábrica, e
+   * quem quer outra escreve depois. No POST, o campo nem entra — senão um
+   * `""` no nascimento gravaria nulo por cima do default, e a ausência no
+   * formulário de criação deixaria de ser ausência.
+   *
+   * Transforma string em branco em `null` para o PATCH poder VOLTAR ao padrão
+   * sem um campo-sentinela: quem apaga o textarea está pedindo o texto de
+   * fábrica, não uma mensagem vazia no WhatsApp.
+   */
+  reminder_body: z
+    .string()
+    .max(1000, { message: "A mensagem do lembrete cabe em 1000 caracteres." })
+    .nullish()
+    .transform((v) => (v == null ? v : v.trim() === "" ? null : v.trim())),
+  /**
+   * Texto de cada extra. Chave = minutos antes. String em branco some do mapa
+   * (cai na frase de fábrica). Mora só no PATCH pelo mesmo motivo de
+   * `reminder_body`: o tipo nasce sem texto próprio.
+   */
+  reminder_bodies: z
+    .record(
+      z.string().regex(/^\d+$/),
+      z.string().max(1000, { message: "A mensagem do lembrete cabe em 1000 caracteres." }),
+    )
+    .optional()
+    .transform((v) => {
+      if (!v) return v;
+      const out: Record<string, string> = {};
+      for (const [k, corpo] of Object.entries(v)) {
+        const t = corpo.trim();
+        if (t) out[k] = t;
+      }
+      return out;
+    }),
+});
 const desativarSchema = z.object({ id: z.string().uuid() });
 
 /**
@@ -135,19 +230,26 @@ const desativarSchema = z.object({ id: z.string().uuid() });
  * e não "mudou de nome". Por isso o PATCH nunca o toca.
  */
 function slugDe(nome: string): string {
-  return nome
-    .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 60) || "tipo";
+  return (
+    nome
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 60) || "tipo"
+  );
 }
 
 export async function GET(req: NextRequest): Promise<Response> {
-  const requestId = req.headers.get("x-request-id") ?? undefined;
-  const autorizado = await requireRole("viewer", { requestId, resource: "calendar_event_types" });
-  if (!autorizado.ok) return autorizado.response;
+  const requestId = req.headers.get("x-request-id") ?? randomUUID();
+  const authz = await resolveAuthDual(req, {
+    requestId,
+    resource: "calendar_event_types",
+    role: "viewer",
+    scope: "mcp:read",
+  });
+  if (!authz.ok) return authz.response;
 
   // A MESMA coleta que a ferramenta MCP usa. Esta query era inline aqui, e havia
   // outras três iguais no repo — a tela e a IA respondendo por recortes
@@ -155,7 +257,7 @@ export async function GET(req: NextRequest): Promise<Response> {
   //
   // `incluirInativos: true` porque quem chama esta rota administra o cadastro:
   // esconder o tipo desativado tiraria dele a única porta para reativá-lo.
-  const r = await listaTiposDeAtendimento(createAdminClient(), autorizado.org.orgId, {
+  const r = await listaTiposDeAtendimento(createAdminClient(), authz.organizationId, {
     incluirInativos: true,
   });
   if (!r.ok) return fail("internal_error", r.motivoParaOperador, 500, { requestId });
@@ -183,7 +285,14 @@ export async function GET(req: NextRequest): Promise<Response> {
       // ligado — só como pedir que ligue. Um PATCH cego sobre um estado que a
       // leitura não conta é o mesmo controle decorativo, do outro lado.
       reminder_enabled: t.lembreteLigado,
+      reminder_channel_session_id: t.lembreteCanalId ?? null,
       reminder_minutes_before: t.lembreteAntecedenciaMin,
+      reminder_extra_offsets_minutes: t.lembreteDegrausExtras,
+      reminder_body: t.lembreteMensagem,
+      reminder_bodies: t.lembreteMensagens,
+      default_price_cents: t.precoPadraoCents,
+      ...(t.servico ? { service_enabled: true, booking_mode: t.servico.booking_mode, service_capacity: t.servico.capacity,
+        service_revision: t.servico.revision, service_publication_mode: t.servico.publication_mode } : {}),
     })),
     { requestId },
   );
@@ -193,42 +302,80 @@ export async function POST(req: NextRequest): Promise<Response> {
   const supportDenied = await requireSupportWrite();
   if (supportDenied) return supportDenied;
 
-  const requestId = req.headers.get("x-request-id") ?? undefined;
-  const autorizado = await requireRole("manager", { requestId, resource: "calendar_event_types" });
-  if (!autorizado.ok) return autorizado.response;
-  const t = (texto: string) => traduzir(texto, autorizado.user.idioma);
+  const requestId = req.headers.get("x-request-id") ?? randomUUID();
+  const authz = await resolveAuthDual(req, {
+    requestId,
+    resource: "calendar_event_types",
+    role: "manager",
+    scope: "mcp:write",
+  });
+  if (!authz.ok) return authz.response;
+  const t = (texto: string) => traduzir(texto, authz.idioma ?? "pt-BR");
 
-  const lido = criarSchema.safeParse(await req.json().catch(() => ({})));
+  const teto = await tetoDeEscritaDoToken(authz, "agenda_tipos", requestId ?? "");
+  if (teto) return teto;
+
+  const lido = criarComRascunhoSchema.safeParse(await req.json().catch(() => ({})));
   if (!lido.success) {
     // A mensagem do Zod passa pelo dicionário, e não direto ao corpo da resposta:
     // as recusas de `reminder_minutes_before` são escritas em português nesta
     // rota, e quem opera em espanhol as receberia cruas. Texto sem entrada
     // degrada para ele mesmo — que é o contrato de `traduzir`.
-    return fail("validation_failed", t(lido.error.issues[0]?.message ?? "corpo inválido"), 422, { requestId });
+    return fail("validation_failed", t(lido.error.issues[0]?.message ?? "corpo inválido"), 422, {
+      requestId,
+    });
   }
 
   const admin = createAdminClient();
+  if (lido.data.reminder_channel_session_id) {
+    const { data: canal, error: erroCanal } = await admin
+      .from("channel_sessions")
+      .select("id, provider, archived_at")
+      .eq("organization_id", authz.organizationId)
+      .eq("id", lido.data.reminder_channel_session_id)
+      .maybeSingle();
+    if (erroCanal)
+      return fail("internal_error", t("Não foi possível consultar o canal do lembrete."), 500, {
+        requestId,
+      });
+    if (!canal || canal.archived_at || !transportaMensagem(canal.provider)) {
+      return fail(
+        "validation_failed",
+        t("Escolha um canal de mensagem não arquivado desta organização."),
+        422,
+        { requestId },
+      );
+    }
+  }
+  const { service_draft, ...fields } = lido.data;
   const { data, error } = await admin
     .from("calendar_event_types")
-    .insert({ ...lido.data, organization_id: autorizado.org.orgId, slug: slugDe(lido.data.name) })
+    .insert({ ...fields, ...(service_draft ? { service_enabled: true, is_active: false, default_owner_user_id: null } : {}), organization_id: authz.organizationId, slug: slugDe(lido.data.name) })
     .select("id, slug")
     .single();
 
   if (error) {
     // 23505 é o slug repetido — recusa esperada, não erro de sistema.
     if (error.code === "23505") {
-      return fail("conflict", `Já existe um tipo com o nome "${lido.data.name}".`, 409, { requestId });
+      return fail("conflict", `Já existe um tipo com o nome "${lido.data.name}".`, 409, {
+        requestId,
+      });
     }
     return fail("internal_error", error.message, 500, { requestId });
   }
 
   await audit({
-    actorUserId: autorizado.user.id,
+    actorUserId: authz.actor.type === "user" ? authz.actor.id : null,
+    actorApiTokenId: authz.apiTokenId ?? null,
     action: "agenda.tipo_criado",
-    organizationId: autorizado.org.orgId,
+    organizationId: authz.organizationId,
     resourceType: "calendar_event_types",
     resourceId: data.id,
-    metadata: { nome: lido.data.name, categoria: lido.data.category, duracao: lido.data.duration_minutes },
+    metadata: {
+      nome: lido.data.name,
+      categoria: lido.data.category,
+      duracao: lido.data.duration_minutes,
+    },
   });
   return ok(data, { requestId, status: 201 });
 }
@@ -237,18 +384,29 @@ export async function PATCH(req: NextRequest): Promise<Response> {
   const supportDenied = await requireSupportWrite();
   if (supportDenied) return supportDenied;
 
-  const requestId = req.headers.get("x-request-id") ?? undefined;
-  const autorizado = await requireRole("manager", { requestId, resource: "calendar_event_types" });
-  if (!autorizado.ok) return autorizado.response;
-  const t = (texto: string) => traduzir(texto, autorizado.user.idioma);
+  const requestId = req.headers.get("x-request-id") ?? randomUUID();
+  const authz = await resolveAuthDual(req, {
+    requestId,
+    resource: "calendar_event_types",
+    role: "manager",
+    scope: "mcp:write",
+  });
+  if (!authz.ok) return authz.response;
+  const t = (texto: string) => traduzir(texto, authz.idioma ?? "pt-BR");
+
+  const teto = await tetoDeEscritaDoToken(authz, "agenda_tipos", requestId ?? "");
+  if (teto) return teto;
 
   const lido = alterarSchema.safeParse(await req.json().catch(() => ({})));
   if (!lido.success) {
     // Idem ao POST: o dicionário na borda, para a recusa do lembrete chegar
     // legível a quem opera em espanhol.
-    return fail("validation_failed", t(lido.error.issues[0]?.message ?? "corpo inválido"), 422, { requestId });
+    return fail("validation_failed", t(lido.error.issues[0]?.message ?? "corpo inválido"), 422, {
+      requestId,
+    });
   }
-  const { id, ...campos } = lido.data;
+  const { id, ...bruto } = lido.data;
+  const campos = Object.fromEntries(Object.entries(bruto).filter(([, v]) => v !== undefined));
   if (Object.keys(campos).length === 0) {
     // Recusa em vez de UPDATE vazio: "alterei" sobre nada é a mesma família de
     // mentira que o "Marcado ✓" sem linha no banco.
@@ -256,11 +414,31 @@ export async function PATCH(req: NextRequest): Promise<Response> {
   }
 
   const admin = createAdminClient();
+  if (lido.data.reminder_channel_session_id) {
+    const { data: canal, error: erroCanal } = await admin
+      .from("channel_sessions")
+      .select("id, provider, archived_at")
+      .eq("organization_id", authz.organizationId)
+      .eq("id", lido.data.reminder_channel_session_id)
+      .maybeSingle();
+    if (erroCanal)
+      return fail("internal_error", t("Não foi possível consultar o canal do lembrete."), 500, {
+        requestId,
+      });
+    if (!canal || canal.archived_at || !transportaMensagem(canal.provider)) {
+      return fail(
+        "validation_failed",
+        t("Escolha um canal de mensagem não arquivado desta organização."),
+        422,
+        { requestId },
+      );
+    }
+  }
   const { data, error } = await admin
     .from("calendar_event_types")
     .update(campos)
     .eq("id", id)
-    .eq("organization_id", autorizado.org.orgId)
+    .eq("organization_id", authz.organizationId)
     .select("id")
     .maybeSingle();
 
@@ -268,9 +446,10 @@ export async function PATCH(req: NextRequest): Promise<Response> {
   if (!data) return fail("not_found", t("Tipo de agendamento não encontrado."), 404, { requestId });
 
   await audit({
-    actorUserId: autorizado.user.id,
+    actorUserId: authz.actor.type === "user" ? authz.actor.id : null,
+    actorApiTokenId: authz.apiTokenId ?? null,
     action: "agenda.tipo_alterado",
-    organizationId: autorizado.org.orgId,
+    organizationId: authz.organizationId,
     resourceType: "calendar_event_types",
     resourceId: id,
     metadata: { campos: Object.keys(campos) },
@@ -282,10 +461,18 @@ export async function DELETE(req: NextRequest): Promise<Response> {
   const supportDenied = await requireSupportWrite();
   if (supportDenied) return supportDenied;
 
-  const requestId = req.headers.get("x-request-id") ?? undefined;
-  const autorizado = await requireRole("manager", { requestId, resource: "calendar_event_types" });
-  if (!autorizado.ok) return autorizado.response;
-  const t = (texto: string) => traduzir(texto, autorizado.user.idioma);
+  const requestId = req.headers.get("x-request-id") ?? randomUUID();
+  const authz = await resolveAuthDual(req, {
+    requestId,
+    resource: "calendar_event_types",
+    role: "manager",
+    scope: "mcp:write",
+  });
+  if (!authz.ok) return authz.response;
+  const t = (texto: string) => traduzir(texto, authz.idioma ?? "pt-BR");
+
+  const teto = await tetoDeEscritaDoToken(authz, "agenda_tipos", requestId ?? "");
+  if (teto) return teto;
 
   const lido = desativarSchema.safeParse(await req.json().catch(() => ({})));
   if (!lido.success) return fail("validation_failed", t("corpo inválido"), 422, { requestId });
@@ -295,7 +482,7 @@ export async function DELETE(req: NextRequest): Promise<Response> {
     .from("calendar_event_types")
     .update({ is_active: false })
     .eq("id", lido.data.id)
-    .eq("organization_id", autorizado.org.orgId)
+    .eq("organization_id", authz.organizationId)
     .select("id")
     .maybeSingle();
 
@@ -303,9 +490,10 @@ export async function DELETE(req: NextRequest): Promise<Response> {
   if (!data) return fail("not_found", t("Tipo de agendamento não encontrado."), 404, { requestId });
 
   await audit({
-    actorUserId: autorizado.user.id,
+    actorUserId: authz.actor.type === "user" ? authz.actor.id : null,
+    actorApiTokenId: authz.apiTokenId ?? null,
     action: "agenda.tipo_desativado",
-    organizationId: autorizado.org.orgId,
+    organizationId: authz.organizationId,
     resourceType: "calendar_event_types",
     resourceId: lido.data.id,
     metadata: {},

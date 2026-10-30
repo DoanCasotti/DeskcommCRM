@@ -4,9 +4,12 @@ import { requireAuth, resolveActiveOrg } from "@/lib/auth/server";
 import { ROLE_RANK } from "@/lib/auth/types";
 import { listSelectableChannels } from "@/lib/channels/selectable";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { idsDosProvedoresOferecidos } from "@/lib/ai/pontos/provedores-oferecidos";
 import type { CredentialRow } from "@/hooks/ai/useCredentials";
 
 import { lerAmbiente } from "@/lib/instalacao/ambiente";
+import { fusoUtilizavel } from "@/lib/tempo/fusos";
 
 import { AgentForm } from "../[id]/_components/AgentForm";
 
@@ -39,7 +42,11 @@ export default async function NewAgentPage() {
   }
 
   const supabase = await createClient();
-  const [credentialsRes, channelSessions] = await Promise.all([
+  const [orgRes, credentialsRes, channelSessions] = await Promise.all([
+    // O provedor que a organização JÁ usa: sem ele, o agente novo nascia
+    // `anthropic` e o formulário pedia "Cadastrar credencial anthropic" para
+    // quem só tem chave da OpenAI.
+    supabase.from("organizations").select("settings").eq("id", activeOrg.orgId).maybeSingle(),
     supabase
       .from("ai_provider_credentials_safe")
       .select(CREDENTIAL_COLUMNS)
@@ -47,7 +54,10 @@ export default async function NewAgentPage() {
     listSelectableChannels(supabase, activeOrg.orgId),
   ]);
 
-  const credentials = (credentialsRes.data ?? []) as unknown as CredentialRow[];
+  const credentials = (credentialsRes.data ?? []) as CredentialRow[];
+  const llmDaOrg = (
+    orgRes.data?.settings as { llm?: { provider?: string } } | null
+  )?.llm;
 
   return (
     <div className="flex h-full flex-col gap-6 p-6">
@@ -55,7 +65,10 @@ export default async function NewAgentPage() {
         mode="create"
         credentials={credentials}
         provedoresDaInstalacao={provedoresDaInstalacao()}
+        provedoresOferecidos={await idsDosProvedoresOferecidos(createAdminClient())}
+        provedorPadrao={llmDaOrg?.provider}
         channelSessions={channelSessions}
+        organizationTimezone={fusoUtilizavel(activeOrg.timezone)}
       />
     </div>
   );

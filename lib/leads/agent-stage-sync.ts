@@ -1,5 +1,12 @@
 import { observeServiceOrigin } from "@/lib/atendimento/origem";
 import type { RiskBucket } from "@/lib/leads/risk-radar";
+import {
+  camposComAnexo,
+  recusaDeCamposObrigatorios,
+  settingsDoFunil,
+  validaCamposExigidos,
+} from "@/lib/leads/campos-exigidos";
+import { decideMotivoDaPerda, recusaDeMotivoDaPerdaPeloBanco } from "@/lib/leads/motivo-da-perda";
 
 /**
  * O funil do AGENTE movendo o card no funil do TENANT (wave 8, cenários 25/26).
@@ -19,6 +26,16 @@ export interface EstagioCandidato {
   name: string;
   agent_stage_hint: string | null;
   is_archived: boolean;
+  /**
+   * Esta etapa FECHA o negócio como perda (`crm_stages.is_lost`)?
+   *
+   * Opcional porque `false` e ausente respondem a mesma coisa — "não é etapa de
+   * perda" — e um candidato montado à mão (teste, chamador novo) não tem por que
+   * carregar a coluna. Quem lê do banco SEMPRE carrega (o select de
+   * `sincronizaEstagioDoAgente` inclui `is_lost`), e é a coluna do banco que
+   * decide — nunca o NOME da etapa, que é do tenant e muda.
+   */
+  is_lost?: boolean | null;
 }
 
 export type DestinoDoAgente =
@@ -33,7 +50,42 @@ export type DestinoDoAgente =
    */
   | { move: false; motivo: "sem_mapeamento"; passo: string }
   /** O agente está no passo que o negócio já ocupa: nada a fazer, e não é falha. */
-  | { move: false; motivo: "ja_esta_la"; passo: string };
+  | { move: false; motivo: "ja_esta_la"; passo: string }
+  /**
+   * A etapa de destino FECHA O NEGÓCIO COMO PERDA (issue #917) — e perder exige
+   * um motivo.
+   *
+   * ⚠️ A IA NÃO ESCREVE O MOTIVO, e não é timidez: `lost_reason` NÃO é texto
+   * livre — o trigger `fn_validate_lost_reason_required` recusa (22023) um motivo
+   * fora do vocabulário do funil (canônicos + `crm_pipelines.settings.lost_reasons`
+   * do tenant). Um motivo inventado aqui seria recusado pelo banco OU, pior,
+   * passaria colado num dos canônicos e gravaria no funil do cliente uma causa
+   * que ninguém afirmou. O motivo é uma DECISÃO de quem está no negócio: o
+   * agente sinaliza, o humano decide.
+   *
+   * Por isso o card NÃO se move, e este rótulo NÃO é incidente nem warn-only:
+   * falta uma AÇÃO HUMANA. O espelho o traduz em item de inbox acionável
+   * (`perda_sem_motivo` em MIRROR_WARN_ONLY? não — ver lib/agent-engine/edge/crm).
+   *
+   * ⚠️ O MOTIVO QUE JÁ ESTÁ NA LINHA NÃO AUTORIZA O AGENTE — e aqui o agente
+   * responde diferente do arrasto e do lote, de propósito. Os dois humanos
+   * passam `motivoAtual` a `decideMotivoDaPerda`; o agente não passa. Medido no
+   * schema, e não suposto: o agente só trabalha negócio ABERTO
+   * (`resolveActiveLeadForContact`) e só existe UMA etapa de perda por funil
+   * (`uniq_crm_stages_pipeline_lost`). Então o único negócio com motivo gravado
+   * que ele pode levar à etapa de perda é o REABERTO — `fn_crm_lead_close_on_stage`
+   * devolve `status = 'open'` e não limpa `lost_reason`. Mover esse card fecharia
+   * a perda NOVA com a causa da perda ANTERIOR: "preço", gravado meses atrás, sem
+   * ninguém ter afirmado nada sobre esta. É a causa inventada do parágrafo de
+   * cima, entrando pela porta do dado velho. Quem arrasta vê o card e decide; o
+   * agente não vê o que mudou desde a primeira perda.
+   *
+   * ⚠️ `stageName` entra AQUI e não só no sucesso (issue #3148): o aviso da
+   * Central precisa nomear a etapa do FUNIL do dono ("Perdido"), e este é o ponto
+   * onde o nome é conhecido — `alvo` já veio da leitura de etapas. Sem propagá-lo,
+   * o espelho recusado só teria à mão o passo interno do agente, que é o defeito.
+   */
+  | { move: false; motivo: "perda_sem_motivo"; passo: string; stageName: string };
 
 /**
  * Para onde o negócio vai quando o agente avança para `passo`.
@@ -56,6 +108,13 @@ export function resolveDestinoDoAgente(
   const alvo = estagios.find((e) => !e.is_archived && e.agent_stage_hint === passo);
   if (!alvo) return { move: false, motivo: "sem_mapeamento", passo };
   if (alvo.id === estagioAtualId) return { move: false, motivo: "ja_esta_la", passo };
+  // A decisão é a MESMA função do arrasto e do lote (issue #917) — sem motivo e
+  // SEM `motivoAtual`: o agente não manda motivo, e o que está na linha é o da
+  // perda anterior de um negócio reaberto (ver `perda_sem_motivo` acima).
+  const veredito = decideMotivoDaPerda({ etapaDeDestino: alvo });
+  // O NOME viaja com a recusa (issue #3148): o aviso da Central diz ao dono a
+  // etapa do FUNIL dele, não o passo interno que o agente usou para chegar aqui.
+  if (!veredito.ok) return { move: false, motivo: "perda_sem_motivo", passo, stageName: alvo.name };
   return { move: true, stageId: alvo.id, stageName: alvo.name };
 }
 
@@ -111,6 +170,28 @@ export interface ResultadoDaSincronizacao {
      * regra funcionou.
      */
     | "fora_do_escopo"
+    /**
+     * A etapa de destino é de PERDA e o motivo não vem do agente (issue #917).
+     *
+     * Estado legítimo do produto como os do primeiro grupo — ninguém errou e o
+     * card fica onde está —, com uma diferença que decide o tratamento: aqui
+     * falta uma AÇÃO HUMANA. Por isso não é warn-only: o espelho abre um item de
+     * inbox que ensina o dono a mover o card e informar o motivo. O defeito da
+     * #917 era justamente o card NÃO andar em silêncio (ou estourar num 500).
+     */
+    | "perda_sem_motivo"
+    /**
+     * A etapa de destino exige CAMPOS que o negócio não tem (issue #1536) — o
+     * `obrigatorio_em` do funil, a MESMA régua dos outros cinco caminhos.
+     *
+     * Mesma família de `perda_sem_motivo`: o card não anda, nada quebrou, e o
+     * que falta é uma AÇÃO HUMANA (preencher o campo no dossiê). O `detalhe`
+     * carrega a frase com os rótulos do que falta, e é ele que o espelho mostra
+     * na Central. Sem este rótulo o agente seria o único caminho que move sem
+     * passar pela régua — duas respostas para a mesma pergunta, que é o defeito
+     * da #917 com outro nome.
+     */
+    | "campos_obrigatorios"
     | "falha_de_escrita"
     | "indisponivel";
   leadId?: string;
@@ -155,7 +236,12 @@ export async function sincronizaEstagioDoAgente(
   // Supabase indistinguível do estado normal de um contato sem negócio aberto.
   const { data: leadRows, error: erroLeads } = await admin
     .from("crm_leads")
-    .select("id, organization_id, pipeline_id, stage_id, status, created_at, last_activity_at")
+    .select(
+      // `custom_fields` e `won_reason` entram POR CAUSA da régua de campos
+      // obrigatórios (#1536): sem eles na leitura, `validaCamposExigidos` só
+      // veria `undefined` e recusaria movimento legítimo de um card preenchido.
+      "id, organization_id, pipeline_id, stage_id, status, created_at, last_activity_at, custom_fields, won_reason",
+    )
     .eq("organization_id", input.organizationId)
     .eq("contact_id", input.contactId);
   if (erroLeads) {
@@ -169,6 +255,8 @@ export async function sincronizaEstagioDoAgente(
     status: string;
     created_at: string;
     last_activity_at: string | null;
+    custom_fields: Record<string, unknown> | null;
+    won_reason: string | null;
   }>;
 
   const rota = resolveActiveLeadForContact(
@@ -209,7 +297,10 @@ export async function sincronizaEstagioDoAgente(
 
   const { data: stageRows, error: erroStages } = await admin
     .from("crm_stages")
-    .select("id, name, agent_stage_hint, is_archived")
+    // `is_lost` entra porque a decisão de perda (#917) é sobre esta coluna: sem
+    // ela, etapa de perda é indistinguível de etapa comum e o agente escreveria a
+    // etapa que o banco recusa — recusa que chega ao worker como falha de escrita.
+    .select("id, name, agent_stage_hint, is_archived, is_lost, is_won")
     .eq("pipeline_id", lead.pipeline_id);
   // Mesmo motivo do SELECT acima: sem esta linha, banco fora = pipeline sem
   // hint nenhum = "sem_mapeamento", e o incidente se disfarça de configuração.
@@ -222,7 +313,60 @@ export async function sincronizaEstagioDoAgente(
     input.passo,
     lead.stage_id,
   );
-  if (!destino.move) return { moveu: false, motivo: destino.motivo, leadId: lead.id };
+  if (!destino.move) {
+    return {
+      moveu: false,
+      motivo: destino.motivo,
+      leadId: lead.id,
+      // O NOME da etapa do funil viaja com a recusa de PERDA (#3148): o aviso da
+      // Central nomeia o quadro do dono ("Perdido"), nunca o passo interno do
+      // agente. `sem_mapeamento`/`ja_esta_la` não têm etapa de destino (são
+      // warn-only, sem aviso) e por isso não carregam nome.
+      ...(destino.motivo === "perda_sem_motivo" ? { stageName: destino.stageName } : {}),
+    };
+  }
+
+  // ── A RÉGUA DE CAMPOS OBRIGATÓRIOS (issue #1536) ────────────────────────────
+  //
+  // ESTE arquivo grava `stage_id` direto (o UPDATE logo abaixo), então sem esta
+  // pergunta o assistente seria o ÚNICO caminho do produto que move o card sem
+  // passar pela régua que os outros cinco seguem — e "uma rota exige, outra não"
+  // é exatamente o defeito da #917 com outro nome.
+  //
+  // A resposta segue o PRECEDENTE DA PERDA do próprio arquivo (`perda_sem_motivo`):
+  // NÃO MOVE, devolve o motivo e deixa rastro. Nada é escrito — nem etapa, nem
+  // atividade —, e o `detalhe` vem pronto da MESMA função que os 422 das rotas
+  // falam ("Preencha os campos obrigatórios…: X, Y"), que é o que o espelho
+  // transforma em item de inbox acionável. `settingsDoFunil` é fail-open por
+  // decisão escrita em `campos-exigidos.ts`: leitura indisponível = nada exigido,
+  // como em todo o resto.
+  const settings = await settingsDoFunil(admin, lead.pipeline_id);
+  const etapasCandidatas = (stageRows ?? []) as Array<{
+    id: string;
+    is_lost?: boolean | null;
+    is_won?: boolean | null;
+  }>;
+  const etapaDeDestino = etapasCandidatas.find((s) => s.id === destino.stageId);
+  const vereditoDeCampos = validaCamposExigidos({
+    lead: lead as unknown as Record<string, unknown>,
+    settingsDoFunil: settings,
+    camposComAnexo: await camposComAnexo(admin, settings, input.organizationId, lead.id),
+    destino: {
+      stageId: destino.stageId,
+      desfecho: etapaDeDestino?.is_won ? "won" : etapaDeDestino?.is_lost ? "lost" : null,
+    },
+  });
+  if (vereditoDeCampos.faltando.length > 0) {
+    return {
+      moveu: false,
+      motivo: "campos_obrigatorios",
+      leadId: lead.id,
+      detalhe: recusaDeCamposObrigatorios(vereditoDeCampos.faltando, null).mensagem,
+      // O destino JÁ resolvido conhece o nome da etapa do funil (#3148) — o aviso
+      // da Central mostra "Proposta enviada", não o passo interno "negotiating".
+      stageName: destino.stageName,
+    };
+  }
 
   // O erro DESTE select é descartado de propósito — e a diferença para os dois de
   // cima (onde descartar produziu o defeito de tratar banco fora como rotina) é
@@ -249,6 +393,24 @@ export async function sincronizaEstagioDoAgente(
     // cliente, que é pior que não mover.
     .select("id");
   if (error) {
+    // ── Rede de segurança (#917) ──────────────────────────────────────────────
+    // Com a decisão acima esta linha não dispara no caminho normal — ela existe
+    // porque o defeito da #917 é EXATAMENTE uma regra do banco virando `500`:
+    // um rótulo de incidente (`falha_de_escrita` → "o UPDATE do card falhou") no
+    // lugar de uma recusa de negócio que o humano resolve em dois cliques. Cobre
+    // o caminho que ainda não passa por `resolveDestinoDoAgente` (escrita futura,
+    // motivo fora do vocabulário do funil) e mantém o rótulo honesto.
+    const recusa = recusaDeMotivoDaPerdaPeloBanco(error);
+    if (recusa) {
+      return {
+        moveu: false,
+        motivo: "perda_sem_motivo",
+        leadId: lead.id,
+        detalhe: recusa.mensagem,
+        // Nome da etapa do funil, como nas outras recusas de estado legítimo (#3148).
+        stageName: destino.stageName,
+      };
+    }
     return { moveu: false, motivo: "falha_de_escrita", leadId: lead.id, detalhe: error.message };
   }
   if ((atualizadas ?? []).length === 0) {

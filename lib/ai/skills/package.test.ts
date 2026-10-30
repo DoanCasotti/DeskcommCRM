@@ -33,6 +33,29 @@ describe('parseSkillPackage', () => {
     }
   });
 
+  it('lê matcher.any_tags do frontmatter: a etiqueta do pacote não se perde na importação', () => {
+    const comEtiqueta = `---
+name: prospec-odonto
+description: Abordagem para dentistas.
+matcher:
+  any_keywords: [dentista, odontologia]
+  any_tags: [odonto, clinica]
+---
+Apresente-se e pergunte sobre a agenda.`;
+    const out = parseSkillPackage(makeZip({ 'SKILL.md': comEtiqueta }));
+    expect(out.ok).toBe(true);
+    if (out.ok) {
+      expect(out.pkg.matcher.any_keywords).toEqual(['dentista', 'odontologia']);
+      expect(out.pkg.matcher.any_tags).toEqual(['odonto', 'clinica']);
+    }
+  });
+
+  it('pacote sem any_tags segue sem o campo', () => {
+    const out = parseSkillPackage(makeZip({ 'SKILL.md': validSkillMd }));
+    expect(out.ok).toBe(true);
+    if (out.ok) expect(out.pkg.matcher.any_tags).toBeUndefined();
+  });
+
   it('SKILL.md ausente → erro de ensino', () => {
     const out = parseSkillPackage(makeZip({ 'leia.txt': 'oi' }));
     expect(out.ok).toBe(false);
@@ -90,5 +113,25 @@ corpo`;
     const out = parseSkillPackage(makeZip({ 'SKILL.md': withQuotes }));
     expect(out.ok).toBe(true);
     if (out.ok) expect(out.pkg.matcher.any_keywords).toEqual(['frete', 'entrega']);
+  });
+
+  it('nome de arquivo fora do alfabeto do Storage é recusado (a chave cruza para o terceiro)', () => {
+    const out = parseSkillPackage(makeZip({ 'SKILL.md': validSkillMd, 'assets/ícone.png': 'x' }));
+    expect(out.ok).toBe(false);
+    if (!out.ok) expect(out.error.code).toBe('skill_storage_name_invalid');
+  });
+
+  it('nome da skill fora do alfabeto do Storage é recusado', () => {
+    const comAcento = validSkillMd.replace('name: frete-gratis', 'name: Relatório de vendas');
+    const out = parseSkillPackage(makeZip({ 'SKILL.md': comAcento }));
+    expect(out.ok).toBe(false);
+    if (!out.ok) expect(out.error.code).toBe('skill_storage_name_invalid');
+  });
+
+  it('o alfabeto aceito é o do Storage, não um slug: espaço, ponto e hífen passam', () => {
+    const comEspaco = validSkillMd.replace('name: frete-gratis', 'name: frete gratis');
+    const out = parseSkillPackage(makeZip({ 'SKILL.md': comEspaco, 'assets/capa do produto.png': 'x' }));
+    expect(out.ok).toBe(true);
+    if (out.ok) expect(out.pkg.files.map((f) => f.path)).toEqual(['assets/capa do produto.png']);
   });
 });

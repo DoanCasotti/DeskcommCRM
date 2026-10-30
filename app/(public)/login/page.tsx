@@ -1,12 +1,16 @@
 import Link from "next/link";
 
+import { EntrarComGoogle } from "@/components/auth/EntrarComGoogle";
 import { LoginForm } from "@/components/auth/LoginForm";
-import { branding } from "@/lib/branding";
+import { verifyInviteToken } from "@/lib/auth/invite-token";
+import { marcaDaSaida } from "@/lib/branding/saida";
 import { createClient } from "@/lib/supabase/server";
-import { normalizarIdioma } from "@/lib/i18n/idiomas";
+import { idiomaDoVisitante } from "@/lib/i18n/idiomaAnonimo";
 import { traduzir } from "@/lib/i18n/dicionario";
+import { tituloDaTelaPublica } from "@/lib/i18n/titulo-da-tela-publica";
 
-export const metadata = { title: "Entrar" };
+// A aba no idioma do visitante, como o corpo (`lib/i18n/titulo-da-tela-publica.ts`).
+export const generateMetadata = () => tituloDaTelaPublica((t) => t("Entrar"));
 
 export default async function LoginPage({
   searchParams,
@@ -14,6 +18,8 @@ export default async function LoginPage({
   searchParams: Promise<{ next?: string; reset?: string; error?: string }>;
 }) {
   const { next, reset, error } = await searchParams;
+  const invite = typeof next === "string" ? next.match(/^\/team\/accept-invite\/([^/?#]+)$/)?.[1] : undefined;
+  const convite = invite ? verifyInviteToken(invite) : null;
   // Fora da árvore de `app/app/layout.tsx` — sem `IdiomaProvider` do lado do
   // servidor (o cliente já tem o seu, montado em `app/(public)/layout.tsx`).
   // Quase nunca há sessão aqui (é a própria tela de entrar), mas resolve do
@@ -22,16 +28,17 @@ export default async function LoginPage({
   const {
     data: { user },
   } = await supabase.auth.getUser();
-  const idioma = normalizarIdioma(
+  const idioma = await idiomaDoVisitante(
     (user?.user_metadata?.locale as string | undefined) ?? null,
   );
   const t = (texto: string) => traduzir(texto, idioma);
+  const marca = await marcaDaSaida(null);
 
   return (
     <div className="space-y-6">
       <div className="space-y-1.5 text-center">
         <h1 className="text-2xl font-semibold tracking-tight">{t("Entrar")}</h1>
-        <p className="text-sm text-muted-foreground">{branding().name}</p>
+        <p className="text-sm text-muted-foreground">{marca.nome}</p>
       </div>
       {reset === "success" && (
         <div
@@ -64,6 +71,16 @@ export default async function LoginPage({
           )}
         </div>
       )}
+      {error === "cadastro_por_convite" && (
+        <div
+          className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+          role="alert"
+        >
+          {t(
+            "Sua conta foi confirmada, mas esta instalação aceita cadastro apenas por convite — então não criamos uma empresa para você. Peça um convite a quem administra o sistema; o link dele já traz tudo o que falta.",
+          )}
+        </div>
+      )}
       {error === "template_padrao" && (
         <div
           className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
@@ -88,7 +105,47 @@ export default async function LoginPage({
           )}
         </div>
       )}
-      <LoginForm next={next} />
+      {/*
+        As duas recusas da entrada com Google, separadas de propósito: uma é
+        falha da volta (o `code` não virou sessão), a outra é desistência de
+        quem estava do outro lado. A mesma mensagem para as duas mandaria a
+        pessoa "tentar de novo" quando ela só fechou a tela — e procurar
+        defeito onde não há.
+      */}
+      {error === "entrada_com_google" && (
+        <div
+          className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+          role="alert"
+        >
+          {t(
+            "Não foi possível concluir a entrada com o Google. Tente novamente — se acontecer de novo, entre com e-mail e senha.",
+          )}
+        </div>
+      )}
+      {error === "entrada_com_google_cancelada" && (
+        <div
+          className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+          role="alert"
+        >
+          {t("A entrada com o Google foi cancelada antes de terminar. Nada mudou na sua conta.")}
+        </div>
+      )}
+      {/* A terceira recusa da entrada com Google: a conta está confirmada, mas o
+          acesso dela foi retirado. Não é convite inválido (não havia convite
+          nenhum) nem falha do Google — é decisão de quem administra, e a tela
+          diz exatamente isso, em vez de mandar a pessoa "tentar de novo". */}
+      {error === "acesso_revogado" && (
+        <div
+          className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+          role="alert"
+        >
+          {t(
+            "O acesso desta conta foi retirado por quem administra o sistema — então não criamos uma empresa nova para você. Se o acesso deveria continuar, peça a quem administra para restaurá-lo; se você está entrando em outra equipe, peça um convite.",
+          )}
+        </div>
+      )}
+      <LoginForm next={next} email={convite?.email} />
+      <EntrarComGoogle next={next} />
       <div className="space-y-2 text-center text-sm">
         <p>
           <Link
@@ -101,7 +158,7 @@ export default async function LoginPage({
         <p className="text-muted-foreground">
           {t("Não tem conta?")}{" "}
           <Link
-            href="/signup"
+            href={convite && invite ? `/signup?invite=${encodeURIComponent(invite)}` : "/signup"}
             className="font-medium text-foreground underline underline-offset-4"
           >
             {t("Criar conta")}

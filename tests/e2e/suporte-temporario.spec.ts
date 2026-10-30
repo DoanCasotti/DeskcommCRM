@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { createServer } from "node:http";
 import { createClient } from "@supabase/supabase-js";
-import { test, expect, type BrowserContext, type Page, type Request } from "@playwright/test";
+import { test, expect, type BrowserContext, type Page, type Request } from "./helpers/test";
 import { credenciaisSupabaseDeTeste } from "../../scripts/lib/env-de-teste";
 const credentials=credenciaisSupabaseDeTeste();
 const db=createClient(credentials.url,credentials.serviceRole,{auth:{persistSession:false}});
@@ -10,7 +10,7 @@ const password=`Local-${randomUUID()}!`;
 async function insert(table:string,value:Record<string,unknown>) {
  const {data,error}=await db.from(table).insert(value).select("id").single(); if(error)throw error; return data.id as string;
 }
-async function login(page:Page,email:string){await page.goto("/login");await page.getByLabel(/e-?mail/i).fill(email);await page.getByLabel(/senha/i).fill(password);await page.getByRole("button",{name:/entrar/i}).click();await page.waitForURL(/\/app(\/|$)/,{timeout:60000});}
+async function login(page:Page,email:string){await page.goto("/login");await page.getByLabel(/e-?mail/i).fill(email);await page.getByLabel(/senha/i).fill(password);await page.getByRole("button",{name:"Entrar",exact:true}).click();await page.waitForURL(/\/app(\/|$)/,{timeout:60000});}
 async function start(page:Page,org:string,readonly=false){
  await page.goto(`/admin/tenants/${org}`);
  await page.getByRole("button",{name:/Acompanhar/}).click();
@@ -33,14 +33,29 @@ test("suporte mantém identidade, opera B e encerra sem misturar A; readonly/exp
   return request.method() === "GET" && (/^\/api\/v1\/channel-sessions\/[^/]+$/.test(path)
    || path === "/api/v1/onboarding/whatsapp/session");
  };
+ // Mutação enviada que o NAVEGADOR abandonou: nunca terá desfecho observável,
+ // mas o servidor pode seguir processando. Guarda quando foi abandonada.
+ const abandonedMutations = new Map<Request, number>();
+ const abandon = (request: Request) => { if (pendingMutations.delete(request)) abandonedMutations.set(request, Date.now()); };
  const observeRequests = (context: BrowserContext) => {
   context.on("request", request => {
    if (mutatesFixture(request) && !blockedBeforeSend.has(request)) pendingMutations.add(request);
    if(request.method()==="POST" && ["/login","/app/settings/tenant"].includes(new URL(request.url()).pathname)) knownServerActions.add(request);
   });
-  context.on("requestfinished", request => pendingMutations.delete(request));
+  context.on("requestfinished", request => { pendingMutations.delete(request); abandonedMutations.delete(request); });
   // Cancelamento após envio não prova que a transação no servidor terminou.
-  context.on("requestfailed", request => { if (blockedBeforeSend.has(request)) pendingMutations.delete(request); });
+  context.on("requestfailed", request => { if (blockedBeforeSend.has(request)) pendingMutations.delete(request); else abandon(request); });
+  // Documento novo na aba mata o que o anterior tinha em voo, e o Playwright
+  // não emite requestfinished NEM requestfailed para esses pedidos: no trace do
+  // PR #2468 o POST /api/v1/attendants/presence da batida de montagem ficou sem
+  // desfecho quando a aba recarregou 80 ms depois. Esperar o evento era esperar
+  // para sempre.
+  const watchDocuments = (target: Page) => target.on("domcontentloaded", () => {
+   for (const request of pendingMutations) {
+    if (!request.serviceWorker() && !request.isNavigationRequest() && request.frame() === target.mainFrame()) abandon(request);
+   }
+  });
+  context.pages().forEach(watchDocuments); context.on("page", watchDocuments);
  };
  const acknowledgeKnownAction = async (target: Page, path: "/login" | "/app/settings/tenant") => {
   // Chamar SOMENTE após a confirmação semântica específica abaixo. O stream
@@ -51,10 +66,10 @@ test("suporte mantém identidade, opera B e encerra sem misturar A; readonly/exp
   const request=matching[0]!;const response=await request.response();
   expect(response?.status()).toBe(200);
   expect(response?.headers()["content-type"]).toContain("text/x-component");
-  pendingMutations.delete(request);knownServerActions.delete(request);
+  pendingMutations.delete(request);abandonedMutations.delete(request);knownServerActions.delete(request);
  };
- const pendingMutationDescriptions = () => [...pendingMutations].map(request=>({
-  method:request.method(),path:new URL(request.url()).pathname,
+ const pendingMutationDescriptions = () => [...pendingMutations, ...abandonedMutations.keys()].map(request=>({
+  method:request.method(),path:new URL(request.url()).pathname,abandoned:abandonedMutations.has(request),
  }));
  observeRequests(page.context());
  const joins: Array<{role:string;topic:string}> = [];
@@ -98,7 +113,7 @@ test("suporte mantém identidade, opera B e encerra sem misturar A; readonly/exp
  const receiverUrl = new URL(process.env.WAHA_API_BASE_URL!);
  expect(receiverUrl.hostname).toBe("127.0.0.1");
  await new Promise<void>((resolve,reject) => {receiver.once("error",reject); receiver.listen(Number(receiverUrl.port),receiverUrl.hostname,resolve);});
- mkdirSync(".superpowers/evidence/comunidade-360",{recursive:true});
+ mkdirSync("evidence/comunidade-360",{recursive:true});
  try{
   const contacts:string[]=[];const convs:string[]=[];const channels:string[]=[];
   for(const label of ["A","B"]){
@@ -118,11 +133,12 @@ test("suporte mantém identidade, opera B e encerra sem misturar A; readonly/exp
   second=await browser.newContext();observeRequests(second);const other=await second.newPage();observeAuth(other);await login(other,email);await acknowledgeKnownAction(other,"/login");
   await start(page,orgs[1]!);
   await expect(sameTab.getByTestId("tenant-switcher")).toContainText(`Suporte B ${suffix}`);
-  await expect(sameTab.locator("[data-conversation-id]").getByText(`Contato B ${suffix}`,{exact:true})).toBeVisible();
+  // A lista só aparece depois da recarga + dois GETs em série (a chave muda com o automatico-ativo); 5s do expect não cabem no CI (#2360).
+  await expect(sameTab.locator("[data-conversation-id]").getByText(`Contato B ${suffix}`,{exact:true})).toBeVisible({timeout:20000});
   await expect(sameTab.locator("[data-conversation-id]").getByText(`Contato A ${suffix}`,{exact:true})).toHaveCount(0);
   await page.goto("/onboarding");await page.waitForURL("**/app/inbox");
   await expect(page.getByRole("alert").filter({hasText:/edição permitida/i})).toContainText(`Suporte B ${suffix}`);
-  await expect(page.locator("[data-conversation-id]").getByText(`Contato B ${suffix}`,{exact:true})).toBeVisible();
+  await expect(page.locator("[data-conversation-id]").getByText(`Contato B ${suffix}`,{exact:true})).toBeVisible({timeout:20000});
   await expect(page.locator("[data-conversation-id]").getByText(`Contato A ${suffix}`,{exact:true})).toHaveCount(0);
   await other.reload();await expect(other.getByTestId("tenant-switcher")).toContainText(`Suporte A ${suffix}`);
   const members=await db.from("user_organizations").select("id").eq("organization_id",orgs[1]).eq("user_id",actor);expect(members.data).toEqual([]);
@@ -130,7 +146,7 @@ test("suporte mantém identidade, opera B e encerra sem misturar A; readonly/exp
   await page.getByLabel("Nome",{exact:true}).fill(`Editado B ${suffix}`);await page.getByRole("button",{name:"Salvar",exact:true}).click();
   await expect.poll(async()=> (await db.from("contacts").select("name").eq("id",contacts[1]).single()).data?.name).toBe(`Editado B ${suffix}`);
   await expect.poll(async()=> (await db.from("api_audit_log").select("metadata,actor_user_id").eq("organization_id",orgs[1]).eq("actor_user_id",actor).eq("resource_id",contacts[1]).order("created_at",{ascending:false}).limit(1)).data?.[0]?.metadata?.support_session_id).toBeTruthy();
-  await page.screenshot({path:".superpowers/evidence/comunidade-360/suporte-full-edita-b.png"});
+  await page.screenshot({path:"evidence/comunidade-360/suporte-full-edita-b.png"});
   const typeCreate=await page.request.post("/api/v1/agenda/tipos",{data:{name:`Tipo suporte ${suffix}`,duration_minutes:30,category:"outro",location_kind:"in_person"}});
   expect(typeCreate.status()).toBe(201);
   const typeId=(await typeCreate.json()).data.id;
@@ -168,7 +184,7 @@ test("suporte mantém identidade, opera B e encerra sem misturar A; readonly/exp
   await end(page);await returnedToA;
   await expect(page.getByTestId("tenant-switcher")).toContainText(`Suporte A ${suffix}`);
   await expect(sameTab.getByTestId("tenant-switcher")).toContainText(`Suporte A ${suffix}`);
-  await expect(sameTab.locator("[data-conversation-id]").getByText(`Contato A ${suffix}`,{exact:true})).toBeVisible();
+  await expect(sameTab.locator("[data-conversation-id]").getByText(`Contato A ${suffix}`,{exact:true})).toBeVisible({timeout:20000});
   await expect(sameTab.locator("[data-conversation-id]").getByText(`Contato B ${suffix}`,{exact:true})).toHaveCount(0);
   // Readonly prevalece inclusive depois de o ator ser admin FÍSICO em B.
   await insert("user_organizations",{organization_id:orgs[1],user_id:actor,role:"admin",accepted_at:new Date().toISOString()});
@@ -210,7 +226,7 @@ test("suporte mantém identidade, opera B e encerra sem misturar A; readonly/exp
   const api=await page.request.patch(`/api/v1/contacts/${contacts[1]}`,{data:{name:"Forbidden"}});expect(api.status()).toBe(403);
   const send=await page.request.post("/api/v1/messages",{data:{conversation_id:convs[1],content:"Não enviar"}});expect(send.status()).toBe(403);
   const adminApi=await page.request.post(`/api/v1/admin/tenants/${orgs[1]}/suspend`,{data:{reason:"Teste de recusa readonly"}});expect(adminApi.status()).toBe(403);
-  await page.screenshot({path:".superpowers/evidence/comunidade-360/suporte-readonly-b.png"});
+  await page.screenshot({path:"evidence/comunidade-360/suporte-readonly-b.png"});
   const expire=await db.from("platform_support_sessions").update({expires_at:new Date(Date.now()-1000).toISOString()}).eq("actor_user_id",actor).is("ended_at",null);if(expire.error)throw expire.error;
   const stale=await page.request.patch(`/api/v1/contacts/${contacts[1]}`,{data:{name:"Forbidden expired"}});expect(stale.status()).toBe(403);
   await page.reload();await page.waitForURL("**/support-ended");await expect(page.getByRole("heading",{name:"Encerre o acompanhamento para continuar"})).toBeVisible();
@@ -230,10 +246,32 @@ test("suporte mantém identidade, opera B e encerra sem misturar A; readonly/exp
     const request=route.request();
     if(mutatesFixture(request)){
      blockedBeforeSend.add(request);pendingMutations.delete(request);await route.abort("aborted");
-    }else await route.continue();
+    }else if(request.isNavigationRequest())await route.abort("aborted");
+    else await route.continue();
    })));
+   // Documento vivo segue emitindo: toda montagem dispara a batida de presença, e a
+   // sameTab recarrega sozinha ao sair do acompanhamento. Uma aba fechada com um pedido
+   // desses ainda sem desfecho reprovava a limpeza (1 em ~518). Por isso cada aba vai a
+   // about:blank, onde nada mais é emitido. A rota acima aborta navegação de documento
+   // para a recarga não disputar com esse goto, e ainda assim a disputa foi medida: o
+   // goto interrompido, resolvido com a aba de volta ao app, ou parado até o timeout.
+   // Daí o goto com prazo curto, repetido até a aba ESTAR em about:blank.
+   // O que o documento anterior tinha em voo passa a "abandonada" pelo watcher de
+   // domcontentloaded e cumpre o prazo de 10 s abaixo — a política que já valia para recarga.
+   await Promise.all(contexts.flatMap(context=>context.pages()).map(async ownedPage=>{
+    let lastError:unknown;
+    for(let attempt=0;ownedPage.url()!=="about:blank";attempt++){
+     if(attempt===5)throw new Error(`A aba não chegou a about:blank em 5 tentativas (${ownedPage.url()})`,{cause:lastError});
+     await ownedPage.goto("about:blank",{timeout:5000}).catch(error=>{lastError=error;});
+    }
+   }));
    await expect.poll(()=>pendingMutations.size,{timeout:20000,
     message:"Mutações enviadas devem concluir antes de fechar contextos ou apagar fixtures"}).toBe(0);
+   // Abandonada não tem evento que prove o fim no servidor; a prova é o prazo.
+   // ponytail: prazo fixo — o handler de mutação mais lento nos traces levou 2,4 s;
+   // se algum passar de 10 s, este prazo apaga fixtures sob ele: suba o número.
+   const settleMs = Math.max(0, ...[...abandonedMutations.values()].map(at => at + 10_000 - Date.now()));
+   await new Promise(resolve => setTimeout(resolve, settleMs));
    const closing = await Promise.allSettled([
     ...page.context().pages().map(ownedPage => ownedPage.close()),
     ...(second ? [second.close()] : []),

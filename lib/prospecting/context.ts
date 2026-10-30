@@ -1,0 +1,31 @@
+import type { Queryable } from "@/lib/agent-engine/queue/queue";
+import { campaignConfigSchema } from "./schema";
+
+/** Trusted operator criteria; scraped websites never become system instructions. */
+export async function prospectingConversationContext(
+  db: Queryable,
+  org: string,
+  conversationId: string,
+) {
+  const { rows } = await db.query<{ config: unknown; exit_offered_at: Date | null }>(
+    "select c.config, p.exit_offered_at from prospecting_candidates p join prospecting_campaigns c on c.organization_id=p.organization_id and c.id=p.campaign_id where p.organization_id=$1 and p.conversation_id=$2 and p.status in ('sending','sent') limit 1",
+    [org, conversationId],
+  );
+  const parsed = campaignConfigSchema.safeParse(rows[0]?.config);
+  if (!parsed.success) return "";
+  const c = parsed.data;
+  const linha = rows[0];
+  let fraseSaida = "";
+  // Nos modos atrasados, enquanto a saída ainda não foi oferecida, a abertura
+  // não é comercial: só cumprimente e confirme o contato. A instrução de saída
+  // é acrescida pelo sistema na mensagem certa — o agente não a escreve.
+  if (
+    linha &&
+    c.exit_offer === "second_message" &&
+    linha.exit_offered_at === null
+  ) {
+    fraseSaida =
+      "\n\nAntes da mensagem que leva a instrução de saída, não apresente serviço, preço nem proposta: apresente-se e peça permissão. O sistema acrescenta a instrução de saída sozinho; não a escreva.";
+  }
+  return `\n\nEsta conversa veio de uma campanha de prospecção. Objetivo definido pelo operador: ${c.instruction}\nCritérios de qualificação a confirmar com a pessoa: ${c.qualification}\nConverse naturalmente, uma pergunta por vez. Uma empresa da lista da campanha ainda não é um cliente qualificado. Registre o que a pessoa confirmar, sem inventar necessidade, orçamento ou interesse. Só depois de confirmar os critérios, use as ferramentas disponíveis para mover o negócio do funil ${c.pipeline_id} para a etapa ${c.qualified_stage_id}. Explique a evidência no registro. Se faltar informação, continue qualificando. Respeite recusa, opt-out e intervenção humana; não prometa condições fora da política do agente.${fraseSaida}`;
+}

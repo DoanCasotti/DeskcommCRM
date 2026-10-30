@@ -11,7 +11,7 @@
  *   6. Token expirado → "Convite inválido ou expirado"
  *   7. Token adulterado (HMAC quebrado) → idem
  *   8. Email não corresponde: logado com OUTRA conta → "Email não corresponde"
- *   9. Não autenticado → CTA "Fazer login", não o formulário de aceite
+ *   9. Não autenticado → cadastro em destaque e login secundário
  *
  * Pré-req: npx tsx scripts/seed-e2e-invite.ts (o spec roda sozinho se faltar).
  * Contra o Supabase do env (local recomendado — precisa das migrations de RLS
@@ -22,8 +22,10 @@ import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "./helpers/test";
 import { createClient } from "@supabase/supabase-js";
+
+import { waitForEmail, extractAuthConfirmLink, seguirLinkDeAcesso, uniqueEmail } from "./helpers/auth";
 
 import { signInviteToken } from "../../lib/auth/invite-token";
 import { generateTotp, msUntilNextTotpWindow } from "./utils/totp";
@@ -91,7 +93,7 @@ async function login(page: Page, email: string): Promise<void> {
   await page.goto("/login");
   await page.locator("#email").fill(email);
   await page.locator("#password").fill(base.password);
-  await page.getByRole("button", { name: /entrar/i }).click();
+  await page.getByRole("button", { name: "Entrar", exact: true }).click();
   await page.waitForURL(/\/app\//);
 }
 
@@ -100,7 +102,7 @@ async function loginAdminTotp(page: Page): Promise<void> {
   await page.goto("/login");
   await page.locator("#email").fill(base.users.admin!.email);
   await page.locator("#password").fill(base.password);
-  await page.getByRole("button", { name: /entrar/i }).click();
+  await page.getByRole("button", { name: "Entrar", exact: true }).click();
   await page.waitForURL(/\/login\/mfa/);
   for (let attempt = 0; attempt < 3; attempt++) {
     // não digitar em cima da virada da janela TOTP (o código expiraria no envio)
@@ -150,7 +152,7 @@ test.describe("ciclo de vida do convite (ponta a ponta + adversarial)", () => {
     await page.goto("/login");
     await page.locator("#email").fill(base.users.agent!.email);
     await page.locator("#password").fill(base.password);
-    await page.getByRole("button", { name: /entrar/i }).click();
+    await page.getByRole("button", { name: "Entrar", exact: true }).click();
     await page.waitForURL(/\/app\//, { timeout: 150_000 }).catch(() => {});
     for (const r of ["/app/inbox", "/app/kanban", "/app/contacts", "/app/settings/billing", "/app/settings/api-tokens"]) {
       await page.goto(r).catch(() => {});
@@ -169,7 +171,7 @@ test.describe("ciclo de vida do convite (ponta a ponta + adversarial)", () => {
     await mp.goto("/login");
     await mp.locator("#email").fill(base.users.admin!.email);
     await mp.locator("#password").fill(base.password);
-    await mp.getByRole("button", { name: /entrar/i }).click();
+    await mp.getByRole("button", { name: "Entrar", exact: true }).click();
     await mp.waitForURL(/\/login\/mfa/, { timeout: 150_000 }).catch(() => {});
     await mctx.close();
   });
@@ -193,7 +195,7 @@ test.describe("ciclo de vida do convite (ponta a ponta + adversarial)", () => {
     await page.goto("/login");
     await page.locator("#email").fill(inv.invitee_email);
     await page.locator("#password").fill(base.password);
-    await page.getByRole("button", { name: /entrar/i }).click();
+    await page.getByRole("button", { name: "Entrar", exact: true }).click();
     // Sem membership ainda: o login não cai em /app. Esperamos a SESSÃO (cookie)
     // se firmar antes de ir ao accept_url — senão a página cai no estado não-logado.
     await expect
@@ -324,7 +326,7 @@ test.describe("ciclo de vida do convite (ponta a ponta + adversarial)", () => {
     });
     await page.goto(`/team/accept-invite/${valid}`);
     await expect(page.getByRole("heading", { name: /Você foi convidado/i })).toBeVisible();
-    await expect(page.getByRole("link", { name: /Fazer login/i })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Já tenho conta? Entrar", exact: true })).toBeVisible();
   });
 
   /**
@@ -350,11 +352,17 @@ test.describe("ciclo de vida do convite (ponta a ponta + adversarial)", () => {
     });
 
     await page.goto(`/team/accept-invite/${valid}`);
-    await page.getByRole("link", { name: /ainda não tenho conta/i }).click();
+    await page.getByRole("link", { name: "Criar minha conta", exact: true }).click();
 
     // O token viaja: é ele que faz a conta nova nascer amarrada a este convite
     // em vez de ganhar uma organização própria.
     await expect(page).toHaveURL(new RegExp(`/signup\\?invite=${encodeURIComponent(valid)}`));
+    await page.getByRole("link", { name: "Entrar", exact: true }).click();
+    await expect(page).toHaveURL(`/login?next=${encodeURIComponent(`/team/accept-invite/${valid}`)}`);
+    await expect(page.getByLabel("Email")).toHaveValue(inv.invitee_email);
+    await page.getByRole("link", { name: "Criar conta", exact: true }).click();
+    await expect(page).toHaveURL(new RegExp(`/signup\\?invite=${encodeURIComponent(valid)}`));
+    await expect(page.getByLabel("Email")).toHaveValue(inv.invitee_email);
   });
 
   test("11. o signup com convite não pede empresa, e trava o e-mail", async ({ page }) => {
@@ -496,7 +504,7 @@ test.describe("ciclo de vida do convite (ponta a ponta + adversarial)", () => {
     await ip.goto("/login");
     await ip.locator("#email").fill(FRESH_EMAIL);
     await ip.locator("#password").fill(base.password);
-    await ip.getByRole("button", { name: /entrar/i }).click();
+    await ip.getByRole("button", { name: "Entrar", exact: true }).click();
     await expect
       .poll(
         async () =>
@@ -553,3 +561,85 @@ function tokenPath(acceptUrl: string): string {
   const t = tokenOf(acceptUrl);
   return `/team/accept-invite/${t}`;
 }
+
+
+// Conta realmente inexistente: não substitui o cadastro por admin.createUser.
+test("convite novo: alternar cadastro/login, confirmar no Mailpit e entrar só na equipe convidada", async ({ browser, baseURL }) => {
+  test.setTimeout(180_000);
+  const email = uniqueEmail("convite-lote");
+  const senha = "SenhaForte!123";
+  const antes = await svc.auth.admin.listUsers({ page: 1, perPage: 1000 });
+  expect(antes.error).toBeNull();
+  expect(antes.data.users.some((u) => u.email === email)).toBe(false);
+  const adminCtx = await browser.newContext();
+  const adminPage = await adminCtx.newPage();
+  const ctx = await browser.newContext();
+  const page = await ctx.newPage();
+  let usuarioId: string | undefined;
+  try {
+    await loginAdminTotp(adminPage);
+    const { acceptUrl, failed } = await issueInvite(adminPage, email, "agent");
+    expect(failed).toEqual([]);
+    const token = tokenOf(acceptUrl);
+    expect(Boolean(token)).toBe(true);
+    const adulterado = `${token.slice(0, -1)}${token.endsWith("A") ? "B" : "A"}`;
+    // Query de e-mail não tem autoridade, assinatura adulterada não preenche.
+    await page.goto(`/login?next=${encodeURIComponent(`/team/accept-invite/${adulterado}`)}&email=${encodeURIComponent(email)}`);
+    await expect(page.getByLabel("Email")).toHaveValue("");
+
+    await page.goto(`/team/accept-invite/${token}`);
+    await page.getByRole("link", { name: "Criar minha conta", exact: true }).click();
+    await expect(page).toHaveURL((url) => url.pathname === "/signup" && url.searchParams.get("invite") === token);
+    await expect(page.getByLabel("Nome da empresa")).toHaveCount(0);
+    await expect(page.getByLabel("Email")).toHaveValue(email);
+    fs.mkdirSync("evidence/lote-bugfixes-01a178b3", { recursive: true });
+    await page.screenshot({ path: "evidence/lote-bugfixes-01a178b3/convite-01-cadastro.png" });
+    await page.getByRole("link", { name: "Entrar", exact: true }).click();
+    // O e-mail é igual nas duas telas; só seu valor não espera a navegação.
+    await expect(page).toHaveURL((url) => url.pathname === "/login" && url.searchParams.get("next") === `/team/accept-invite/${token}`);
+    await expect(page.getByLabel("Email")).toHaveValue(email);
+    expect(new URL(page.url()).searchParams.get("next") === `/team/accept-invite/${token}`).toBe(true);
+    await page.screenshot({ path: "evidence/lote-bugfixes-01a178b3/convite-02-login-preenchido.png" });
+    await page.getByRole("link", { name: "Criar conta", exact: true }).click();
+    await expect(page).toHaveURL((url) => url.pathname === "/signup" && url.searchParams.get("invite") === token);
+    expect(new URL(page.url()).searchParams.get("invite") === token).toBe(true);
+    await page.getByLabel("Seu nome").fill("Pessoa convidada sintética");
+    await page.getByLabel("Senha", { exact: true }).fill(senha);
+    await page.getByLabel("Confirmar senha").fill(senha);
+    await page.getByRole("button", { name: "Criar conta", exact: true }).click();
+    await expect(page.getByText("Confirme seu e-mail")).toBeVisible();
+    await page.screenshot({ path: "evidence/lote-bugfixes-01a178b3/convite-03-confirmar-email.png" });
+
+    const html = await waitForEmail(email, "Confirme seu e-mail");
+    const link = extractAuthConfirmLink(html, baseURL!);
+    // Confirmação usa o token_hash real entregue ao endereço do convite.
+    expect(Boolean(new URL(link).searchParams.get("token_hash"))).toBe(true);
+    await seguirLinkDeAcesso(page, link);
+    await expect(page).toHaveURL(/\/app\//);
+    const depois = await svc.auth.admin.listUsers({ page: 1, perPage: 1000 });
+    expect(depois.error).toBeNull();
+    const usuario = depois.data.users.find((u) => u.email === email);
+    expect(Boolean(usuario?.email_confirmed_at)).toBe(true);
+    usuarioId = usuario!.id;
+    const vinculos = await svc.from("user_organizations").select("organization_id,role").eq("user_id", usuarioId).is("revoked_at", null);
+    expect(vinculos.error).toBeNull();
+    expect(vinculos.data).toEqual([{ organization_id: inv.org_id, role: "agent" }]);
+    const convite = await svc.from("team_invites").select("accepted_at,accepted_by").eq("organization_id", inv.org_id).eq("email", email).single();
+    expect(convite.error).toBeNull();
+    expect(Boolean(convite.data?.accepted_at)).toBe(true);
+    expect(convite.data?.accepted_by).toBe(usuarioId);
+    // Cookie real, revalidado por getUser() na rota autenticada.
+    expect((await page.request.get("/api/v1/contacts?limit=1")).status()).toBe(200);
+    await page.screenshot({ path: "evidence/lote-bugfixes-01a178b3/convite-04-equipe-certa.png" });
+  } finally {
+    // Se falhar depois do signup, acha só a conta sintética deste caso para limpar.
+    if (!usuarioId) {
+      const criados = await svc.auth.admin.listUsers({ page: 1, perPage: 1000 });
+      usuarioId = criados.data.users.find((u) => u.email === email)?.id;
+    }
+    expect((await svc.from("team_invites").delete().eq("organization_id", inv.org_id).eq("email", email)).error).toBeNull();
+    if (usuarioId) expect((await svc.auth.admin.deleteUser(usuarioId)).error).toBeNull();
+    await ctx.close();
+    await adminCtx.close();
+  }
+});

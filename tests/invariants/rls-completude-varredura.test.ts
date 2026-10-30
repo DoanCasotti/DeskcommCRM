@@ -75,12 +75,50 @@ interface Excecao {
  * linhas da OUTRA organização, não uma leitura como superusuário.
  */
 const PROVA_PROPRIA: readonly Excecao[] = [
+  ...["calendar_resources", "calendar_service_schedule", "calendar_service_professionals", "calendar_service_resources", "calendar_service_calendar_sources", "calendar_service_occurrences", "calendar_service_occurrence_resources", "calendar_service_blocks"].map(tabela => ({ tabela, razao: "tests/invariants/agenda-servicos.test.ts — oito tabelas com linhas positivas no tenant próprio, JWT authenticated de duas organizações e contagem zero do vizinho; INSERT/UPDATE/DELETE diretos recusados mesmo para manager. As RPCs mantêm ator, revisão e FKs compostas." })),
+  ...["attendant_sectors", "attendant_sector_members"].map(tabela => ({ tabela, razao: "tests/invariants/setores-de-atendimento.test.ts — JWT authenticated de duas organizações: cada uma lê só as próprias linhas (controle positivo nos dois lados); INSERT/DELETE diretos recusados até para manager; FK composta recusa setor de outra organização." })),
+  { tabela: "jev_router_decisions", razao: "tests/invariants/jev-roteador-decisoes.test.ts — dois tenants por JWT: leitura local, zero do vizinho; anon sem leitura, authenticated sem escrita; poda com piso no banco." },
+  { tabela: "golden_candidates", razao: "tests/invariants/golden-candidates.test.ts — dois tenants reais por JWT (agent): leitura positiva local e ZERO do vizinho nos dois sentidos, a tabela inteira sem filtro igual à própria, anon recusado, e insert/update/delete de authenticated sem efeito (só o servidor grava)." },
+  { tabela: "jev_observacoes", razao: "tests/invariants/jev-observacoes.test.ts — dois tenants reais por JWT (agent): leitura positiva local e ZERO do vizinho nos dois sentidos, a tabela inteira sem filtro igual à própria, anon recusado, e insert/update/delete de authenticated sem efeito (só o servidor grava)." },
+  { tabela: "automation_rule_contact_claims", razao: "tests/invariants/automation-claims-so-servidor.test.ts (migration 0740, #3267) — tabela exclusiva do servidor: RLS de pe e NENHUMA policy, anon/authenticated sem privilegio (nem da propria org, recusado por JWT), service_role com select/insert para o dreno." },
+  { tabela: "prospecting_settings", razao: "tests/invariants/prospecting.test.ts — tabela exclusiva do servidor, ACL e RLS verificadas; FK composta e comandos autenticados cercam a organização." },
+  { tabela: "prospecting_campaigns", razao: "tests/invariants/prospecting.test.ts — tabela exclusiva do servidor, ACL e RLS verificadas; FK composta e comandos autenticados cercam a organização." },
+  { tabela: "prospecting_candidates", razao: "tests/invariants/prospecting.test.ts — tabela exclusiva do servidor, ACL e RLS verificadas; FK composta e comandos autenticados cercam a organização." },
+  { tabela: "lgpd_marcas_de_apagamento", razao: "tests/invariants/lgpd-marca-de-apagamento.test.ts — tabela exclusiva do servidor (migration 0750): RLS ligada, zero policies, anon/authenticated sem privilégio; membro da própria organização com JWT authenticated recebe permission denied; a pergunta fn_titular_apagado_a_pedido não responde sim para a mesma pessoa noutra organização." },
+  { tabela: "importacoes_de_historico", razao: "tests/invariants/importacoes-de-historico-rls.test.ts (migration 0761, #999, teste de @sergiobragah) — dois tenants reais por JWT: membro lê a importação da própria organização e zero da outra, nos dois sentidos; authenticated e anon sem insert/update/delete (escrita só pelo service_role); uma importação rodando por número." },
+  { tabela: "crm_lead_attachments", razao: "tests/invariants/anexo-de-lead-isolamento-e-poda.test.ts e anexo-de-lead-caminho-e-escopo.test.ts (migration 0731): membro com JWT authenticated lê os anexos da própria organização e zero do vizinho, e não grava, altera nem apaga na linha dele; viewer lê mas não anexa nem apaga; anon sem privilégio de leitura; leitura e escrita seguem a visibilidade do negócio pai; storage_path preso à organização, ao negócio e ao campo da própria linha." },
+  { tabela: "channel_integrations", razao: "tests/invariants/social-native.test.ts — credencial exclusiva do servidor: SELECT com JWT authenticated recusado para as duas organizações, além de ACL e RLS habilitada." },
+  { tabela: "config_aviso_de_caso", razao: "tests/invariants/aviso-de-caso-escrita.test.ts — dois tenants reais por JWT: admin lê só a própria organização, agent e viewer não leem nada, e a escrita direta por authenticated é negada (a única porta é fn_definir_aviso_de_caso, que revalida papel, suporte e MFA)" },
+  { tabela: "entregas_de_aviso_de_caso", razao: "tests/invariants/aviso-de-caso-escrita.test.ts — manager lê o histórico da própria organização e zero do vizinho; viewer lê zero; escrita direta por authenticated negada nos três verbos, e apagar a channel_sessions apontada não falha e deixa a configuração desligada" },
+  { tabela: "config_aviso_de_agendamento", razao: "tests/invariants/aviso-de-agendamento-escrita.test.ts — dois tenants reais por JWT: admin lê só a própria organização, agent e viewer não leem nada, e a escrita direta por authenticated é negada nos três verbos (a única porta é fn_definir_aviso_de_agendamento, que revalida papel, suporte e MFA)" },
+  { tabela: "entregas_de_aviso_de_agendamento", razao: "tests/invariants/aviso-de-agendamento-escrita.test.ts — manager lê o histórico da própria organização e zero do vizinho; viewer lê zero; escrita direta por authenticated negada nos três verbos" },
+  { tabela: "organization_extensions", razao: "tests/invariants/extensoes-declarativas.test.ts — dois tenants com vínculos reais: leitura positiva local/negativa cruzada por JWT, revogação de membership e escrita direta negada" },
+  { tabela: "extension_operations", razao: "tests/invariants/extensoes-declarativas.test.ts — recibo de instância fechado a anon/authenticated, inclusive configure com organização; RPCs service-only revalidam ator e papel" },
   { tabela: "channel_routing_policies", razao: "tests/invariants/channel-routing.test.ts — dois tenants reais, leitura positiva local e negativa cruzada por JWT; FK composta rejeita canal de outra org" },
   { tabela: "channel_routing_responsibles", razao: "tests/invariants/channel-routing.test.ts — JWT do tenant B não lê responsáveis de A; revogação remove vínculo e claim revalida membro ativo" },
   { tabela: "channel_connection_requests", razao: "tests/invariants/channel-routing.test.ts — recibo privado sem SELECT authenticated; reserva admin com MFA e finalização service-only cercada por org e lease" },
   { tabela: "appointment_recovery_receipts", razao: "tests/invariants/agenda-presenca-acl.test.ts — leitura/escrita direta anon/authenticated negadas, escrita service_role negada e RPC service-only valida a tupla org/evento nos dois sentidos A/B" },
   { tabela: "event_service_origins", razao: "tests/invariants/service-event-origin.test.ts — recibo server-only, authenticated sem leitura/escrita, RPC rejeita tenant B real" },
   { tabela: "platform_support_sessions", razao: "tests/invariants/suporte-temporario.test.ts — grant por sessão, readonly e nenhuma escrita direta authenticated" },
+  {
+    tabela: "crm_proposal_counters",
+    razao:
+      "tests/invariants/proposta-contador-e-server-side.test.ts — server-side " +
+      "only (RLS ligada, zero policies, revoke all de anon/authenticated, " +
+      "migration 0466): authenticated e anon barrados com `permission denied` " +
+      "em leitura e escrita, não zero linhas. Não entra em TABLES pelo mesmo " +
+      "motivo do eixo de anúncios: lá o caso viraria `permission denied` e a " +
+      "'correção' natural seria abrir policy — expondo pelo PostgREST o " +
+      "contador que decide a numeração jurídica da proposta (D9).",
+  },
+  {
+    tabela: "proposal_templates",
+    razao:
+      "tests/invariants/proposta-templates-isolamento-entre-organizacoes.test.ts " +
+      "— isolamento cross-org com `countAs` real (membro da org A não vê a " +
+      "cópia de modelo da org B) + `writeCountAs` provando o piso de papel na " +
+      "escrita (viewer barrado, agent permitido), migration 0471 (M0).",
+  },
   {
     tabela: "webhook_lead_captures",
     razao:
@@ -140,6 +178,10 @@ const PROVA_PROPRIA: readonly Excecao[] = [
   },
   {
     tabela: "calendar_external_events",
+    razao: "tests/invariants/agenda-rls.test.ts — mesmo `it.each` de TABELAS_DA_AGENDA.",
+  },
+  {
+    tabela: "calendar_locations",
     razao: "tests/invariants/agenda-rls.test.ts — mesmo `it.each` de TABELAS_DA_AGENDA.",
   },
   {
@@ -212,12 +254,129 @@ const PROVA_PROPRIA: readonly Excecao[] = [
       "orçamento, criativo e performance de quem anuncia.",
   },
   {
+    tabela: "map_provider_credentials",
+    razao:
+      "tests/invariants/credencial-de-mapas-e-server-side.test.ts — privilégio " +
+      "NENHUM para anon e authenticated, `permission denied` sob `set role`, RLS " +
+      "ligada, zero policies, `organization_id` NOT NULL com FK em cascata. Guarda " +
+      "a chave do Google da organização (0504), que só o servidor lê.",
+  },
+  {
     tabela: "ad_conversion_dispatches",
     razao:
       "tests/invariants/credencial-de-anuncios-e-server-side.test.ts — mesmo " +
       "`describe.each`. Não guarda segredo, mas é o livro-razão de quais leads " +
       "da organização viraram venda, e quem o lê é o servidor com o admin client " +
       "filtrando organization_id à mão (a tela `/app/settings/conversoes`).",
+  },
+  { tabela: "meta_ctwa_click_dispatches", razao: "tests/invariants/meta-lead-por-clique.test.ts — deny-all como ad_conversion_dispatches (doc 199): anon e authenticated levam `permission denied` ao ler, inserir, alterar e apagar; service_role lê (controle positivo). Livro dos cliques CTWA; só o servidor lê, filtrando organization_id à mão." },
+  {
+    tabela: "ad_hierarchy_cache",
+    razao:
+      "tests/invariants/credencial-de-anuncios-e-server-side.test.ts — mesmo " +
+      "`describe.each` das três acima. Guarda o nome da campanha, do conjunto e " +
+      "do anúncio de quem anuncia: a estratégia de mídia, não um segredo de " +
+      "autenticação. Quem a lê é o servidor com o admin client filtrando " +
+      "organization_id à mão.",
+  },
+  {
+    tabela: "google_ads_landing_pages",
+    razao:
+      "tests/invariants/captura-de-clique-e-server-side.test.ts — mesmo desenho " +
+      "deny-all de ad_platform_connections (0213): RLS ligada, zero policies, " +
+      "grants revogados de anon/authenticated, organization_id NOT NULL com FK " +
+      "em cascata. Guarda para qual WhatsApp e com qual texto a landing page " +
+      "de captura de gclid redireciona.",
+  },
+  {
+    tabela: "google_ads_conversion_rules",
+    razao:
+      "tests/invariants/captura-de-clique-e-server-side.test.ts — RLS ligada, " +
+      "zero policies, privilégios revogados e permission denied sob set role " +
+      "anon/authenticated. O servidor aplica organization_id às regras por etapa. " +
+      "tests/invariants/google-regras-etapa-isoladas.test.ts também prova a FK " +
+      "composta que recusa etapa de outra organização.",
+  },
+  {
+    tabela: "meta_ads_conversion_rules",
+    razao:
+      "tests/invariants/captura-de-clique-e-server-side.test.ts — RLS ligada, " +
+      "zero policies, privilégios revogados e permission denied sob set role " +
+      "anon/authenticated. O servidor aplica organization_id às regras por etapa " +
+      "da Meta (0524). tests/invariants/meta-regras-etapa-isoladas.test.ts prova a " +
+      "FK composta que recusa etapa de outra organização.",
+  },
+  {
+    tabela: "ad_tracking_links",
+    razao:
+      "tests/invariants/captura-de-clique-e-server-side.test.ts — mesmo teste " +
+      "comportamental deny-all, com controle positivo de service_role. " +
+      "tests/invariants/links-rastreaveis-isolados.test.ts prova as FKs compostas " +
+      "e o isolamento das métricas por organização.",
+  },
+  {
+    tabela: "google_ads_click_refs",
+    razao:
+      "tests/invariants/captura-de-clique-e-server-side.test.ts — mesmo " +
+      "`describe.each` da linha acima. Guarda o `gclid` de cada clique de " +
+      "anúncio e o token que o liga à mensagem do WhatsApp.",
+  },
+  {
+    tabela: "meta_ads_landing_pages",
+    razao:
+      "tests/invariants/captura-de-clique-e-server-side.test.ts — mesmo " +
+      "`describe.each` das duas linhas acima. É o par da migration 0381: " +
+      "guarda para qual WhatsApp e com qual texto a rota pública de captura " +
+      "de UTM redireciona.",
+  },
+  {
+    tabela: "meta_ads_click_refs",
+    razao:
+      "tests/invariants/captura-de-clique-e-server-side.test.ts — mesmo " +
+      "`describe.each`. Guarda as UTMs de cada clique no botão da landing " +
+      "page e o ref curto que as liga à mensagem do WhatsApp.",
+  },
+  {
+    tabela: "channel_session_groups",
+    razao:
+      "tests/invariants/grupos-na-inbox.test.ts, dois casos. \"isola por " +
+      "organização (RLS), membro só LÊ e só o service role escreve\": com uma " +
+      "linha REAL semeada na outra organização (e um controle que confere que " +
+      "ela existe), o manager da organização de teste lê 0 linhas dela por JWT " +
+      "e o agent lê a da própria; insert/update/delete de manager, insert de " +
+      "agent e de anon são recusados; o service_role grava e altera. \"nenhuma " +
+      "escrita concedida a anon/authenticated\": o catálogo não tem INSERT, " +
+      "UPDATE, DELETE nem TRUNCATE para anon, authenticated ou PUBLIC. O " +
+      "isolamento é medido num sentido só (org de teste → outra). Migration 0482.",
+  },
+  {
+    tabela: "cobranca_assinaturas",
+    razao:
+      "tests/invariants/cobranca-isolamento.test.ts — dois tenants reais por JWT: " +
+      "admin de A lê 1 linha de A e 0 de B, admin de B o espelho, agent de A lê 0 " +
+      "(a leitura é de admin; por isso não cabe em TABLES, cujo usuário semeado é " +
+      "agent), promovido a admin passa a ler (controle), e UPDATE/INSERT/DELETE " +
+      "pela sessão e qualquer leitura por anon dão permission denied. Migration 0510.",
+  },
+  {
+    tabela: "conversation_participants",
+    razao:
+      "tests/invariants/atendimento-conjunto-participantes.test.ts — dois tenants " +
+      "por JWT (agent): o convidado LÊ a própria participação e passa a ver a " +
+      "conversa e as mensagens dela, o dono não lê a linha alheia, um membro de " +
+      "outra organização lê 0 nos dois sentidos e INSERT direto de authenticated " +
+      "dá permission denied. Migration 0661 (issue #2542).",
+  },
+  {
+    tabela: "message_template_groups",
+    razao:
+      "tests/invariants/grupos-de-resposta-rapida-rls.test.ts (migration 0808, #3245) — " +
+      "leitura positiva dos quatro papéis na organização própria e ZERO do vizinho " +
+      "(linha real semeada noutra organização, com controle de que ela existe); " +
+      "agent e viewer sem INSERT/UPDATE/DELETE efetivo; manager cria, renomeia e apaga; " +
+      "anon com permission denied por GRANT ausente; GRANT explícito a authenticated " +
+      "conferido no catálogo; FK composta recusa resposta apontando para grupo de outra " +
+      "organização e on delete set null (grupo_id) devolve a resposta à lista plana sem apagá-la.",
   },
 ];
 
@@ -247,7 +406,6 @@ const DEBITO_CONHECIDO: readonly Excecao[] = [
   "ai_invocations",
   "ai_knowledge_sources",
   "ai_knowledge_versions",
-  "ai_provider_credentials",
   "ai_purpose_bindings",
   "ai_router_members",
   "api_audit_log",

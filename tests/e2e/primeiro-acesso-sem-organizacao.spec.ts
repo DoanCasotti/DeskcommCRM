@@ -38,7 +38,7 @@
  */
 import { randomUUID } from "node:crypto";
 
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "./helpers/test";
 import { createClient } from "@supabase/supabase-js";
 
 const svc = createClient(
@@ -118,7 +118,7 @@ async function entrar(page: Page, email: string): Promise<void> {
   await page.goto("/login");
   await page.locator("#email").fill(email);
   await page.locator("#password").fill(SENHA);
-  await page.getByRole("button", { name: /entrar/i }).click();
+  await page.getByRole("button", { name: "Entrar", exact: true }).click();
   await page.waitForURL(/\/(app|onboarding|get-started)/, { timeout: 30_000 });
 }
 
@@ -163,11 +163,12 @@ test.describe("conta confirmada e sem organização", () => {
 
     // A organização existe DE VERDADE no banco, com o nome digitado — não é só
     // a URL que mudou.
-    const { data } = await svc
+    const { data, error } = await svc
       .from("user_organizations")
-      .select("organization_id, role, organizations(display_name)")
+      .select("organization_id, role, organizations!user_organizations_organization_id_fkey(display_name)")
       .eq("user_id", idOrfao)
       .maybeSingle();
+    expect(error, "a consulta do vínculo precisa ser válida, sem embed ambíguo").toBeNull();
     expect(data, "nenhum vínculo foi criado — a tela navegou sem provisionar").not.toBeNull();
     const vinculo = data as unknown as {
       organization_id: string;

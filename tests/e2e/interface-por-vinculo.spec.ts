@@ -1,19 +1,19 @@
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { createClient } from "@supabase/supabase-js";
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "./helpers/test";
 import { credenciaisSupabaseDeTeste } from "../../scripts/lib/env-de-teste";
 const credentials = credenciaisSupabaseDeTeste();
 const db = createClient(credentials.url, credentials.serviceRole, {
   auth: { persistSession: false },
 });
 const password = `Local-${randomUUID()}!`;
-const evidence = ".superpowers/evidence/comunidade-360";
+const evidence = "evidence/comunidade-360";
 async function login(page: Page, email: string) {
   await page.goto("/login");
   await page.getByLabel(/e-?mail/i).fill(email);
   await page.getByLabel(/senha/i).fill(password);
-  await page.getByRole("button", { name: /entrar/i }).click();
+  await page.getByRole("button", { name: "Entrar", exact: true }).click();
   await page.waitForURL(/\/app\//, { timeout: 60_000 });
 }
 const nav = (page: Page) => page.getByRole("navigation", { name: "Navegação principal" });
@@ -178,7 +178,7 @@ test("interface por membro atualiza ao vivo, preserva formulário e convite apli
     // A coluna também descreve a seleção para quem só pode consultar a equipe.
     await customize(page, emails[2]!, "Produtos");
     await page.getByRole("combobox", { name: `Papel de ${emails[2]}` }).click();
-    await page.getByRole("option", { name: "manager", exact: true }).click();
+    await page.getByRole("option", { name: "Gerente", exact: true }).click();
     await expect(page.getByText("Papel atualizado.", { exact: true })).toBeVisible();
     await other.goto("/app/team");
     await expect(other.getByRole("row").filter({ hasText: emails[2] }).getByText("Personalizada", { exact: true })).toBeVisible();

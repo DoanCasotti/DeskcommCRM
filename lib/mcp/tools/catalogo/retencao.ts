@@ -44,6 +44,19 @@ export const TOOLS_RETENCAO = declararTools([
     pacotes: ["reter"],
   },
   {
+    name: "crm_enroll_followup_flow",
+    category: "write",
+    rotulo: "Iniciar um acompanhamento configurado",
+    explicacao:
+      "Coloca o cliente num acompanhamento já montado na tela, que decide quando falar, o que dizer e quando parar.",
+    oQueToca: "Retornos e acompanhamento",
+    // Mesmo nível de `crm_schedule_followup`, e pelo mesmo motivo: inscrever não
+    // fala com ninguém agora. Cada envio do fluxo passa pelos portões de sempre,
+    // e o acompanhamento aparece na fila com botão de cancelar.
+    risco: "atencao",
+    pacotes: ["reter"],
+  },
+  {
     name: "crm_cancel_followup",
     category: "write",
     rotulo: "Cancelar um retorno agendado",
@@ -97,6 +110,20 @@ export const TOOLS_RETENCAO = declararTools([
     // Escreve uma SUGESTÃO que uma pessoa decide — nada sai para o cliente por
     // conta dela. É `atencao`, e o `critico` mora na aprovação humana.
     risco: "atencao",
+    pacotes: ["reter"],
+  },
+  {
+    // Fica em "reter" e não em "evoluir" de propósito: o pacote "Aprender e
+    // evoluir" já cabe no teto só com as 27 vagas que tem, e uma capacidade a
+    // mais nele tiraria todas as jornadas da lista de "cabem depois do agente
+    // nascer". O pacote "reter" já não cabe no teto, então a conta dos demais não muda.
+    name: "crm_get_prospecting_site_audit",
+    category: "read",
+    rotulo: "Consultar a análise do site da empresa",
+    explicacao:
+      "O agente pode consultar o que o sistema achou no site da empresa prospectada (tem site, está fora do ar, problemas) em qualquer momento da conversa.",
+    oQueToca: "Análise do site da empresa",
+    risco: "seguro",
     pacotes: ["reter"],
   },
 ]);

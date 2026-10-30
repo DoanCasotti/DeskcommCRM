@@ -26,7 +26,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 
-import { test, expect, type Page, type Locator, type APIRequestContext } from "@playwright/test";
+import { test, expect, type Page, type Locator, type APIRequestContext } from "./helpers/test";
 import { carregarEnvLocal } from "../../scripts/lib/env-de-teste";
 
 const APP_URL = `http://localhost:${process.env.E2E_PORT ?? "3001"}`;
@@ -78,7 +78,7 @@ async function login(page: Page, email: string): Promise<void> {
   await page.goto(`${APP_URL}/login`);
   await page.locator("#email").fill(email);
   await page.locator("#password").fill(creds.password);
-  await page.getByRole("button", { name: /entrar/i }).click();
+  await page.getByRole("button", { name: "Entrar", exact: true }).click();
   await page.waitForURL(/\/app\//);
 }
 
@@ -182,7 +182,13 @@ test.describe("a automação conta o que aconteceu de verdade", () => {
       ).toBeVisible({ timeout: 10_000 });
       await numeros.first().click();
 
-      await editor.getByRole("textbox").last().fill(`Olá {{nome}}, vi que você se cadastrou.`);
+      // A MENSAGEM é o `<Textarea>` do passo. O `#2734` acrescentou, LOGO
+      // DEPOIS dela, o `<Input>` da URL de mídia — os dois são role `textbox`,
+      // e o `.last()` de antes passou a preencher a URL da mídia, deixando a
+      // mensagem vazia: o schema recusa, nenhum POST sai e a espera expira. O
+      // seletor estrutural (`textarea` = a mensagem; a mídia é `<input>`) não
+      // depende de copy nem de ordem.
+      await editor.locator("textarea").fill(`Olá {{nome}}, vi que você se cadastrou.`);
 
       const [salvo] = await Promise.all([
         page.waitForResponse(

@@ -17,6 +17,7 @@ import { corDaTrilha } from "./paleta";
 import { ROTULO_DA_SITUACAO } from "@/lib/agenda/tipos";
 
 import type { Agendamento, Pessoa, SituacaoDoAgendamento } from "./tipos";
+import { dataDeParede } from "@/lib/agenda/fuso";
 
 /**
  * As quatro divisões do histórico.
@@ -59,14 +60,23 @@ const VARIANTE_DA_SITUACAO: Record<
 
 function separar(agendamentos: Agendamento[], agora: Date): Record<AbaDoHistorico, Agendamento[]> {
   const vazio: Record<AbaDoHistorico, Agendamento[]> = {
-    proximos: [], aguardando: [], passados: [], cancelados: [],
+    proximos: [],
+    aguardando: [],
+    passados: [],
+    cancelados: [],
   };
   for (const a of agendamentos) {
     // Cancelado sai das outras abas SEMPRE, mesmo sendo futuro: quem abre
     // "Próximos" está perguntando o que vai acontecer, e um cancelado ali seria
     // uma resposta errada com cara de certa.
-    if (a.situacao === "cancelled") { vazio.cancelados.push(a); continue; }
-    if (a.situacao === "pending") { vazio.aguardando.push(a); continue; }
+    if (a.situacao === "cancelled") {
+      vazio.cancelados.push(a);
+      continue;
+    }
+    if (a.situacao === "pending") {
+      vazio.aguardando.push(a);
+      continue;
+    }
     (isBefore(new Date(a.comeca), agora) ? vazio.passados : vazio.proximos).push(a);
   }
   return vazio;
@@ -86,15 +96,23 @@ export function HistoricoDaAgenda({
   agendamentos,
   pessoas,
   agora,
+  fuso,
   onRemarcar,
   onCancelar,
   onRealizado,
   onFaltou,
+  onConfirmar,
   className,
 }: {
   agendamentos: Agendamento[];
   pessoas: Pessoa[];
   agora: Date;
+  /**
+   * O fuso RESOLVIDO da organização. Sem ele a lista imprime o relógio do
+   * navegador e diverge da grade ao lado — a mesma tela dizendo duas horas
+   * para o mesmo compromisso (issue #1362, e2e `:171`).
+   */
+  fuso: string;
   onRemarcar?: (id: string) => void;
   onCancelar?: (id: string) => void;
   /**
@@ -106,6 +124,18 @@ export function HistoricoDaAgenda({
    */
   onRealizado?: (id: string) => void;
   onFaltou?: (id: string) => void;
+  /**
+   * O MESMO defeito da Decisão 17, na transição de cima: `pending → confirmed`
+   * tem rota (`PATCH` aceita `status: "confirmed"`), tem regra (`lib/agenda/laco.ts`)
+   * e tem escritor pela IA (`crm_confirm_appointment`) — e NENHUM pela tela.
+   *
+   * Consequência: num negócio que escolheu "uma pessoa aprova cada horário"
+   * (`requires_confirmation`), o pedido chega na aba certa e a equipe não tem
+   * como dizer sim. Ou o cliente responde no WhatsApp e a IA confirma, ou o
+   * prazo vence e `agenda-expira-pendentes` cancela. Quem aprova é todo mundo
+   * menos quem deveria.
+   */
+  onConfirmar?: (id: string) => void;
   className?: string;
 }) {
   const localeDaData = useLocaleDeData();
@@ -115,7 +145,11 @@ export function HistoricoDaAgenda({
   const daAba = grupos[aba];
 
   return (
-    <div data-testid="historico-da-agenda" data-aba={aba} className={cn("flex min-h-0 flex-col", className)}>
+    <div
+      data-testid="historico-da-agenda"
+      data-aba={aba}
+      className={cn("flex min-h-0 flex-col", className)}
+    >
       <div
         role="tablist"
         aria-label={t("Filtrar o histórico")}
@@ -184,12 +218,12 @@ export function HistoricoDaAgenda({
                   />
                   <div className="w-28 shrink-0">
                     <div className="text-sm font-medium tabular-nums first-letter:uppercase">
-                      {format(comeca, t("d 'de' MMM"), { locale: localeDaData })}
+                      {format(dataDeParede(comeca, fuso), t("d 'de' MMM"), { locale: localeDaData })}
                     </div>
-                    <div className="text-[11px] tabular-nums text-text-muted">
-                      {format(comeca, "HH:mm")}
+                    <div className="text-[11px] text-text-muted tabular-nums">
+                      {format(dataDeParede(comeca, fuso), "HH:mm")}
                       {" – "}
-                      {format(new Date(a.termina), "HH:mm")}
+                      {format(dataDeParede(new Date(a.termina), fuso), "HH:mm")}
                     </div>
                   </div>
                   <div className="min-w-0 flex-1">
@@ -197,7 +231,12 @@ export function HistoricoDaAgenda({
                         cadastrou em Tipos de agendamento) e saem como ele
                         escreveu. Só o fallback "Agendamento" é rótulo nosso, e
                         esse traduz. */}
-                    <Link className="block truncate text-sm underline" href={`/app/agenda?compromisso=${a.id}`}>{a.quemSeraAtendido ?? a.titulo}</Link>
+                    <Link
+                      className="block truncate text-sm underline"
+                      href={`/app/agenda?compromisso=${a.id}`}
+                    >
+                      {a.quemSeraAtendido ?? a.titulo}
+                    </Link>
                     <div className="truncate text-[11px] text-text-muted">
                       {a.tipo || t("Agendamento")}
                       {pessoa ? ` · ${t("com")} ${pessoa.nome}` : ""}
@@ -216,6 +255,20 @@ export function HistoricoDaAgenda({
                       e eu o generalizei para todas — errado: o passado tem as
                       duas ações mais importantes do histórico.
                     */}
+                    {aba === "aguardando" && (
+                      // PRIMEIRO na ordem, e é deliberado: confirmar é o que se
+                      // faz com a maioria dos pedidos, e o que a pessoa procura
+                      // ao abrir esta aba. Remarcar e cancelar são a exceção.
+                      <Button
+                        variant="default"
+                        size="sm"
+                        data-testid={`confirmar-${a.id}`}
+                        disabled={!onConfirmar}
+                        onClick={() => onConfirmar?.(a.id)}
+                      >
+                        {t("Confirmar")}
+                      </Button>
+                    )}
                     {(aba === "proximos" || aba === "aguardando") && (
                       <>
                         <Button
@@ -223,7 +276,11 @@ export function HistoricoDaAgenda({
                           size="sm"
                           data-testid={`remarcar-${a.id}`}
                           disabled={!onRemarcar}
-                          title={onRemarcar ? undefined : t("Disponível quando a agenda estiver conectada")}
+                          title={
+                            onRemarcar
+                              ? undefined
+                              : t("Disponível quando a agenda estiver conectada")
+                          }
                           onClick={() => onRemarcar?.(a.id)}
                         >
                           {t("Remarcar")}
@@ -233,19 +290,25 @@ export function HistoricoDaAgenda({
                           size="sm"
                           data-testid={`cancelar-${a.id}`}
                           disabled={!onCancelar}
-                          title={onCancelar ? undefined : t("Disponível quando a agenda estiver conectada")}
+                          title={
+                            onCancelar
+                              ? undefined
+                              : t("Disponível quando a agenda estiver conectada")
+                          }
                           onClick={() => onCancelar?.(a.id)}
                         >
                           {t("Cancelar")}
                         </Button>
                       </>
                     )}
-                    {aba === "passados" && a.situacao !== "completed" && a.situacao !== "no_show" && (
-                      // Decisão 17. Só enquanto o desfecho NÃO foi registrado:
-                      // oferecer "Realizado" num que já está realizado seria
-                      // pedir de novo o que a pessoa já respondeu.
-                      <>
-                        {/*
+                    {aba === "passados" &&
+                      a.situacao !== "completed" &&
+                      a.situacao !== "no_show" && (
+                        // Decisão 17. Só enquanto o desfecho NÃO foi registrado:
+                        // oferecer "Realizado" num que já está realizado seria
+                        // pedir de novo o que a pessoa já respondeu.
+                        <>
+                          {/*
                           SEM `title` DE DESCULPA. Os dois diziam "Disponível
                           quando a agenda estiver conectada" — falso, e pior que
                           o silêncio: o PATCH de status não toca o Google. Quem
@@ -257,26 +320,26 @@ export function HistoricoDaAgenda({
                           Se um dia o botão puder ficar cinza de novo, o motivo
                           tem de ser verdadeiro.
                         */}
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          data-testid={`realizado-${a.id}`}
-                          disabled={!onRealizado}
-                          onClick={() => onRealizado?.(a.id)}
-                        >
-                          {t("Realizado")}
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          data-testid={`faltou-${a.id}`}
-                          disabled={!onFaltou}
-                          onClick={() => onFaltou?.(a.id)}
-                        >
-                          {t("Faltou")}
-                        </Button>
-                      </>
-                    )}
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            data-testid={`realizado-${a.id}`}
+                            disabled={!onRealizado}
+                            onClick={() => onRealizado?.(a.id)}
+                          >
+                            {t("Realizado")}
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            data-testid={`faltou-${a.id}`}
+                            disabled={!onFaltou}
+                            onClick={() => onFaltou?.(a.id)}
+                          >
+                            {t("Faltou")}
+                          </Button>
+                        </>
+                      )}
                   </div>
                 </li>
               );

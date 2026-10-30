@@ -2,7 +2,11 @@
 
 import { headers } from "next/headers";
 
+import { ipDoCliente } from "@/lib/http/ip-do-cliente";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { moduloLigado } from "@/lib/instalacao/modulos";
+import { cadastroExigeEscolhaDePlano, lerPlanosDoCadastro } from "@/lib/cobranca/cadastro";
 import {
   signupSchema,
   signupComConviteSchema,
@@ -10,6 +14,8 @@ import {
   type SignupComConviteInput,
 } from "@/lib/auth/schemas";
 import { verifyInviteToken } from "@/lib/auth/invite-token";
+import { criarContaDeConvite, lerConfigPublicaDoGoTrue } from "@/lib/auth/convite-no-gotrue";
+import { modoDeCadastro } from "@/lib/auth/politica-de-cadastro";
 import { audit, hashEmail } from "@/lib/audit";
 import { authRateLimited, AUTH_LIMITS } from "@/lib/auth/rate-limit";
 import { env } from "@/lib/env";
@@ -37,11 +43,29 @@ export type SignUpResult =
   | {
       ok: false;
       /**
+       * `somente_convite`: a instalação está em modo `so_convite` e esta
+       * tentativa não trouxe convite válido. É recusa de POLÍTICA, não de
+       * dado — por isso não vira `validation_error`: a pessoa não tem o que
+       * corrigir no formulário.
+       *
        * `conta_ja_existe`: só acontece COM convite na mão. Sem convite a
        * resposta continua indistinguível de sucesso — ver o parágrafo de
-       * anti-enumeração abaixo.
+       * anti-enumeração abaixo. Os dois convivem sem se confundir: a recusa por
+       * política é decidida ANTES de tocar no GoTrue, então numa instalação
+       * fechada quem chega sem convite nunca chega a saber se o e-mail existe.
+       *
+       * `email_indisponivel`: o provedor de auth não conseguiu mandar o e-mail
+       * de confirmação — é a instalação sem e-mail configurado no serviço de
+       * login, não um soluço. Tentar de novo nunca funciona; quem resolve é
+       * quem administra.
        */
-      error: "validation_error" | "rate_limited" | "signup_failed" | "conta_ja_existe";
+      error:
+        | "validation_error"
+        | "rate_limited"
+        | "signup_failed"
+        | "somente_convite"
+        | "conta_ja_existe"
+        | "email_indisponivel";
       details?: Record<string, unknown>;
     };
 
@@ -80,7 +104,7 @@ export async function signUp(
   const hdrs = await headers();
   const origin = hdrs.get("origin") ?? env.NEXT_PUBLIC_APP_URL;
   const requestId = hdrs.get("x-request-id");
-  const ip = hdrs.get("x-forwarded-for")?.split(",")[0]?.trim() ?? null;
+  const ip = ipDoCliente(hdrs);
   const userAgent = hdrs.get("user-agent") ?? null;
 
   // Criar conta é fluxo raro por pessoa: teto baixo por IP evita fábrica de
@@ -104,6 +128,95 @@ export async function signUp(
     convite = inviteToken;
   }
 
+  // ── A AUTORIDADE da política de cadastro ──────────────────────────────────
+  // A tela também recusa, mas a tela é adulterável: esta action é chamável
+  // direto, e sem esta guarda o modo `so_convite` seria decoração. A ordem
+  // importa — só se pergunta a política DEPOIS de o convite ter sido validado
+  // acima, senão um convite legítimo seria barrado.
+  if (convite === null && (await modoDeCadastro()) === "so_convite") {
+    await audit({
+      action: "auth.signup_failed",
+      metadata: { email_hash: hashEmail(parsed.data.email), reason: "somente_convite" },
+      requestId,
+      ip,
+      userAgent,
+    });
+    return { ok: false, error: "somente_convite" };
+  }
+
+  const planoEscolhido = !convite && "cobranca_plan_id" in parsed.data ? parsed.data.cobranca_plan_id : undefined;
+  if (!convite) {
+    const admin = createAdminClient();
+    if (await moduloLigado(admin, "cobranca")) {
+      // Recusa ANTES de criar a conta no GoTrue o que o gatilho da 0679 recusaria
+      // depois — senão o usuário ficaria órfão, sem organização. Leitura dos
+      // PLANOS que falha recusa: é ação, não informação. A da CHAVE do módulo, não:
+      // `moduloLigado` trata a falha como "desligado", e aí a conta nasce e quem
+      // decide é o gatilho; se ele recusar, a saída é /get-started, que pede o plano.
+      const planos = await lerPlanosDoCadastro(admin);
+      if (planoEscolhido) {
+        if (!planos?.oferecidos.some((p) => p.id === planoEscolhido)) {
+          return { ok: false, error: "validation_error", details: { cobranca_plan_id: ["plano_indisponivel"] } };
+        }
+      } else if (!planos || cadastroExigeEscolhaDePlano(planos)) {
+        return { ok: false, error: "validation_error", details: { cobranca_plan_id: ["plano_obrigatorio"] } };
+      }
+    }
+  }
+
+  // ── O GoTrue com o cadastro público FECHADO (#1653) ──────────────────────────
+  //
+  // Com `disable_signup` ligado no GoTrue — é o que fecha `POST /auth/v1/signup`
+  // para quem tem a anon key do navegador, o buraco que esta issue abre — o
+  // `supabase.auth.signUp()` de baixo também é recusado, inclusive para quem
+  // TEM convite. Só se entra aqui quando o próprio GoTrue diz que está fechado
+  // (`GET /auth/v1/settings`, público); nos outros casos — instalação aberta e
+  // até `so_convite` que ainda não sincronizou — o caminho de baixo continua
+  // exatamente o de antes.
+  //
+  // A ordem em relação à trava de política acima continua sendo a mesma: sem
+  // convite válido não se chega aqui.
+  if (convite !== null && (await lerConfigPublicaDoGoTrue())?.disable_signup === true) {
+    const criada = await criarContaDeConvite({
+      email: parsed.data.email,
+      password: parsed.data.password,
+      inviteToken: convite,
+      fullName: (parsed.data as SignupComConviteInput).full_name,
+      emailRedirectTo: `${origin}/auth/confirm?type=signup`,
+    });
+
+    if (!criada.ok) {
+      await audit({
+        action: "auth.signup_failed",
+        metadata: {
+          email_hash: hashEmail(parsed.data.email),
+          // Mesmos motivos do caminho de baixo, para a trilha continuar
+          // distinguível sem mapa novo: `conta_ja_existe_com_convite` já é o
+          // vocabulário de quem chega com convite na mão.
+          reason: criada.motivo === "conta_ja_existe" ? "conta_ja_existe_com_convite" : criada.motivo,
+          detalhe: criada.detalhe ?? null,
+          via: "admin_convite",
+        },
+        requestId,
+        ip,
+        userAgent,
+      });
+      if (criada.motivo === "conta_ja_existe") return { ok: false, error: "conta_ja_existe" };
+      if (criada.motivo === "rate_limited") return { ok: false, error: "rate_limited" };
+      if (criada.motivo === "email_de_confirmacao_falhou") return { ok: false, error: "email_indisponivel" };
+      return { ok: false, error: "signup_failed" };
+    }
+
+    await audit({
+      action: "auth.signup_requested",
+      metadata: { email_hash: hashEmail(parsed.data.email), via: "admin_convite" },
+      requestId,
+      ip,
+      userAgent,
+    });
+    return { ok: true, sessao_ativa: criada.sessao_ativa };
+  }
+
   const supabase = await createClient();
   const { data, error } = await supabase.auth.signUp({
     email: parsed.data.email,
@@ -125,7 +238,7 @@ export async function signUp(
             invite_token: convite,
             full_name: (parsed.data as SignupComConviteInput).full_name,
           }
-        : { org_name: (parsed.data as SignupInput).org_name },
+        : { org_name: (parsed.data as SignupInput).org_name, ...(planoEscolhido ? { cobranca_plan_id: planoEscolhido } : {}) },
     },
   });
 
@@ -176,6 +289,11 @@ export async function signUp(
       ip,
       userAgent,
     });
+    // Medido numa VPS v1.85.0: GoTrue sem SMTP devolve 500 "Error sending
+    // confirmation email", e a tela mandava "Tente novamente" — seis vezes na
+    // trilha, nenhuma podia dar certo. Não fura a anti-enumeração: conta que já
+    // existe recebe sucesso ofuscado sem e-mail, então nunca chega aqui.
+    if (/error sending/i.test(error.message)) return { ok: false, error: "email_indisponivel" };
     return { ok: false, error: "signup_failed" };
   }
 

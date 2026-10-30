@@ -83,7 +83,11 @@ create table if not exists conversation_assignment_events (
 create index if not exists idx_cae_conversation
   on conversation_assignment_events (conversation_id, created_at desc);
 
--- RLS: tenant org via fn_user_org_ids() (SELECT + INSERT).
+-- RLS de SELECT: escopo da conversa (cae_select, migration 0173).
+-- INSERT: NÃO existe policy nem GRANT para authenticated desde a 0279 — a linha
+--   é escrita por dentro de fn_conversation_assign, que é security definer. Um
+--   INSERT forjado pelo PostgREST fazia o histórico dizer que alguém assumiu o
+--   atendimento que ninguém assumiu.
 -- Append-only: sem policy de UPDATE/DELETE (mesma família de api_audit_log).
 ```
 
@@ -348,7 +352,11 @@ a migration `20260716120000_0030_config_rls_role_policies.sql` aplica
   menu oculto ou de uma preferência de interface.
 - **Fila com posição/espera** (G5-03): a visão Fila (`assigned_to=unassigned`)
   ordena por `last_inbound_at` ASC (quem espera há mais tempo primeiro); posição =
-  índice na lista ordenada; "aguardando há X" derivado de `last_inbound_at`. A
+  índice na lista ordenada; "aguardando há X" derivado de `last_inbound_at`. **A
+  hora no canto da linha, na Fila, é a MESMA** (`last_inbound_at`): a coluna de
+  horas tem de ler na ordem da lista, e `last_message_at` anda quando o atendente
+  responde — faria os números saírem fora de ordem numa lista que está certa (é
+  o relato da #464). Nas demais visões vale a régua delas, a atividade recente. A
   contagem da fila casa com `counts.unassigned` (mesmo predicado: sem dono +
   status `open`).
 
@@ -558,3 +566,50 @@ de governança implementado lá além das próprias specs — nada a anotar.
 ### B.3 — Contagem
 
 implementado: **9** · parcial: **5** · ausente: **6** (dos quais 1 sem feature G* → INB-01 na inbox).
+
+## Turno autônomo após tomada humana (migrations 0594 e 0615)
+
+Assumir ou transferir a conversa invalida, na transação do evento de atribuição,
+os jobs `inbound_turn`/`case_reply_turn` pendentes ou em execução daquela conversa e organização. O lease original é
+revogado; devolver ao automático não revive o trabalho antigo. A atribuição por
+roteamento e o handoff intencional do próprio agente não têm essa semântica.
+
+A fronteira de execução verifica o lease antes de efeitos e novamente após
+consultas assíncronas nos caminhos de reserva, alteração de card e envio.
+`approved_reply`, `transactional_delivery` e `operator_turn` seguem suas próprias
+autoridades. O follow-up em execução recebe no `event_log` um fato terminal de
+revogação com seu job e conversa, na mesma transação de Assumir. A guarda de
+lease (inclusive o envio inline) lê esse fato; devolver não o remove. A
+`fn_autonomous_turn_revoked`, exclusiva do servidor, mantém o predicado único por
+organização, job, conversa, tipo, entidade e estado concluído. A
+`fn_followup_claim_current` continua validando o lease no worker, no envio inline
+e na aplicação do passo; a nova função não substitui essa conferência.
+
+O worker
+encerra somente o turno e registra `turn_discarded` na mesma transação, sob sua
+autoridade interna, para que retomar uma inscrição pausada não pareça worker
+morto. A política pause/cancel/allow e os follow-ups futuros continuam próprios
+do fluxo; Assumir não altera o estado da inscrição. Se o lease já mudou antes de
+persistir o descarte, o worker não mexe no ciclo novo nem inventa `turn_discarded`:
+registra `followup_stale_discard_lease_changed` com identificadores operacionais,
+sem conteúdo de contato. Expiração pelo reaper continua sendo um caminho próprio.
+
+A disposição final do catch de `agent-worker/main.ts` usa
+`dispor-job-apos-falha.ts`; sua cobertura importa esse mesmo módulo, sem iniciar
+loops de produção. A migração 0615 é forward-fix, preservando a 0594 aplicada.
+
+O gatilho e a revalidação não desfazem efeito já concluído nem retiram mensagem
+já entregue ao transporte. Não há transação mantida durante HTTP: uma tomada
+que ocorrer entre a última conferência e o início do efeito ainda pode encontrar
+aquela operação em andamento.
+
+Prova: `tests/invariants/assumir-interrompe-turno.test.ts` e
+`tests/invariants/revogacao-canonica-e-descarte-worker.test.ts` no baseline PostgreSQL;
+`tests/unit/dispor-job-apos-falha.test.ts` e `lib/followup/enviar-texto-fixo.test.ts`
+para a disposição real e o envio inline;
+`tests/unit/assumir-interrompe-turno.test.ts`,
+`tests/unit/pessoa-marca-fora-da-grade.test.ts` e
+`tests/unit/envio-por-bolha-confere-uma-vez.test.ts` para a fronteira e os handlers.
+A spec já existente `tests/e2e/inbox-quem-manda.spec.ts` acrescenta a prova de
+revogação no clique Assumir e persistência após Devolver. Modelo real e transporte
+externo são medições separadas.

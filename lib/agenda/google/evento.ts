@@ -77,13 +77,15 @@ export type TipoDeLocal = "in_person" | "phone" | "whatsapp" | "video_link" | "g
  * Quem participa do compromisso, já resolvido pelo chamador.
  *
  * O agendamento guarda `owner_user_id` e `contact_id` — ids, não e-mails. Quem
- * traduz ids em endereços é a rota; esta camada recebe a lista pronta, e por
- * isso continua pura.
+ * traduz ids em endereços é o executor de sincronização; esta camada recebe a
+ * lista pronta, e por isso continua pura.
  *
  * **Lead sem e-mail é o caso comum, não a exceção:** contato que veio do
  * WhatsApp costuma ter só telefone. Ele simplesmente não entra na lista, e o
- * evento continua válido — quem avisa o cliente é a nossa própria cadeia de
- * envio, não o convite do Google.
+ * evento continua válido — o lembrete no WhatsApp é outro caminho. **Lead COM
+ * e-mail entra:** a ficha tem o endereço, e o convite do Google é o que põe o
+ * compromisso na agenda dele. Quem monta a lista (e-mail da ficha + convidado
+ * digitado) é o executor; esta camada só traduz.
  */
 export interface ParticipanteDoAgendamento {
   email: string;
@@ -106,6 +108,36 @@ export interface ParticipanteDoAgendamento {
   aguardandoResposta?: boolean;
 }
 
+/**
+ * A lista de convidados do evento: e-mail da ficha do contato, depois o
+ * convidado digitado na tela. Mesmo endereço duas vezes vira uma linha — o
+ * Google recusa o evento inteiro se `attendees` tiver e-mail repetido.
+ *
+ * Os dois pedem RSVP (`aguardandoResposta`): o convite existe para a pessoa
+ * aceitar na caixa dela, não para gravar um "sim" em nome dela.
+ */
+export function participantesDoAgendamento(input: {
+  contactEmail?: string | null;
+  contactName?: string | null;
+  guestEmail?: string | null;
+}): ParticipanteDoAgendamento[] {
+  const out: ParticipanteDoAgendamento[] = [];
+  const vistos = new Set<string>();
+  const entra = (email: string | null | undefined, nome?: string | null) => {
+    const limpo = email?.trim();
+    if (!limpo) return;
+    const chave = limpo.toLowerCase();
+    if (vistos.has(chave)) return;
+    vistos.add(chave);
+    const p: ParticipanteDoAgendamento = { email: limpo, aguardandoResposta: true };
+    if (nome?.trim()) p.nome = nome.trim();
+    out.push(p);
+  };
+  entra(input.contactEmail, input.contactName);
+  entra(input.guestEmail);
+  return out;
+}
+
 /** O subconjunto de `calendar_appointments` que o Google entende. */
 export interface AgendamentoParaGoogle {
   id: string;
@@ -121,6 +153,23 @@ export interface AgendamentoParaGoogle {
   location_kind: TipoDeLocal;
   location_details?: string | null;
   meeting_url?: string | null;
+  /**
+   * #2063 — o `meeting_url` nasceu do espaço ABERTO (`spaces.create` com
+   * `accessType: OPEN`), não do Meet "confiável" do Calendar.
+   *
+   * É o marcador que o review de 08/10 pediu (caminho 2): SÓ com ele o link
+   * vira `location`. Sem o marcador a projeção continua a de sempre
+   * (`location_details`), que é a regra que protege todo compromisso já
+   * publicado com Meet do Calendar — o link deles nasce DEPOIS da
+   * publicação, e se entrasse na projeção a primeira passada do cron mandaria
+   * um PATCH `sendUpdates=all` para cada compromisso com Meet já publicado,
+   * inclusive passados e com a opção desligada.
+   *
+   * Absente/falso é o estado de TODO agendamento que não passou pelo espaço
+   * aberto, inclusive os antigos: os testes da main montam o agendamento sem
+   * esta chave, e é exatamente o que se espera.
+   */
+  meet_aberto?: boolean | null;
   participantes?: ParticipanteDoAgendamento[];
   /** Quando já existe, é a identidade do evento lá — nunca se gera outra. */
   google_ical_uid?: string | null;
@@ -239,9 +288,28 @@ const STATUS_PARA_GOOGLE: Record<StatusDoAgendamento, "confirmed" | "tentative" 
 /**
  * O que escrever no campo `location`, que é o que a pessoa lê no calendário.
  *
- * `google_meet` não aparece aqui enquanto o link não existe: ele só nasce
- * DEPOIS do insert (o Google o cria), e a segunda passada que o grava é da
- * camada de chamada.
+ * ─── Por que `google_meet` só devolve o link do espaço ABERTO (#2063) ──────
+ *
+ * O link do Meet nasce DEPOIS da publicação — o Google o cria no `POST`
+ * (`conferenceData.createRequest`), ou a API do Meet o devolve quando a
+ * organização ligou a opção de acesso aberto. `location` é o único campo que o
+ * `delta` compara, então É por esta projeção que um link publica depois.
+ *
+ * Mas o link do Meet do Calendar NÃO pode entrar aqui. Ele muda a projeção de
+ * TODO compromisso com Meet já publicado na primeira passada do cron depois da
+ * atualização, e pelo `compare()` cada um vira `publish` → um PATCH
+ * `sendUpdates=all` para os convidados de cada um — inclusive compromissos
+ * passados (a seleção do cron não filtra por data), em toda organização, mesmo
+ * com a opção desligada. Pior: o `comConviteDaFicha` (`sync-model.ts`) só segura
+ * o e-mail da ficha enquanto o compromisso não muda; como a decisão passa a ser
+ * `publish`, ele passaria a anexar o e-mail do cliente da ficha a cada um
+ * desses PATCH — o convite em massa que a decisão do doc 36 (opção b) veta.
+ * Por isso as duas regras da main seguem valendo: sem marcador, `google_meet`
+ * devolve `detalhes`, idêntico ao que sempre foi.
+ *
+ * O espaço ABERTO entra pelo marcador `meet_aberto` (caminho 2 do review de
+ * 08/10). Com ele, o link É o local — mesma régua do `video_link`. Sem link
+ * ainda (primeira passada, antes de nascer) sobra `detalhes`, como sempre.
  */
 function localDoEvento(a: AgendamentoParaGoogle): string | undefined {
   const detalhes = a.location_details?.trim() || "";
@@ -255,7 +323,9 @@ function localDoEvento(a: AgendamentoParaGoogle): string | undefined {
     case "video_link":
       return a.meeting_url?.trim() || detalhes || undefined;
     case "google_meet":
-      return detalhes || undefined;
+      // Só o espaço ABERTO troca o local pelo link (#2063). O Meet do
+      // Calendar continua fora da projeção — ver o cabeçalho desta função.
+      return (a.meet_aberto ? a.meeting_url?.trim() : "") || detalhes || undefined;
   }
 }
 

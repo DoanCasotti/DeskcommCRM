@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # gov-loop G1-02 — baseline install+update gate + RLS isolation invariants.
 #
-# Sobe um Postgres efêmero (pgvector/pgvector:pg17), aplica supabase/baseline.sql
+# Sobe um Postgres efêmero (`pgvector/pgvector`, na major do PISO por padrão —
+# quem quiser outra passa `TEST_DB_IMAGE`, e é assim que a matriz do job
+# `invariants` roda pg15 e pg17), aplica supabase/baseline.sql
 # em modo install e depois em modo update — as DUAS passadas com ON_ERROR_STOP=1,
 # que é o que torna a segunda uma prova de idempotência e não só um "terminou"
 # (issue #184) — e roda a suíte vitest de invariantes (tests/invariants/**)
@@ -11,6 +13,29 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+# ⛔ O `vitest` TEM DE EXISTIR, e a conferência vem ANTES de subir o container.
+#
+# Medido em 2026-09-20: rodar `bash scripts/test-db.sh <arquivo>` (em vez de
+# `pnpm test:db <arquivo>`) sai com **exit 127** e um log que parece sucesso — o
+# container sobe, o baseline aplica em install E update, a saída enche de ✓, e a
+# única linha vermelha é `vitest: comando não encontrado`, perdida no meio.
+# Quem olha o rodapé não acha `Tests N failed` porque a suíte NUNCA RODOU: o
+# instrumento faltou, e a ausência dele se parece com "rodou e passou".
+#
+# É a mesma classe de "instrumento quebrado devolve zero". O `pnpm` põe
+# `node_modules/.bin` no PATH; um `bash` direto não. A guarda não conserta o
+# caminho de propósito — ela RECUSA, dizendo qual comando usar, porque adivinhar
+# o gerenciador de pacotes de quem chamou seria outro palpite.
+#
+# Antes do container: a recusa custa milissegundos em vez de um ciclo inteiro de
+# subida e teardown.
+if ! command -v vitest >/dev/null 2>&1; then
+  echo "ERRO: \`vitest\` não está no PATH — a suíte de invariantes não rodaria." >&2
+  echo "      Use \`pnpm test:db\` (ele põe node_modules/.bin no PATH)." >&2
+  echo "      Você chamou: $0 $*" >&2
+  exit 1
+fi
 BASELINE="$ROOT/supabase/baseline.sql"
 # A PORTA: quem PEDE escolhe; quem não pede deixa o Docker escolher.
 #
@@ -36,14 +61,21 @@ PUBLICACAO="127.0.0.1::5432"
 DONO_WORKTREE="$ROOT"
 DONO_BRANCH="$(git -C "$ROOT" branch --show-current 2>/dev/null || echo desconhecida)"
 CONTAINER="deskcomm-test-db-$$"
+# A MAJOR da imagem: quem PEDE escolhe, quem não pede fica no PISO — mesma
+# forma da PORTA acima, e pelo mesmo motivo (mecanismo, não disciplina de quem
+# chama). A matriz do job `invariants` (ci.yml) passa `TEST_DB_IMAGE` para
+# cobrir pg15 E pg17; a máquina de quem só digita `pnpm test:db` continua
+# medindo a versão mais pobre que dizemos suportar.
+#
 # pg15 e não pg17: o piso real do baseline é pg15 (`security_invoker` em view,
 # baseline.sql:1215). O 17 vinha de 9 `GRANT … MAINTAIN` que o `pg_dump` de um
 # projeto Supabase pg17 emitiu sozinho ao serializar o ACL das tabelas
 # append-only — ninguém os escreveu, e nenhum código do projeto usa o
 # privilégio. Testar no piso é o que faz este gate cobrir a instalação mais
 # pobre que dizemos suportar, em vez da mais rica que temos à mão.
-# Quem guarda o piso é tests/unit/baseline-no-piso-do-postgres.test.ts.
-IMAGE="pgvector/pgvector:pg15"
+# Quem guarda o PADRÃO (pg15 no default, mesmo com a variável no lugar) é
+# tests/unit/baseline-no-piso-do-postgres.test.ts.
+IMAGE="${TEST_DB_IMAGE:-pgvector/pgvector:pg15}"
 # O baseline é aplicado UMA vez, num banco-MOLDE. Cada ARQUIVO de tests/invariants
 # recebe uma cópia nova dele — `create database postgres template $TEMPLATE`, ~0,2s
 # medidos — feita pelo setupFile declarado em vitest.db.config.ts.
@@ -87,7 +119,8 @@ cleanup() {
   echo "==> teardown: removendo container $CONTAINER"
   # `-v` REMOVE OS VOLUMES ANÔNIMOS, e sem ele cada rodada vazava ~68 MB.
   #
-  # `pgvector/pgvector:pg17` declara `VOLUME /var/lib/postgresql/data` no
+  # A imagem `pgvector/pgvector` — em qualquer das tags que este harness usa,
+  # pg15 ou pg17 — declara `VOLUME /var/lib/postgresql/data` no
   # Dockerfile (`docker image inspect … .Config.Volumes`), então todo container
   # criado sem `-v` explícito ganha um volume ANÔNIMO. O `--rm` do `docker run`
   # cuidaria disso ao término normal, mas quem chega primeiro é este trap, e
@@ -146,6 +179,19 @@ psql_install() {
   docker exec -i "$CONTAINER" psql -U postgres -d "$TEMPLATE" -v ON_ERROR_STOP=1 -q -f - "$@"
 }
 
+# Toda aplicação do baseline deixa UMA linha em `test_db.aplicacoes_do_baseline`,
+# no próprio molde. Com isso um invariante PROVA quantas aplicações o banco que ele
+# lê recebeu, em vez de confiar na posição das linhas deste script.
+aplicar_baseline() {
+  psql_install < "$BASELINE"
+  psql_install <<'SQL'
+set client_min_messages = warning;
+create schema if not exists test_db;
+create table if not exists test_db.aplicacoes_do_baseline (aplicada_em timestamptz not null default clock_timestamp());
+insert into test_db.aplicacoes_do_baseline default values;
+SQL
+}
+
 echo "==> prelude: stubs mínimos do Supabase (roles, auth.uid(), extensions)"
 # Um Postgres cru não tem os roles/schemas do Supabase que o baseline (pg_dump) supõe.
 # Criamos os stubs mínimos AQUI — nunca editar o baseline.sql pra isso.
@@ -199,6 +245,52 @@ alter default privileges for role postgres in schema public grant all on functio
 alter default privileges for role postgres in schema public grant all on functions to authenticated;
 alter default privileges for role postgres in schema public grant all on functions to service_role;
 alter default privileges for role postgres in schema public revoke execute on functions from public;
+
+-- O MESMO DEFAULT ACL, PARA TABELAS (issue #887).
+--
+-- O bloco acima cobria só funções, e o gate ficava cego para privilégio das
+-- tabelas do CORPO do dump. Num Supabase de verdade toda tabela criada em
+-- `public` nasce com privilégio total para anon, authenticated e service_role, e
+-- o `GRANT` que o dump enumera depois só ACRESCENTA — não revoga nada. Aqui, sem
+-- estas linhas, a tabela do corpo nascia só com o que o dump concede, e um
+-- invariante do tipo "o papel X não tem o privilégio Y na tabela Z" sobre ela
+-- ficava verde por construção. As tabelas do apêndice nunca tiveram o problema:
+-- nascem depois do `ALTER DEFAULT PRIVILEGES … ON TABLES` que o próprio dump grava.
+-- Foi assim que o `service_role` seguia apagando e reescrevendo linhas de
+-- `api_audit_log` com este gate verde, até a migration 0258.
+--
+-- Medido em 2026-09-17 no `pg_default_acl` de um Supabase local
+-- (supabase/postgres:17.6.1.106):
+--
+--     postgres | public | TABLES | {postgres=arwdDxtm,anon=arwdDxtm,
+--                                   authenticated=arwdDxtm,service_role=arwdDxtm}
+--
+-- `grant all` reproduz as duas majors: o `m` (MAINTAIN) só existe no pg17.
+--
+-- `scripts/test-update-com-dados.sh` extrai este bloco inteiro, então as linhas
+-- abaixo valem para os dois scripts.
+alter default privileges for role postgres in schema public grant all on tables to anon;
+alter default privileges for role postgres in schema public grant all on tables to authenticated;
+alter default privileges for role postgres in schema public grant all on tables to service_role;
+
+-- PERFIL LEGADO DO BOOTSTRAP, TAMBÉM PARA SEQUENCES (Refs #887).
+--
+-- O harness reproduz o perfil ALL observado nas imagens Supabase legadas, para
+-- que um REVOKE do produto seja testado contra uma origem realmente concedida.
+-- Isso NÃO obriga tabelas finais a manter ALL nem desfaz o fechamento escolhido
+-- pelo provedor (decisão219A). É uma régua do instrumento, não uma migration.
+-- Em sequence, ALL concede SELECT, UPDATE e USAGE. nextval aceita USAGE OU
+-- UPDATE; currval/lastval aceitam USAGE OU SELECT. Sem a concessão de sequence,
+-- o modelo fica mais restritivo que o perfil legado e uma negação pode passar
+-- no gate enquanto o papel conseguiria usar a sequence no produto modelado.
+--
+-- Perfil medido em supabase/postgres:15.19.0.004 (26/10/2026):
+-- postgres/public: TABLES arwdDxt, SEQUENCES rwU, FUNCTIONS X nos três papéis.
+-- No PG17, ALL de tabela inclui também MAINTAIN. A sonda abaixo registra o
+-- conjunto inteiro da major, antes de qualquer SQL do baseline.
+alter default privileges for role postgres in schema public grant all on sequences to anon;
+alter default privileges for role postgres in schema public grant all on sequences to authenticated;
+alter default privileges for role postgres in schema public grant all on sequences to service_role;
 
 create schema if not exists auth;
 create schema if not exists extensions;
@@ -310,6 +402,25 @@ echo "==> conferindo que o banco efêmero é o do PRODUTO (antes do baseline)"
 # `-q` é obrigatório: sem ele o stdout leva "CREATE FUNCTION"/"DROP FUNCTION"
 # junto do resultado e a comparação com "t" falha sempre — sonda que reprova o
 # banco certo é tão inútil quanto sonda que aprova o errado.
+# Recibo próprio do harness, anterior ao baseline. O schema test_db já é usado
+# pelos marcadores; sua ACL compartilhada permanece intacta. Só esta tabela nova
+# é fechada aos papéis da API. Os moldes copiam o recibo, não os objetos de sonda.
+psql_install <<'SQL'
+create schema if not exists test_db;
+create table test_db.acl_do_bootstrap (
+  familia text not null,
+  papel text not null,
+  major integer not null,
+  perfil text not null,
+  antes_do_baseline boolean not null,
+  sondas_removidas_antes_do_baseline boolean not null default false,
+  diretos text[] not null,
+  efetivos text[] not null,
+  primary key (familia, papel)
+);
+revoke all on table test_db.acl_do_bootstrap from public, anon, authenticated, service_role;
+SQL
+
 fidelidade="$(docker exec -i "$CONTAINER" psql -U postgres -d "$TEMPLATE" -v ON_ERROR_STOP=1 -q -tA -f - <<'SQL'
 create function public.fn_sonda_fidelidade_do_harness() returns int
   language sql security definer as $fn$ select 1 $fn$;
@@ -318,6 +429,21 @@ select exists (
    where p.proname = 'fn_sonda_fidelidade_do_harness'
      and split_part(a::text, '=', 1) = 'anon'
 );
+
+-- A ACL direta registra a origem; a efetiva também pode vir de herança/PUBLIC.
+insert into test_db.acl_do_bootstrap
+  (familia, papel, major, perfil, antes_do_baseline, diretos, efetivos)
+select 'functions', papel, current_setting('server_version_num')::integer / 10000,
+       'supabase-public-legado-all',
+       to_regclass('public.organizations') is null
+         and to_regclass('test_db.aplicacoes_do_baseline') is null,
+       coalesce((select array_agg(distinct a.privilege_type order by a.privilege_type)
+                   from pg_proc objeto, aclexplode(objeto.proacl) a
+                  where objeto.oid = 'public.fn_sonda_fidelidade_do_harness()'::regprocedure and a.grantee = papel::regrole), '{}'::text[]),
+       coalesce((select array_agg(privilegio order by privilegio)
+                   from unnest(array['EXECUTE']::text[]) privilegios(privilegio)
+                  where has_function_privilege(papel, 'public.fn_sonda_fidelidade_do_harness()', privilegio)), '{}'::text[])
+  from (values ('anon'), ('authenticated'), ('service_role')) papeis(papel);
 drop function public.fn_sonda_fidelidade_do_harness();
 SQL
 )"
@@ -333,9 +459,119 @@ if [ "$fidelidade" != "t" ]; then
 fi
 echo "    ✓ definer nova nasce com grant direto a anon (armadilha do produto reproduzida)"
 
+# A GÊMEA PARA TABELAS (issue #887), no mesmo instante e pelo mesmo motivo da de
+# funções. O próprio baseline grava um `ALTER DEFAULT PRIVILEGES … ON TABLES`,
+# DEPOIS das tabelas do corpo do dump: uma tabela de sonda criada depois do
+# baseline nasceria certa com ou sem as linhas do prelude. Só antes dele a sonda
+# mede o prelude e nada além. Depois do baseline os dois bancos ainda diferem,
+# mas só nas tabelas do corpo cujo GRANT enumerado omite o privilégio:
+#   grep -nE '^GRANT [A-Z,]+ ON TABLE' supabase/baseline.sql | grep -v 'GRANT ALL'
+#
+# Mede os TRÊS papéis, e não só anon como a sonda de funções: o dano que abriu a
+# issue foi do service_role, e uma sonda que olhasse só anon aprovaria o prelude
+# sem a linha dele. DELETE é o privilégio medido porque é o que apaga linha de
+# tabela append-only.
+fidelidade_tabelas="$(docker exec -i "$CONTAINER" psql -U postgres -d "$TEMPLATE" -v ON_ERROR_STOP=1 -q -tA -f - <<'SQL'
+create table public.sonda_fidelidade_do_harness (id int);
+select count(distinct a.grantee)
+  from pg_class c, aclexplode(c.relacl) a
+ where c.oid = 'public.sonda_fidelidade_do_harness'::regclass
+   and a.privilege_type = 'DELETE'
+   and a.grantee in ('anon'::regrole, 'authenticated'::regrole, 'service_role'::regrole);
+
+-- A ACL direta registra a origem; a efetiva também pode vir de herança/PUBLIC.
+insert into test_db.acl_do_bootstrap
+  (familia, papel, major, perfil, antes_do_baseline, diretos, efetivos)
+select 'tables', papel, current_setting('server_version_num')::integer / 10000,
+       'supabase-public-legado-all',
+       to_regclass('public.organizations') is null
+         and to_regclass('test_db.aplicacoes_do_baseline') is null,
+       coalesce((select array_agg(distinct a.privilege_type order by a.privilege_type)
+                   from pg_class objeto, aclexplode(objeto.relacl) a
+                  where objeto.oid = 'public.sonda_fidelidade_do_harness'::regclass and a.grantee = papel::regrole), '{}'::text[]),
+       coalesce((select array_agg(privilegio order by privilegio)
+                   from unnest(array['DELETE','INSERT','REFERENCES','SELECT','TRIGGER','TRUNCATE','UPDATE']::text[] || case when current_setting('server_version_num')::integer >= 170000 then array['MAINTAIN']::text[] else '{}'::text[] end) privilegios(privilegio)
+                  where has_table_privilege(papel, 'public.sonda_fidelidade_do_harness', privilegio)), '{}'::text[])
+  from (values ('anon'), ('authenticated'), ('service_role')) papeis(papel);
+drop table public.sonda_fidelidade_do_harness;
+SQL
+)"
+if [ "$fidelidade_tabelas" != "3" ]; then
+  echo "FATAL: neste banco uma tabela nova em public NÃO nasce com DELETE direto para anon," >&2
+  echo "       authenticated e service_role (achei ${fidelidade_tabelas:-nada} de 3). Num projeto" >&2
+  echo "       Supabase de verdade ela nasce, porque o bootstrap grava um ALTER DEFAULT PRIVILEGES" >&2
+  echo "       … ON TABLES em pg_default_acl antes de qualquer SQL nosso. Sem reproduzir isso," >&2
+  echo "       um invariante que afirme 'o papel X não tem o privilégio Y na tabela Z' sobre uma" >&2
+  echo "       tabela do corpo do dump fica VERDE por construção (issue #887). Restaure as 3 linhas de" >&2
+  echo "       'alter default privileges … on tables' no prelude acima." >&2
+  exit 1
+fi
+echo "    ✓ tabela nova nasce com DELETE direto para anon, authenticated e service_role"
+
+# A terceira família é medida também antes do baseline, em objeto próprio.
+# USAGE direto nos três papéis identifica a concessão do perfil legado. Não é a
+# única forma de autorizar nextval: UPDATE também basta. O recibo guarda SELECT,
+# UPDATE e USAGE, por papel, para não confundir essa sonda com prova de uso.
+fidelidade_sequences="$(docker exec -i "$CONTAINER" psql -U postgres -d "$TEMPLATE" -v ON_ERROR_STOP=1 -q -tA -f - <<'SQL'
+create sequence public.sonda_fidelidade_do_harness_seq;
+select count(distinct a.grantee)
+  from pg_class c, aclexplode(c.relacl) a
+ where c.oid = 'public.sonda_fidelidade_do_harness_seq'::regclass
+   and a.privilege_type = 'USAGE'
+   and a.grantee in ('anon'::regrole, 'authenticated'::regrole, 'service_role'::regrole);
+
+-- A ACL direta registra a origem; a efetiva também pode vir de herança/PUBLIC.
+insert into test_db.acl_do_bootstrap
+  (familia, papel, major, perfil, antes_do_baseline, diretos, efetivos)
+select 'sequences', papel, current_setting('server_version_num')::integer / 10000,
+       'supabase-public-legado-all',
+       to_regclass('public.organizations') is null
+         and to_regclass('test_db.aplicacoes_do_baseline') is null,
+       coalesce((select array_agg(distinct a.privilege_type order by a.privilege_type)
+                   from pg_class objeto, aclexplode(objeto.relacl) a
+                  where objeto.oid = 'public.sonda_fidelidade_do_harness_seq'::regclass and a.grantee = papel::regrole), '{}'::text[]),
+       coalesce((select array_agg(privilegio order by privilegio)
+                   from unnest(array['SELECT','UPDATE','USAGE']::text[]) privilegios(privilegio)
+                  where has_sequence_privilege(papel, 'public.sonda_fidelidade_do_harness_seq', privilegio)), '{}'::text[])
+  from (values ('anon'), ('authenticated'), ('service_role')) papeis(papel);
+drop sequence public.sonda_fidelidade_do_harness_seq;
+SQL
+)"
+if [ "$fidelidade_sequences" != "3" ]; then
+  echo "FATAL: o bootstrap de teste não reproduziu USAGE direto em sequence nos três papéis." >&2
+  echo "       Perfil legado ALL: sem essa origem, o modelo é mais restritivo e pode aprovar" >&2
+  echo "       uma negação que não valeria no produto modelado. Confira as três concessões" >&2
+  echo "       on sequences do prelude; nextval admite USAGE OU UPDATE." >&2
+  exit 1
+fi
+echo "    ✓ sequence nova nasce com USAGE direto para anon, authenticated e service_role"
+
+# A prova de remoção também é anterior ao produto, não apenas ao Vitest.
+psql_install <<'SQL'
+update test_db.acl_do_bootstrap
+   set sondas_removidas_antes_do_baseline =
+       to_regclass('public.sonda_fidelidade_do_harness') is null
+       and to_regclass('public.sonda_fidelidade_do_harness_seq') is null
+       and to_regprocedure('public.fn_sonda_fidelidade_do_harness()') is null
+       and to_regclass('public.organizations') is null
+       and to_regclass('test_db.aplicacoes_do_baseline') is null;
+SQL
+
 echo "==> modo INSTALL: aplicando baseline.sql com ON_ERROR_STOP=1"
-psql_install < "$BASELINE"
+aplicar_baseline
 echo "    ✓ install ok"
+
+# O MOLDE DE APLICAÇÃO ÚNICA: cópia do banco NESTE instante, antes do UPDATE.
+#
+# O `install.sh` aplica o baseline UMA vez. O molde acima recebe DUAS, e a segunda
+# esconde toda diferença entre instalação nova e atualização: o que a primeira
+# passada deixou de fazer por ordem dentro do arquivo, a segunda faz. Invariante
+# que precisa medir a instalação nova lê `$TEST_DB_TEMPLATE_UMA_APLICACAO` e confere
+# em `test_db.aplicacoes_do_baseline` que ela é de fato de UMA aplicação.
+TEMPLATE_UMA_APLICACAO="inv_baseline_uma_aplicacao"
+docker exec "$CONTAINER" psql -U postgres -d template1 -q -v ON_ERROR_STOP=1 \
+  -c "create database $TEMPLATE_UMA_APLICACAO template $TEMPLATE" >/dev/null
+echo "    ✓ molde de aplicação única: $TEMPLATE_UMA_APLICACAO"
 
 # COM `ON_ERROR_STOP=1`, e é isto que torna o passo uma prova (issue #184).
 #
@@ -348,8 +584,17 @@ echo "    ✓ install ok"
 #
 # A flag é a diferença entre "re-aplicar terminou" e "re-aplicar não errou".
 echo "==> modo UPDATE: re-aplicando baseline.sql COM ON_ERROR_STOP=1 (idempotência de verdade)"
-psql_install < "$BASELINE"
+aplicar_baseline
 echo "    ✓ update ok (zero erro na re-aplicação)"
+
+# A conferência de isolamento do KIT, contra o banco que acabou de receber o
+# baseline — a do update.sh deste checkout, a da última release publicada (é a que
+# roda do disco de quem atualiza) e a da v1.63.0, última sem filtro por tabela.
+# Por que essas três: cabeçalho de scripts/conferir-isolamento-do-kit.sh. Sem
+# este passo o #1578 passou pelos cinco checks e travou toda atualização da
+# v1.61.0 à v1.63.0 (issue #1909).
+echo "==> conferência de isolamento do update.sh (checkout, última release, v1.63.0)"
+bash "$ROOT/scripts/conferir-isolamento-do-kit.sh" "$CONTAINER" "$TEMPLATE"
 
 echo "==> banco \`postgres\` a partir do molde (o setupFile o recria a cada arquivo)"
 # Criar aqui, ALÉM do reset por arquivo, tem dois motivos medidos:
@@ -370,6 +615,7 @@ echo "==> invariantes: vitest (tests/invariants) — banco novo por ARQUIVO, ord
 # variável escondida, e sortear é o que impede a próxima colisão de fixture de
 # ficar dormente até alguém renomear um arquivo.
 TEST_DB_CONTAINER="$CONTAINER" TEST_DB_TEMPLATE="$TEMPLATE" TEST_DB_PORT="$PORT" \
+  TEST_DB_TEMPLATE_UMA_APLICACAO="$TEMPLATE_UMA_APLICACAO" \
   vitest run --config vitest.db.config.ts --sequence.shuffle.files=true "$@"
 
 # A RECUSA. Vem depois do vitest e ANTES da palavra "verde", porque o que se

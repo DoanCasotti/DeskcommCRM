@@ -110,7 +110,7 @@ describe("POST /api/v1/pipelines/[id]/stages", () => {
         organization_id: ORG_ID,
         pipeline_id: PIPE,
         name: "Pós-venda",
-        slug: "pos_venda",
+        slug: "pos-venda",
         // A última posição do funil é 4000 (a fixture chega embaralhada): a etapa
         // nova entra DEPOIS dela, não no meio.
         position: 5000,
@@ -140,7 +140,7 @@ describe("POST /api/v1/pipelines/[id]/stages", () => {
     const res = await POST(reqPost({ name: "Retorno" }), ctx);
 
     expect(res.status).toBe(201);
-    expect(db.escritas[0]?.patch).toMatchObject({ slug: "retorno_2" });
+    expect(db.escritas[0]?.patch).toMatchObject({ slug: "retorno-2" });
   });
 
   it("caminho feliz audita pipeline.stage_created", async () => {
@@ -191,6 +191,63 @@ describe("POST /api/v1/pipelines/[id]/stages", () => {
     const res = await POST(reqPost({ name: "Retorno" }), ctx);
     expect(res.status).toBe(500);
     expect(audit).not.toHaveBeenCalled();
+  });
+});
+
+describe("GET /api/v1/pipelines/[id]/stages", () => {
+  /**
+   * ⭐ #2999 — o `select()` do GET deixou de fora `win_probability` e
+   * `avisar_na_central`. O PATCH grava, o GET devolve — a tela de
+   * configurações do funil mostrava os dois campos vazios logo depois de
+   * salvar. O dublê projeta as colunas pedidas de verdade, então omitir o
+   * campo do `.select()` faz este teste falhar na hora de ler `win_probability`
+   * da resposta.
+   */
+  it("traz a chance de fechamento e o aviso de equipe gravados na etapa", async () => {
+    authOk();
+    const stages = funil().map((e) =>
+      e.id === "e2"
+        ? { ...e, win_probability: 40, avisar_na_central: true }
+        : e.id === "e3"
+          ? { ...e, win_probability: 100, avisar_na_central: false }
+          : { ...e, win_probability: null, avisar_na_central: false },
+    );
+    makeDb({ stages });
+    const { GET } = await import("./route");
+    const req = new NextRequest(`http://localhost/api/v1/pipelines/${PIPE}/stages`, { method: "GET" });
+    const res = await GET(req, ctx);
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      data: Array<{ id: string; win_probability: number | null; avisar_na_central: boolean }>;
+    };
+    const porId = Object.fromEntries(body.data.map((e) => [e.id, e]));
+    // A etapa calibrada devolve o valor gravado — se o select omitir a coluna,
+    // o campo vem undefined e o `toEqual` falha.
+    expect(porId["e2"]?.win_probability).toEqual(40);
+    expect(porId["e2"]?.avisar_na_central).toEqual(true);
+    // Ganho vale 100 NA REGRA (não gravado aqui); o valor calibrado viaja igual.
+    expect(porId["e3"]?.win_probability).toEqual(100);
+    // Etapa sem calibração devolve null, não undefined — o select trouxe a coluna.
+    expect(porId["e1"]?.win_probability).toEqual(null);
+  });
+
+  it("respeita o tenant do JWT (etapa de outra org não aparece)", async () => {
+    authOk();
+    const stages = funil().map((e) => ({
+      ...e,
+      organization_id: OUTRA_ORG,
+      win_probability: 50,
+      avisar_na_central: true,
+    }));
+    makeDb({ pipelineOrg: OUTRA_ORG, stages });
+    const { GET } = await import("./route");
+    const req = new NextRequest(`http://localhost/api/v1/pipelines/${PIPE}/stages`, { method: "GET" });
+    const res = await GET(req, ctx);
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { data: Array<{ id: string }> };
+    expect(body.data).toEqual([]);
   });
 });
 

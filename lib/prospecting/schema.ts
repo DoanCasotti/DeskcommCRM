@@ -1,0 +1,311 @@
+import { z } from "zod";
+
+import type { SiteEnrichment } from "@/lib/prospecting/site-classify";
+import type { PreviaSalva } from "@/lib/prospecting/previa";
+
+/**
+ * Os dois números do RITMO da campanha, com os mesmos limites no início e no
+ * ajuste. Moram aqui, uma vez, porque o ajuste de uma campanha pausada
+ * (`adjust_pace`) não pode aceitar um valor que a criação recusaria — nem o
+ * contrário. Sem `.default()`: no ajuste, valor omitido é erro, não "volta para
+ * 10 sem avisar".
+ */
+const LIMITE_DIARIO = z.number().int().min(1).max(50);
+const INTERVALO_MINUTOS = z.number().int().min(5).max(1440);
+
+/** O que a campanha vende, em prioridade. Default = comportamento atual. */
+export const OFERTAS_DA_CAMPANHA = ["site", "automacao_crm", "automacao_n8n"] as const;
+export const ofertasDaCampanhaSchema = z
+  .array(z.enum(OFERTAS_DA_CAMPANHA))
+  .min(1)
+  .max(3)
+  .default(["site"]);
+export type OfertaDaCampanha = (typeof OFERTAS_DA_CAMPANHA)[number];
+
+export const campaignConfigSchema = z
+  .object({
+    agent_id: z.string().uuid(),
+    channel_session_id: z.string().uuid(),
+    pipeline_id: z.string().uuid(),
+    stage_id: z.string().uuid(),
+    qualified_stage_id: z.string().uuid(),
+    instruction: z.string().trim().min(10).max(2000),
+    qualification: z.string().trim().min(10).max(2000),
+    ofertas: ofertasDaCampanhaSchema,
+    daily_limit: LIMITE_DIARIO.default(10),
+    interval_minutes: INTERVALO_MINUTOS.default(15),
+    legal_basis_ref: z.string().trim().min(3).max(500),
+    // QUANDO a empresa entra no CRM. `on_start`: contato, negócio e conversa de TODA a fila
+    // nascem ao iniciar (o comportamento de sempre). `on_send`: cada empresa nasce só na
+    // vez de ser abordada. O padrão é `on_start` — configuração gravada antes desta chave
+    // existir segue funcionando igual, sem ninguém editar nada.
+    funnel_entry: z.enum(["on_start", "on_send"]).default("on_start"),
+    // QUANDO a saída ("responda PARAR") é oferecida — depende da estratégia de abordagem.
+    // `first_message`: na abertura (o padrão, o de sempre). `second_message`: a abertura
+    // não faz oferta e a saída vai na mensagem seguinte. Não há modo da 3ª (doc 170): só
+    // UMA mensagem sem saída, e é a única que a instrução ao modelo segura sem trava. Em
+    // TODOS os modos a palavra continua bloqueando (lib/channels/pos-entrada.ts).
+    // O padrão é `first_message`: configuração gravada antes desta chave existir segue
+    // igual, sem ninguém editar nada.
+    exit_offer: z.enum(["first_message", "second_message"]).default("first_message"),
+  })
+  .strict();
+export const searchSchema = z
+  .object({
+    name: z.string().trim().min(2).max(120),
+    niche: z.string().trim().min(2).max(120),
+    location: z.string().trim().min(2).max(160),
+    limit: z.number().int().min(1).max(100).default(20),
+    budget_usd: z.number().min(0.5).max(10).default(1),
+    enrich: z.boolean().default(true),
+    // Preparo automático (B2) — ver `opcoes-do-preparo.ts`. Ligados por padrão NA BUSCA
+    // NOVA (que grava as duas chaves); campanha antiga, sem a chave, não gera prévia.
+    avaliar_site: z.boolean().default(true),
+    gerar_previa: z.boolean().default(true),
+  })
+  .strict();
+export const prospectingInputSchema = z.discriminatedUnion("action", [
+  z
+    .object({ action: z.literal("configure"), api_key: z.string().trim().min(10).max(500) })
+    .strict(),
+  z
+    .object({ action: z.literal("search"), search: searchSchema, request_id: z.string().uuid() })
+    .strict(),
+  z
+    .object({ action: z.literal("start"), id: z.string().uuid(), config: campaignConfigSchema })
+    .strict(),
+  z.object({ action: z.literal("pause"), id: z.string().uuid() }).strict(),
+  z.object({ action: z.literal("resume"), id: z.string().uuid() }).strict(),
+  // O ÚNICO pedaço da configuração que se edita depois de iniciada. Estrito: conexão,
+  // agente, funil, base legal e instrução não passam por aqui, e um campo a mais é 422.
+  z
+    .object({
+      action: z.literal("adjust_pace"),
+      id: z.string().uuid(),
+      daily_limit: LIMITE_DIARIO,
+      interval_minutes: INTERVALO_MINUTOS,
+    })
+    .strict(),
+  z
+    .object({
+      action: z.literal("select"),
+      id: z.string().uuid(),
+      candidate_ids: z.array(z.string().uuid()).min(1).max(5000),
+      selected: z.boolean(),
+    })
+    .strict(),
+  // Marcar e desmarcar DEPOIS de iniciada, com a campanha pausada. Ação própria e não uma
+  // ampliação do `select`: aquele só vale em rascunho, sobre `status='new'`, e as duas fases
+  // mexem em estados diferentes (aqui, `queued` e o "não abordado" que o operador escolheu).
+  z
+    .object({
+      action: z.literal("select_in_queue"),
+      id: z.string().uuid(),
+      candidate_ids: z.array(z.string().uuid()).min(1).max(5000),
+      selected: z.boolean(),
+    })
+    .strict(),
+  z.object({ action: z.literal("discard_unselected"), id: z.string().uuid() }).strict(),
+  // Reanálise manual da auditoria (spec 24): reescreve `data.site` na hora.
+  // Fechada a token (fora de ACOES_ABERTAS_AO_TOKEN): exige sessão.
+  z
+    .object({
+      action: z.literal("reanalisar_site"),
+      id: z.string().uuid(),
+      candidate_ids: z.array(z.string().uuid()).min(1).max(50),
+    })
+    .strict(),
+  // Prévia da abordagem (spec 24): gera a copy SEM enviar. Somente leitura —
+  // não audita (sem mutação); o custo aparece em `llm_calls`. Fora da allowlist.
+  z
+    .object({
+      action: z.literal("prever_abordagem"),
+      id: z.string().uuid(),
+      candidate_id: z.string().uuid(),
+    })
+    .strict(),
+  // Verificação de site sob demanda (spec 24): enriquece o próximo lote da
+  // campanha AGORA, em vez de esperar o tick. Fechada a token: quem dispara
+  // gasta rede e é uma pessoa revisando a fila.
+  z.object({ action: z.literal("verificar_sites"), id: z.string().uuid() }).strict(),
+  // "Completar fichas" (spec 26 §3.3): acrescenta à ficha dos contatos JÁ EXISTENTES
+  // da campanha o link que falta (o que a pessoa digitou fica). Fechada a token:
+  // escreve no CRM, e quem decide é uma pessoa com sessão.
+  z.object({ action: z.literal("completar_fichas"), id: z.string().uuid() }).strict(),
+]);
+export type CampaignConfig = z.infer<typeof campaignConfigSchema>;
+export type CampaignPace = Pick<CampaignConfig, "daily_limit" | "interval_minutes">;
+export type SearchInput = z.infer<typeof searchSchema>;
+/**
+ * O que a campanha importada de planilha guarda em `prospecting_campaigns.search` (jsonb).
+ * `avaliar_site`/`gerar_previa` são as mesmas chaves da busca (`opcoesDoPreparo`); `name` e
+ * `niche` são os que o resto da esteira lê. NÃO guarda o nome do arquivo (pode conter nome
+ * de pessoa) nem linha de dado. `origem_da_lista` é o "de onde veio esta lista" da LGPD.
+ */
+export interface BuscaDaPlanilha {
+  origem: "planilha";
+  name: string;
+  niche: string;
+  arquivo_bytes: number;
+  linhas: number;
+  origem_da_lista: string;
+  avaliar_site: boolean;
+  gerar_previa: boolean;
+}
+const CAIXA_DO_FORMULARIO = z
+  .enum(["true", "false"])
+  .default("true")
+  .transform((v) => v === "true");
+/**
+ * Os campos de TEXTO do formulário multipart da importação (o arquivo vai à parte). Estrito:
+ * campo a mais — `organization_id` inclusive — é 422, nada daqui vira organização.
+ * `gerar_previa` só vale com `avaliar_site` (sem veredito do site não há em que ancorá-la).
+ */
+export const importarPlanilhaCamposSchema = z
+  .object({
+    request_id: z.string().uuid(),
+    name: z.string().trim().min(2).max(120),
+    niche: z.string().trim().min(2).max(120),
+    origem_da_lista: z.string().trim().min(3).max(500),
+    avaliar_site: CAIXA_DO_FORMULARIO,
+    gerar_previa: CAIXA_DO_FORMULARIO,
+  })
+  .strict()
+  .transform((c) => ({ ...c, gerar_previa: c.avaliar_site && c.gerar_previa }));
+export type ImportarPlanilhaCampos = z.output<typeof importarPlanilhaCamposSchema>;
+/** Motivo gravado quando o operador desmarca uma empresa na preparação da campanha. */
+export const RAZAO_NAO_SELECIONADA = "Não selecionada pelo operador.";
+/**
+ * Decisão da ativação: um candidato que o operador não marcou nunca entra na
+ * fila — vai direto para "Não abordado", com o motivo descritivo. O padrão é
+ * `selected=true` (a escolha nasce marcada), então quem não mexer nada muda.
+ */
+export function razaoDeAbordarSelecionado(selected: boolean): string | null {
+  return selected ? null : RAZAO_NAO_SELECIONADA;
+}
+export interface Prospect {
+  key: string;
+  name: string;
+  phone: string | null;
+  website: string | null;
+  category: string | null;
+  address: string | null;
+  maps_url: string | null;
+  rating: number | null;
+  reviews: number | null;
+  emails: string[];
+  socials: string[];
+  /** Veredito do enriquecimento de site (spec 24). Ausente = pendente. */
+  site?: SiteEnrichment | null;
+  /**
+   * A prévia da abordagem que a tela gerou e guardou (B1). Só vale enquanto a
+   * auditoria em que ela se apoiou continuar de pé (`previaValida`); ausente ou
+   * vencida, o envio escreve do zero.
+   */
+  previa?: PreviaSalva | null;
+}
+
+/**
+ * Telefone do candidato em E.164, ou `null`.
+ *
+ * O provedor de Mapas devolve o número como a empresa o publicou: brasileiro sem
+ * código de país (`(11) 99999-0000`), brasileiro em E.164 (`+55 11 99999-0000`) ou
+ * estrangeiro em E.164 (`+351 912 345 678`). O defeito #3080 mediu o custo de
+ * recusar o terceiro caso: três buscas em Portugal, 59 empresas achadas e nenhuma
+ * abordável, porque todo número que não fosse `+55` virava `null`.
+ *
+ * Sem `+` o país não está no dado, e adivinhar continua fora: só o ramo brasileiro
+ * (10 ou 11 dígitos) prefixa `55`, como antes. Com `+` e OUTRO código de país, o
+ * país está escrito no próprio número — passa, nos 8 a 15 dígitos que o E.164
+ * admite. `55` fica de fora desse ramo de propósito: brasileiro truncado (com `+`,
+ * mas curto demais) não vira estrangeiro. Qualquer outra coisa segue `null`.
+ */
+export function normalizeProspectPhone(raw: string): string | null {
+  let digits = raw.replace(/\D/g, "");
+  if (!raw.startsWith("+") && [10, 11].includes(digits.length)) digits = `55${digits}`;
+  if (/^55\d{10,11}$/.test(digits)) return `+${digits}`;
+  if (raw.startsWith("+") && /^\d{8,15}$/.test(digits) && !digits.startsWith("55")) {
+    return `+${digits}`;
+  }
+  return null;
+}
+
+export function normalizeProspect(item: Record<string, unknown>): Prospect | null {
+  const str = (key: string, limit = 500) =>
+    typeof item[key] === "string" ? (item[key] as string).trim().slice(0, limit) : null;
+  const name = str("title", 200);
+  const place = str("placeId", 200);
+  if (!name || !place || item.permanentlyClosed === true || item.temporarilyClosed === true)
+    return null;
+  const raw = str("phoneUnformatted") || str("phone") || "";
+  const phone = normalizeProspectPhone(raw);
+  const urls = (key: string) =>
+    Array.isArray(item[key])
+      ? (item[key] as unknown[])
+          .filter((v): v is string => typeof v === "string" && v.length < 500)
+          .slice(0, 5)
+      : [];
+  return {
+    key: place,
+    name,
+    phone,
+    website: str("website"),
+    category: str("categoryName"),
+    address: str("address"),
+    maps_url: str("url"),
+    rating: typeof item.totalScore === "number" ? item.totalScore : null,
+    reviews: typeof item.reviewsCount === "number" ? item.reviewsCount : null,
+    emails: urls("emails"),
+    socials: ["instagrams", "facebooks", "linkedIns"].flatMap(urls),
+  };
+}
+
+export function safePublicLink(value: string | null): string | undefined {
+  try {
+    const u = new URL(value ?? "");
+    return ["http:", "https:"].includes(u.protocol) ? u.href : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Public business context shared by prospecting and the Inbox; no raw provider payload. */
+export const siteEnrichmentSchema = z.object({
+  ver: z.literal(1),
+  classe: z.enum(["agregador", "sem-site", "site-ok", "site-ruim", "ssl-invalido", "fora-do-ar"]),
+  problemas: z.array(z.string().max(60)).max(20),
+  checklist: z.object({
+    tem: z.array(z.string().max(30)).max(12),
+    falta: z.array(z.string().max(30)).max(12),
+  }),
+  final_url: z.string().max(500).nullable(),
+  http_status: z.number().int().min(100).max(599).nullable(),
+  tempo_ms: z.number().int().min(0).max(60000),
+  conteudo_resumo: z.string().max(1500).nullable(),
+  pagespeed: z
+    .object({
+      nota: z.number().int().min(0).max(100),
+      lcp: z.string().max(30).nullable(),
+      medida_em: z.string().max(40),
+    })
+    .nullable(),
+  verificado_em: z.string().max(40),
+  // Com default para as linhas escritas antes do campo existir: ausência =
+  // definitivo antigo, nunca provisório fantasma.
+  provisorio: z.boolean().default(false),
+  tentativas: z.number().int().min(0).max(99).default(0),
+});
+export type SiteEnrichmentValidado = z.infer<typeof siteEnrichmentSchema>;
+export const prospectEnrichmentSchema = z.object({
+  name: z.string().max(200),
+  category: z.string().max(500).nullable(),
+  address: z.string().max(500).nullable(),
+  website: z.string().max(500).nullable(),
+  maps_url: z.string().max(500).nullable(),
+  rating: z.number().min(0).max(5).nullable(),
+  reviews: z.number().int().nonnegative().nullable(),
+  emails: z.array(z.string().max(500)).max(5),
+  socials: z.array(z.string().max(500)).max(15),
+  site: siteEnrichmentSchema.optional(),
+});
+export type ProspectEnrichment = z.infer<typeof prospectEnrichmentSchema>;

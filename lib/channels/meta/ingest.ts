@@ -23,12 +23,33 @@
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+import { audit } from "@/lib/audit";
+import { pausarIaPorAtendimentoManual } from "@/lib/escalacao/atendimento-manual";
+import { estamparAtribuicaoDoContato, metadataDoAnuncio } from "@/lib/leads/atribuicao-de-anuncio";
+import { ancoraCtwaDaMensagem } from "@/lib/leads/prova-meta-lead-submitted";
+import {
+  ehNumeroInternoDeAviso,
+  registrarMensagemIgnorada,
+} from "@/lib/escalacao/numero-interno-de-aviso";
+import { consumirRespostaDoSuporteNoWhatsApp } from "@/lib/escalacao/resposta-whatsapp-ao-caso";
+import { logger } from "@/lib/logger";
+
 import { ARCHIVED_AT, queryTolerantToMissingArchived } from "../archived";
+import { extrairAtribuicaoMeta } from "../atribuicao-de-anuncio-oficial";
 import { aplicarEfeitosPosEntrada } from "../pos-entrada";
 import { encontrarContatoPorTelefone } from "../contato-por-telefone";
+import { marcarConversaComMensagem } from "../marcar-conversa";
+import { gravarReacaoDeMensagem } from "../reacao";
 import { canonicalPhoneBR, phoneLookupVariants } from "../phone-variants";
 import type { ChannelTenantScope } from "../types";
-import type { InboundMessageEvent } from "./webhook";
+import { nomeDeArquivoLimpo } from "@/lib/messaging/media/nome-de-arquivo";
+import { previaDaMensagem } from "@/lib/messaging/previa-da-mensagem";
+import type {
+  AppContactSyncEvent,
+  InboundMessageEvent,
+  OutboundEchoEvent,
+  ReactionEvent,
+} from "./webhook";
 
 type Admin = SupabaseClient;
 
@@ -36,6 +57,29 @@ export type IngestOutcome =
   | { status: "ingested"; messageId: string; conversationId: string }
   | { status: "duplicate" }
   | { status: "no_session" }
+  /**
+   * Recusa DELIBERADA, e por isso um status próprio.
+   *
+   * `duplicate` diria "já ingerimos esta" e `failed` diria "tentamos e não deu"
+   * — as duas são mentiras sobre o que aconteceu, e as duas mandam quem lê o log
+   * procurar no lugar errado. Hoje o único motivo é `numero_interno_de_aviso`:
+   * a mensagem veio do número que a própria equipe usa para receber os avisos de
+   * atendimento, e por desenho nada que venha dele vira contato, conversa ou
+   * despacho do agente. O `reason` existe para o próximo motivo não precisar de
+   * um status novo.
+   *
+   * O chamador (a rota do webhook) só ramifica em `failed`/`no_session`, então
+   * este valor entra sem mexer em decisão nenhuma lá.
+   */
+  | { status: "ignored"; reason: string }
+  /**
+   * Contato do ENDEREÇO do app gravado no CRM (coexistência, `smb_app_state_sync`).
+   *
+   * Status próprio porque não há mensagem nem conversa para reportar: o que
+   * aconteceu foi uma escrita em `contacts`, e dizer `ingested` aqui seria dizer
+   * que entrou coisa na caixa de entrada. `contactId` é o da linha gravada.
+   */
+  | { status: "synced"; contactId: string }
   | { status: "failed"; reason: string };
 
 /**
@@ -105,35 +149,86 @@ async function findContactByVariants(
   return encontrarContatoPorTelefone(admin as never, orgId, waId);
 }
 
-/** Prévia curta para a lista de conversas. Mídia vira rótulo, nunca URL. */
+/**
+ * O corpo que a MESMA mensagem grava — é o que o INSERT destas duas funções
+ * escreve em `messages.body`. A prévia lê o mesmo valor, para a igualdade de
+ * prévia das rotas de ocultar/apagar (`app/api/v1/messages/[id]/hide/route.ts` e
+ * `app/api/v1/messages/[id]/route.ts`, que remontam a prévia com
+ * `previaDaMensagem(message.body, message.type)` e comparam com a coluna) fechar.
+ */
+function corpoDaPrevia(e: InboundMessageEvent | OutboundEchoEvent): string | null {
+  return e.type === "contact" ? (e.sharedContact?.name ?? e.text) : e.text;
+}
+
+/**
+ * Prévia curta para a lista de conversas, pela MESMA régua dos outros canais —
+ * `previaDaMensagem` (`lib/messaging/previa-da-mensagem.ts`): texto e legenda até
+ * 280, o nome do tipo em português (`ROTULO_DO_TIPO`) para mídia SEM legenda, e
+ * o cartão vira `Contato: <nome>`.
+ *
+ * A régua local que vivia aqui ("📷 Imagem", "🎵 Áudio") fazia a lista misturar
+ * vocabulários entre canais e — pior — gravava uma prévia que as rotas de
+ * ocultar/apagar não reconheciam: elas reconstroem a prévia com
+ * `previaDaMensagem`, então a igualdade nunca fechava — para mídia com ou sem
+ * legenda, texto acima de 120 caracteres e cartão de contato.
+ */
 function previewOf(e: InboundMessageEvent): string {
-  if (e.type === "text") return (e.text ?? "").slice(0, 120);
-  if (e.type === "contact") return e.sharedContact?.name ? `👤 ${e.sharedContact.name}` : "[contato]";
-  if (e.type === "audio") return e.media?.voice ? "🎤 Mensagem de voz" : "🎵 Áudio";
-  if (e.type === "image") return "📷 Imagem";
-  if (e.type === "video") return "🎬 Vídeo";
-  if (e.type === "document") return "📎 Documento";
-  return `[${e.type}]`;
+  return previaDaMensagem(corpoDaPrevia(e), e.type);
 }
 
 export async function ingestMetaInbound(
   admin: Admin,
   e: InboundMessageEvent,
-  dono: ChannelTenantScope,
+  dono: ChannelTenantScope & {
+    /**
+     * A sessão JÁ resolvida pelo token do webhook, por quem chama. É o caminho
+     * do canal parceiro que espelha a Cloud API (Datafy): ele entra pela rota
+     * genérica, e a coluna do número oficial é NULL para ele — buscar por ela
+     * nunca acharia a sessão. Quem passa isto já conferiu que o número é dela.
+     */
+    channelSessionId?: string;
+  },
 ): Promise<IngestOutcome> {
   let sessao: { id: string; organization_id: string } | null;
-  try {
-    sessao = await sessionByPhoneNumberId(admin, dono.organizationId, e.phoneNumberId);
-  } catch (err) {
-    // Falhar FECHADO na ação (nada é gravado) e ABERTO na informação: o motivo
-    // sobe como `failed` e o chamador o escreve no log e no corpo.
-    return { status: "failed", reason: err instanceof Error ? err.message : "sessao_do_numero" };
+  if (dono.channelSessionId) {
+    sessao = { id: dono.channelSessionId, organization_id: dono.organizationId };
+  } else {
+    try {
+      sessao = await sessionByPhoneNumberId(admin, dono.organizationId, e.phoneNumberId);
+    } catch (err) {
+      // Falhar FECHADO na ação (nada é gravado) e ABERTO na informação: o motivo
+      // sobe como `failed` e o chamador o escreve no log e no corpo.
+      return { status: "failed", reason: err instanceof Error ? err.message : "sessao_do_numero" };
+    }
   }
   // Sem sessão: a mensagem é de um número que não administramos. Devolver 200 (o
   // chamador faz isso) evita a Meta re-entregar em loop algo que nunca vamos aceitar.
   if (!sessao) return { status: "no_session" };
 
   const orgId = sessao.organization_id;
+
+  // ── O NÚMERO INTERNO DE AVISOS NÃO VIRA ATENDIMENTO ─────────────────────
+  //
+  // Antes do upsert do contato, que é o que importa: é o nascimento da conversa
+  // que dispara o pedido de rodízio pelo banco. O identificador aqui chega só em
+  // dígitos (`wa_id`), e o `+` é o que a comparação por variantes do nono dígito
+  // espera — quem casa é a mesma regra dos outros dois ingestores.
+  if (
+    await consumirRespostaDoSuporteNoWhatsApp(admin, {
+      organizationId: orgId,
+      channelSessionId: sessao.id,
+      identidade: {
+        kind: "phone",
+        phone: `+${e.from.replace(/\D/g, "")}`,
+        lid: null,
+      },
+      direction: "inbound",
+      texto: e.text,
+      externalId: e.externalId,
+    })
+  ) {
+    return { status: "ignored", reason: "numero_interno_de_aviso" };
+  }
 
   const existente = await findContactByVariants(admin, orgId, e.from);
   // Celular BR grava COM o nono. A busca acima já reencontra a grafia sem o 9;
@@ -157,6 +252,12 @@ export async function ingestMetaInbound(
     return { status: "failed", reason: `contato: ${erroContato?.message ?? "sem id"}` };
   }
 
+  // Clique em anúncio: o `referral` vem na própria mensagem e só nela. Estampar
+  // AQUI, antes de `aplicarEfeitosPosEntrada`, porque é lá que o lead nasce. A
+  // guarda de primeiro toque fica no banco, então a re-entrega não reescreve.
+  const atribuicao = extrairAtribuicaoMeta(e.referral);
+  if (atribuicao) await estamparAtribuicaoDoContato(admin, orgId, contactId as string, atribuicao);
+
   const { data: conversationId, error: erroConversa } = await admin.rpc(
     "fn_upsert_wa_conversation" as never,
     { p_org: orgId, p_contact: contactId as string, p_session: sessao.id } as never,
@@ -165,6 +266,7 @@ export async function ingestMetaInbound(
     return { status: "failed", reason: `conversa: ${erroConversa?.message ?? "sem id"}` };
   }
 
+  const nomeDoArquivo = nomeDeArquivoLimpo(e.media?.filename);
   const { data: inserida, error: erroInsert } = await admin
     .from("messages")
     .insert({
@@ -187,8 +289,17 @@ export async function ingestMetaInbound(
       media_mime: e.media?.mime ?? null,
       sent_at: e.sentAt.toISOString(),
       metadata: {
+        ...ancoraCtwaDaMensagem(atribuicao),
         ...(e.media ? { meta_media_id: e.media.id, voice: e.media.voice } : {}),
+        // Nome original do anexo (#2613) — o cartão do Inbox lê esta chave.
+        // Só quando há nome (a Cloud API manda `filename` só em `document`):
+        // chave vazia não nasce, e o INSERT é o único caminho que escreve
+        // `metadata` aqui, então nada já gravado é sobrescrito.
+        ...(nomeDoArquivo ? { media_filename: nomeDoArquivo } : {}),
         ...(e.sharedContact ? { shared_contact: e.sharedContact } : {}),
+        // O anúncio DESTA mensagem, não só o primeiro do contato: é o que mostra
+        // na conversa que a pessoa voltou por outro anúncio. Ver `metadataDoAnuncio`.
+        ...metadataDoAnuncio(atribuicao),
       },
     })
     .select("id")
@@ -200,16 +311,24 @@ export async function ingestMetaInbound(
     return { status: "failed", reason: `mensagem: ${erroInsert.message}` };
   }
 
-  // Carimba a conversa — é ISTO que move `last_inbound_at` e abre a janela de 24h.
-  // Falha aqui não derruba a ingestão (a mensagem já entrou), mas o preview e a
-  // janela ficariam desatualizados, então o erro sobe como `failed` parcial no log
-  // do chamador em vez de sumir.
-  await admin.rpc("fn_mark_conversation_message" as never, {
-    p_conv: conversationId as string,
-    p_direction: "inbound",
-    p_preview: previewOf(e),
-    p_at: e.sentAt.toISOString(),
-  } as never);
+  // Carimba a conversa — é ISTO que move `last_message_at`, `last_inbound_at` e
+  // abre a janela de 24h. Falha aqui não derruba a ingestão (a mensagem já
+  // entrou), mas a prévia, a ordenação da Inbox e a janela ficariam paradas.
+  //
+  // ⚠️ O RETORNO ERA IGNORADO, e o comentário que estava aqui afirmava o
+  // contrário — "o erro sobe como `failed` parcial no log do chamador em vez de
+  // sumir". Sumia: era um `await` sem destino para o `{ error }`. O canal
+  // oficial era o pior dos três justamente onde a falha dói mais, porque é ele
+  // que tem janela de 24h — e conversa sem carimbo é janela que ninguém vê
+  // fechar. Quem decide o que fazer com a falha agora é uma função só.
+  await marcarConversaComMensagem(admin, {
+    organizationId: orgId,
+    conversationId: conversationId as string,
+    direction: "inbound",
+    preview: previewOf(e),
+    at: e.sentAt.toISOString(),
+    canal: "meta",
+  });
 
   const messageId = (inserida as { id: string } | null)?.id ?? "";
   if (e.media && messageId) {
@@ -243,5 +362,382 @@ export async function ingestMetaInbound(
     status: "ingested",
     messageId,
     conversationId: conversationId as string,
+  };
+}
+
+/** Prévia do eco: a MESMA régua da recebida (`previaDaMensagem`), com a legenda no lugar do texto. */
+function previewOfEcho(e: OutboundEchoEvent): string {
+  return previaDaMensagem(corpoDaPrevia(e), e.type);
+}
+
+/**
+ * Mensagem que a EMPRESA mandou pelo app WhatsApp Business (coexistência).
+ *
+ * É o `fromMe` do canal por QR (`handleOutboundFromUserPhone` em
+ * `lib/waha/ingest.ts`) no canal oficial, e segue as mesmas decisões:
+ *
+ * - **Contato = destinatário (`to`).** O nome NÃO vem do eco — o eco não traz o
+ *   perfil do cliente, e o `coalesce` do `fn_upsert_wa_contact` congelaria
+ *   qualquer nome errado.
+ * - **Gravada como saída `external_device`**, para a conversa ficar inteira na
+ *   tela e nos relatórios que já separam "respondido por humano fora do CRM".
+ * - **A IA para nesta conversa** (`pausarIaPorAtendimentoManual`): uma pessoa
+ *   respondeu pelo celular, e o agente não pode responder por cima.
+ *
+ * Diferente do QR, aqui NÃO existe o eco do nosso próprio envio: a Meta só
+ * entrega em `smb_message_echoes` o que saiu PELO APP. Mesmo assim, se o
+ * `wamid` já existir (23505), a função sai ANTES de pausar a IA — calar o
+ * agente é a decisão estrita, e na dúvida ela não acontece.
+ */
+export async function ingestMetaEcho(
+  admin: Admin,
+  e: OutboundEchoEvent,
+  dono: ChannelTenantScope & {
+    /** Ver `ingestMetaInbound`: sessão já resolvida pelo token (canal parceiro). */
+    channelSessionId?: string;
+  },
+): Promise<IngestOutcome> {
+  let sessao: { id: string; organization_id: string } | null;
+  if (dono.channelSessionId) {
+    sessao = { id: dono.channelSessionId, organization_id: dono.organizationId };
+  } else {
+    try {
+      sessao = await sessionByPhoneNumberId(admin, dono.organizationId, e.phoneNumberId);
+    } catch (err) {
+      return { status: "failed", reason: err instanceof Error ? err.message : "sessao_do_numero" };
+    }
+  }
+  if (!sessao) return { status: "no_session" };
+
+  const orgId = sessao.organization_id;
+  const telefone = `+${e.to.replace(/\D/g, "")}`;
+
+  // O número interno de avisos não vira conversa — mesma guarda da recebida.
+  if (await ehNumeroInternoDeAviso(admin, orgId, { kind: "phone", phone: telefone, lid: null })) {
+    await registrarMensagemIgnorada(admin, orgId, { direction: "outbound", sessionId: sessao.id });
+    return { status: "ignored", reason: "numero_interno_de_aviso" };
+  }
+
+  const existente = await findContactByVariants(admin, orgId, e.to);
+  const phone = existente?.phone_number
+    ? canonicalPhoneBR(existente.phone_number)
+    : canonicalPhoneBR(telefone);
+
+  const { data: contactId, error: erroContato } = await admin.rpc(
+    "fn_upsert_wa_contact" as never,
+    {
+      p_org: orgId,
+      p_kind: "phone",
+      p_phone: phone,
+      p_lid: null,
+      p_chat_id: e.to,
+      p_notify: null,
+    } as never,
+  );
+  if (erroContato || !contactId) {
+    return { status: "failed", reason: `contato: ${erroContato?.message ?? "sem id"}` };
+  }
+
+  const { data: conversationId, error: erroConversa } = await admin.rpc(
+    "fn_upsert_wa_conversation" as never,
+    { p_org: orgId, p_contact: contactId as string, p_session: sessao.id } as never,
+  );
+  if (erroConversa || !conversationId) {
+    return { status: "failed", reason: `conversa: ${erroConversa?.message ?? "sem id"}` };
+  }
+
+  const nomeDoArquivo = nomeDeArquivoLimpo(e.media?.filename);
+  const { data: inserida, error: erroInsert } = await admin
+    .from("messages")
+    .insert({
+      organization_id: orgId,
+      conversation_id: conversationId as string,
+      channel_session_id: sessao.id,
+      contact_id: contactId as string,
+      direction: "outbound",
+      status: "sent",
+      sent_via: "external_device",
+      type: e.type === "text" ? "text" : e.type,
+      body: e.type === "contact" ? (e.sharedContact?.name ?? e.text) : e.text,
+      external_id: e.externalId,
+      media_url: e.media ? `meta-media:${e.media.id}` : null,
+      media_mime: e.media?.mime ?? null,
+      sent_at: e.sentAt.toISOString(),
+      metadata: {
+        from_business_app: true,
+        ...(e.media ? { meta_media_id: e.media.id, voice: e.media.voice } : {}),
+        // Mesma regra da recebida (#2613): nome só quando há nome.
+        ...(nomeDoArquivo ? { media_filename: nomeDoArquivo } : {}),
+        ...(e.sharedContact ? { shared_contact: e.sharedContact } : {}),
+      },
+    })
+    .select("id")
+    .maybeSingle();
+
+  if (erroInsert) {
+    if (erroInsert.code === "23505") return { status: "duplicate" };
+    return { status: "failed", reason: `mensagem: ${erroInsert.message}` };
+  }
+
+  await marcarConversaComMensagem(admin, {
+    organizationId: orgId,
+    conversationId: conversationId as string,
+    direction: "outbound",
+    preview: previewOfEcho(e),
+    at: e.sentAt.toISOString(),
+    canal: "meta",
+  });
+
+  const messageId = (inserida as { id: string } | null)?.id ?? "";
+  if (e.media && messageId) {
+    const { error: erroPersistencia } = await admin.rpc("emit_event" as never, {
+      p_event_type: "media.persist_requested",
+      p_entity_kind: "message",
+      p_entity_id: messageId,
+      p_payload: { message_id: messageId, conversation_id: conversationId as string },
+      p_metadata: { source: "meta_webhook_echo" },
+      p_organization_id: orgId,
+    } as never);
+    if (erroPersistencia) {
+      logger.warn("[meta.ingest] eco: emit media.persist_requested falhou", {
+        organization_id: orgId,
+        erro: erroPersistencia.message,
+      });
+    }
+  }
+
+  await pausarIaPorAtendimentoManual(admin, {
+    organizationId: orgId,
+    conversationId: conversationId as string,
+    canal: "meta",
+  });
+
+  await audit({
+    action: "message.sent",
+    organizationId: orgId,
+    resourceType: "message",
+    // Mesma forma do `message.sent` do canal por QR: o id vai no metadata.
+    metadata: {
+      message_id: messageId || null,
+      conversation_id: conversationId as string,
+      type: e.type,
+      external_id: e.externalId,
+      from_business_app: true,
+    },
+  });
+
+  return { status: "ingested", messageId, conversationId: conversationId as string };
+}
+
+/**
+ * Contato que a empresa criou ou renomeou no ENDEREÇO do app WhatsApp Business
+ * (coexistência), entregue pela Meta no campo `smb_app_state_sync`.
+ *
+ * O que FAZ: garante que o contato exista no CRM, pela mesma resolução da
+ * recebida e do eco — `findContactByVariants` (variantes do número, senão a
+ * mesma pessoa vira dois cadastros) e `fn_upsert_wa_contact` — e guarda **o
+ * nome que a equipe usa no celular** em `address_book_name`, o campo que SÓ A
+ * EQUIPE vê.
+ *
+ * O nome NÃO vai mais para `display_name` (era o `p_notify` do upsert): é o
+ * rótulo que alguém da empresa escreveu no celular, e `display_name` entra no
+ * `{{nome}}` das campanhas — o apelido interno chegaria ao cliente. Mesma regra
+ * da varredura `contact-names` (decisão do mantenedor no PR #2439). Aqui o app
+ * é a fonte viva da agenda, então o nome novo SOBRESCREVE o anterior: renomear
+ * no celular renomeia no CRM.
+ *
+ * O que NÃO faz, de propósito:
+ *
+ * - **não cria conversa nem mensagem**: não houve troca de mensagens, então nada
+ *   muda na caixa de entrada, em `last_inbound_at`, em `unread_count` nem no
+ *   agente. Pausar a IA também não — ninguém respondeu nada.
+ * - **não apaga nada quando o app REMOVE o contato do endereço**: `remove` vem
+ *   sem nome (a referência da Meta diz que o nome sai junto), não tem o que
+ *   gravar, e apagar cadastro do CRM por causa da agenda do celular perderia
+ *   histórico sem a #1632 provar que é para isso. É o mesmo recuo deliberado do
+ *   `ignored` de cima: sem prova, não escreve.
+ *
+ * Como não há mensagem, o evento também não traz timestamp — nenhum aqui leria.
+ */
+export async function ingestMetaAppContactSync(
+  admin: Admin,
+  e: AppContactSyncEvent,
+  dono: ChannelTenantScope & {
+    /** Ver `ingestMetaInbound`: sessão já resolvida pelo token (canal parceiro). */
+    channelSessionId?: string;
+  },
+): Promise<IngestOutcome> {
+  // Sem nome não há o que gravar — `remove` vem sem nome de propósito.
+  const nome = e.name?.trim() ?? "";
+  if (!nome) return { status: "ignored", reason: "sem_nome" };
+
+  let sessao: { id: string; organization_id: string } | null;
+  if (dono.channelSessionId) {
+    sessao = { id: dono.channelSessionId, organization_id: dono.organizationId };
+  } else {
+    try {
+      sessao = await sessionByPhoneNumberId(admin, dono.organizationId, e.phoneNumberId);
+    } catch (err) {
+      return { status: "failed", reason: err instanceof Error ? err.message : "sessao_do_numero" };
+    }
+  }
+  // Sessão não é dona do número: o endereço é de OUTRO número, e nada do que ele
+  // tem pode cair nesta organização.
+  if (!sessao) return { status: "no_session" };
+
+  const orgId = sessao.organization_id;
+  const telefone = `+${e.phone.replace(/\D/g, "")}`;
+
+  // Mesma guarda da recebida e do eco: do número interno de avisos não nasce
+  // contato (a própria `ehNumeroInternoDeAviso` documenta esse desenho). Aqui não
+  // há mensagem a registrar como ignorada — o desfecho `ignored` já diz.
+  if (await ehNumeroInternoDeAviso(admin, orgId, { kind: "phone", phone: telefone, lid: null })) {
+    return { status: "ignored", reason: "numero_interno_de_aviso" };
+  }
+
+  // Titular apagado a pedido (LGPD) não volta pela agenda do app. A anonimização
+  // ZERA o telefone do cadastro (`phone_number = null`), então
+  // `findContactByVariants` não acha a ficha e `fn_upsert_wa_contact` — que casa
+  // contato só por `phone_number`/`wa_lid` — INSERIRIA uma ficha nova com o
+  // número e o nome da agenda. A pergunta vem antes de qualquer escrita, com a
+  // mesma régua do importador de histórico (`lib/channels/historico/rodada.ts`):
+  // na dúvida (erro ou resposta que não é sim/não) NÃO cria — falha fechada.
+  // O evento da agenda não traz LID, então a pergunta é só pelo telefone.
+  const { data: apagado, error: erroApagado } = await admin.rpc(
+    "fn_titular_apagado_a_pedido" as never,
+    { p_org: orgId, p_telefone: canonicalPhoneBR(telefone), p_lid: null } as never,
+  );
+  if (erroApagado || typeof apagado !== "boolean") {
+    return {
+      status: "failed",
+      reason: `titular_apagado: ${erroApagado?.message ?? "resposta sem booleano"}`,
+    };
+  }
+  if (apagado) return { status: "ignored", reason: "titular_apagado_a_pedido" };
+
+  const existente = await findContactByVariants(admin, orgId, e.phone);
+  const phone = existente?.phone_number
+    ? canonicalPhoneBR(existente.phone_number)
+    : canonicalPhoneBR(telefone);
+
+  const { data: contactId, error: erroContato } = await admin.rpc(
+    "fn_upsert_wa_contact" as never,
+    {
+      p_org: orgId,
+      p_kind: "phone",
+      p_phone: phone,
+      p_lid: null,
+      // Mesma grafia do `from`/`to` das mensagens: a identidade wa, não o `+`.
+      p_chat_id: e.phone,
+      // NUNCA o nome da agenda: `p_notify` vira `display_name`, que o `{{nome}}` das campanhas lê.
+      p_notify: null,
+    } as never,
+  );
+  if (erroContato || !contactId) {
+    return { status: "failed", reason: `contato: ${erroContato?.message ?? "sem id"}` };
+  }
+
+  const { error: erroNome } = await admin
+    .from("contacts")
+    .update({ address_book_name: nome.slice(0, 200) })
+    .eq("id", contactId as string)
+    .eq("organization_id", orgId)
+    .eq("is_anonymized", false);
+  if (erroNome) {
+    return { status: "failed", reason: `nome_da_agenda: ${erroNome.message}` };
+  }
+
+  return { status: "synced", contactId: contactId as string };
+}
+
+/**
+ * A REAÇÃO recebida pelo canal oficial (#2797, fatias 1 e 2).
+ *
+ * O evento nasce no normalizador (`parseMetaWebhook`, `kind: "reaction"`) e o
+ * que este caminho FAZ é tudo o que a issue pede — e nada além:
+ *
+ *   - grava linha `type='reaction'` LIGADA ao alvo (`reply_to_message_id` +
+ *     `metadata.reaction = { emoji, target_external_id, author }`);
+ *   - emoji vazio (o usuário REMOVEU a reação) apaga a anterior do MESMO autor
+ *     sobre o MESMO alvo;
+ *   - sem alvo no CRM: descartada com log — nunca linha cega;
+ *   - NÃO carimba a conversa: não há `marcarConversaComMensagem` aqui, então a
+ *     reação não move `last_message_at`, não abre a janela de 24h, não gera
+ *     prévia nem contador de não lidas. Ela não é mensagem.
+ *
+ * O que também NÃO roda, de propósito: `aplicarEfeitosPosEntrada`. Opt-out,
+ * nascimento de lead e despacho do agente são efeitos de mensagem QUE CHEGA, e
+ * um 👍 não pede resposta — "não acordar a IA por reação" é a fatia seguinte da
+ * mesma issue, e o caminho dela já começa aqui sem reescrita.
+ */
+export async function ingestMetaReaction(
+  admin: Admin,
+  e: ReactionEvent,
+  dono: ChannelTenantScope & {
+    /** Ver `ingestMetaInbound`: sessão já resolvida pelo token (canal parceiro). */
+    channelSessionId?: string;
+  },
+): Promise<IngestOutcome> {
+  let sessao: { id: string; organization_id: string } | null;
+  if (dono.channelSessionId) {
+    sessao = { id: dono.channelSessionId, organization_id: dono.organizationId };
+  } else {
+    try {
+      sessao = await sessionByPhoneNumberId(admin, dono.organizationId, e.phoneNumberId);
+    } catch (err) {
+      return { status: "failed", reason: err instanceof Error ? err.message : "sessao_do_numero" };
+    }
+  }
+  // Número que não administramos: 200 e nada gravado, como nas outras duas.
+  if (!sessao) return { status: "no_session" };
+  const orgId = sessao.organization_id;
+
+  // Mesma guarda da recebida e do eco: do número interno de avisos não nasce
+  // linha nenhuma, nem a de um gesto.
+  if (
+    await ehNumeroInternoDeAviso(admin, orgId, {
+      kind: "phone",
+      phone: `+${e.from.replace(/\D/g, "")}`,
+      lid: null,
+    })
+  ) {
+    await registrarMensagemIgnorada(admin, orgId, { direction: "inbound", sessionId: sessao.id });
+    return { status: "ignored", reason: "numero_interno_de_aviso" };
+  }
+
+  const desfecho = await gravarReacaoDeMensagem(admin, {
+    organizationId: orgId,
+    channelSessionId: sessao.id,
+    externalId: e.externalId,
+    alvoExternalId: e.targetExternalId,
+    // O `wamid` é canônico dos dois lados (o envio e o recebimento gravam o
+    // MESMO id inteiro), então não há segunda forma a tentar nem sufixo.
+    candidatosDoAlvo: [e.targetExternalId],
+    sufixoDoAlvo: null,
+    emoji: e.emoji,
+    // A grafia do autor neste canal é o `wa_id`. Ela só precisa ser estável
+    // DENTRO do canal: o apagão da remoção corre na mesma organização e no
+    // mesmo alvo, que é onde só o autor separa.
+    author: e.from,
+    // A Cloud API não entrega reação NOSSA: o gesto que chega é do contato.
+    direction: "inbound",
+    sentAt: e.sentAt.toISOString(),
+    // Sem `sent_via`: o canal oficial não tem esse carimbo (idem a recebida).
+    sentVia: null,
+    canal: "meta",
+  });
+
+  if (desfecho.status === "falha") return { status: "failed", reason: desfecho.motivo };
+  // O descarte com log já saiu de `gravarReacaoDeMensagem`; aqui fica o
+  // desfecho contável que a rota escreve no corpo da resposta.
+  if (desfecho.status === "sem_alvo") return { status: "ignored", reason: "reacao_sem_alvo" };
+  if (desfecho.status === "duplicada") return { status: "duplicate" };
+  // `gravada` e `removida` são a mesma entrega vista pelos dois lados. A
+  // remoção apagou uma linha, então não há `messageId` a reportar — `""` é o
+  // valor que o chamador já trata como "sem mensagem" nos outros caminhos.
+  return {
+    status: "ingested",
+    messageId: desfecho.status === "gravada" ? (desfecho.messageId ?? "") : "",
+    conversationId: desfecho.conversationId,
   };
 }

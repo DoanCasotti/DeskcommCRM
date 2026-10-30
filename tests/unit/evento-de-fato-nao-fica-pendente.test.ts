@@ -70,6 +70,19 @@ const EMISSAO_SQL_CRU = /insert\s+into\s+event_log\b[\s\S]{0,300}?values\s*\(\s*
 const SQL_FN_LOG = /fn_log_event\s*\(\s*[^,()]+,\s*'([a-z0-9_.]+)'/g;
 /** SQL: `insert into event_log(…) values (<org>, 'tipo'` — tipo sempre na 2ª posição. */
 const SQL_INSERT = /insert\s+into\s+(?:public\.)?event_log\b[\s\S]{0,400}?values\s*\(\s*[^,()]+,\s*'([a-z0-9_.]+)'/g;
+/**
+ * SQL: `emit_event('tipo', …)` e `emit_event(p_event_type := 'tipo', …)` — a forma
+ * que as funções `plpgsql` usam, posicional ou nomeada.
+ *
+ * Faltava, e o buraco foi pago: a migration 0264 (PR #955) emitia
+ * `contact.tags_changed`, `lead.tags_changed` e `conversation.tags_changed` UMA
+ * VEZ POR LINHA alterada, nenhum dos três com consumidor, e este arquivo ficou
+ * verde — os regexes de SQL acima só conheciam `fn_log_event` e o `insert` cru.
+ * O nomeado é casado em qualquer posição dos argumentos, porque `:=` permite
+ * qualquer ordem.
+ */
+const SQL_EMIT_POSICIONAL = /emit_event\s*\(\s*'([a-z0-9_.]+)'/g;
+const SQL_EMIT_NOMEADO = /p_event_type\s*:=\s*'([a-z0-9_.]+)'/g;
 /** A definição da lista: `fn_event_log_e_registro(…) … array[ … ]`. */
 const DEF_REGISTRO = new RegExp(
   String.raw`fn_event_log_e_registro\s*\([\s\S]{0,400}?array\[([\s\S]*?)\]`,
@@ -212,6 +225,8 @@ function tiposEmitidos(): Set<string> {
     const texto = semComentarios(readFileSync(f, "utf8"));
     for (const m of texto.matchAll(SQL_FN_LOG)) achados.add(m[1]!);
     for (const m of texto.matchAll(SQL_INSERT)) achados.add(m[1]!);
+    for (const m of texto.matchAll(SQL_EMIT_POSICIONAL)) achados.add(m[1]!);
+    for (const m of texto.matchAll(SQL_EMIT_NOMEADO)) achados.add(m[1]!);
   }
 
   for (const tipo of Object.keys(EMISSOES_DINAMICAS)) achados.add(tipo);
@@ -226,14 +241,27 @@ function tiposConsumidos(): Set<string> {
   return new Set([...doRegistry, ...Object.keys(CONSUMIDORES_FORA_DO_REGISTRY)]);
 }
 
-/** A lista que o banco usa para fechar o registro no nascimento. */
+/**
+ * A lista que o banco usa para fechar o registro no nascimento.
+ *
+ * A ÚLTIMA definição, e não a união de todas: `fn_event_log_e_registro` é
+ * `create or replace`, então o que vale é a última escrita em ordem de
+ * aplicação — o baseline (o replay do schema, lido primeiro) e depois as
+ * migrations em ordem alfabética. União só era equivalente enquanto todas as
+ * definições eram idênticas, e a migration 0417 tirou `message.failed` da
+ * lista (ele ganhou consumidor na #1614) sem poder apagar a 0239, que já
+ * rodou em toda instalação existente. Ler a 0239 aqui acusaria um tipo como
+ * "nascendo `done`" quando o banco já nem o conhece.
+ */
 function tiposDeRegistro(): Set<string> {
-  const achados = new Set<string>();
+  let vigente = new Set<string>();
   for (const f of arquivosSql()) {
     const m = DEF_REGISTRO.exec(semComentarios(readFileSync(f, "utf8")));
-    if (m) for (const x of m[1]!.matchAll(/'([a-z0-9_.]+)'/g)) achados.add(x[1]!);
+    if (m) {
+      vigente = new Set([...m[1]!.matchAll(/'([a-z0-9_.]+)'/g)].map((x) => x[1]!));
+    }
   }
-  return achados;
+  return vigente;
 }
 
 /**
@@ -341,6 +369,16 @@ describe("evento-fato (registro) não fica `pending`", () => {
       [...tiposDeRegistro()].filter((t) => !emitidos.has(t)).sort(),
       "tipo na lista de registro que ninguém emite — remova de fn_event_log_e_registro",
     ).toEqual([]);
+  });
+
+  it("o baseline tem a MESMA lista que a última migration", () => {
+    // `tiposDeRegistro()` lê a ÚLTIMA definição, que é sempre uma migration —
+    // e quem instala ou atualiza aplica só o baseline. Tirar um tipo da lista
+    // só na migration (0417, 0534) deixaria o self-host com o tipo dentro: a
+    // linha nasceria `done` e a regra nunca rodaria lá, com este arquivo verde.
+    const m = DEF_REGISTRO.exec(semComentarios(readFileSync(BASELINE, "utf8")));
+    const doBaseline = new Set([...(m?.[1] ?? "").matchAll(/'([a-z0-9_.]+)'/g)].map((x) => x[1]!));
+    expect([...doBaseline].sort()).toEqual([...tiposDeRegistro()].sort());
   });
 
   it("o backfill e o trigger estão nos DOIS caminhos de schema", () => {

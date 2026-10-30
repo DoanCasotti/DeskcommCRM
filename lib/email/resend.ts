@@ -15,10 +15,13 @@
  * PIOR que nada: o domínio não está verificado na conta Resend do revendedor,
  * então TODO envio falha lá na Resend e volta como `send_failed` com mensagem
  * opaca — o operador vai caçar rede, contêiner e chave, quando o problema é uma
- * variável em branco. Tratar como não-configurado joga o fluxo no caminho que
- * JÁ existe e JÁ é bom: `EmailNotConfigured` → `pending_review` no worker de
- * LGPD (`workers/lgpd-export-worker.ts:254-289`) e o convite mostrando o
- * `accept_url` na tela (`app/api/v1/team/invite/route.ts`).
+ * variável em branco. Tratar como não-configurado joga o fluxo no caminho
+ * próprio dele: `EmailNotConfigured` → `pending_review` no worker de LGPD
+ * (`workers/lgpd-export-worker.ts`), com o PDF para o operador entregar à mão,
+ * e o convite mostrando o `accept_url` na tela (`app/api/v1/team/invite/route.ts`).
+ * Esse caminho da LGPD só passou a funcionar com a migration 0651: até ela o
+ * CHECK de `lgpd_requests.status` recusava `pending_review`, e o pedido ficava
+ * em "Processando" para sempre.
  *
  * As duas chaves saíram do `process.env` cru e entraram no Zod (`lib/env.ts`).
  * Fora dele elas ficavam fora do `.env.example` e fora do `install.sh`, e o
@@ -26,7 +29,9 @@
  */
 import { Resend } from "resend";
 
+import { remetenteComNome } from "@/lib/email/remetente";
 import { env } from "@/lib/env";
+import { valorDaInstalacao } from "@/lib/instalacao/config";
 
 interface SendArgs {
   to: string | string[];
@@ -49,28 +54,44 @@ interface SendResult {
   details?: string;
 }
 
-let _client: Resend | null = null;
-
-function getClient(): Resend | null {
-  if (_client) return _client;
-  const key = env.RESEND_API_KEY;
+/**
+ * ⚠️ SEM memo de módulo, e a remoção é o ponto da mudança.
+ *
+ * Isto era `let _client` guardando o cliente do primeiro envio. Enquanto a chave
+ * vinha do `.env` — congelada no boot — o memo era inócuo: o valor não mudava
+ * durante a vida do processo. Agora ela vem do banco e PODE mudar pela tela, e o
+ * mesmo memo passaria a ser um bug: o operador troca a chave, a tela diz
+ * "salvo", e este processo segue mandando e-mail com a chave velha até alguém
+ * reiniciar o servidor. Pior no `worker`, que é outro processo e nem veria a
+ * escrita.
+ *
+ * Construir um `Resend` é montar um objeto com uma string; o custo de fazê-lo
+ * por envio é irrelevante perto de uma chamada de rede ao provedor.
+ */
+function criarCliente(key: string | null): Resend | null {
   if (!key || key.length < 10) return null;
-  _client = new Resend(key);
-  return _client;
+  return new Resend(key);
 }
 
 /**
  * `null` = não há remetente utilizável. Nunca inventa um domínio nosso.
  *
- * O nome de exibição é sanitizado: `<`, `>`, `"` e quebra de linha dentro do
- * cabeçalho `From:` são injeção de cabeçalho SMTP, e a marca vem de um campo
- * que o operador digita numa tela.
+ * O nome de exibição vem de campo de tela; quem o formata é `remetenteComNome`
+ * (`lib/email/remetente.ts`), o mesmo do SMTP.
  */
-export function fromAddress(fromName?: string): string | null {
-  const endereco = env.RESEND_FROM_EMAIL.trim();
+export function fromAddress(remetente: string | null, fromName?: string): string | null {
+  const endereco = (remetente ?? "").trim();
   if (endereco.length === 0) return null;
-  const nome = (fromName ?? "").replace(/[<>"\r\n]/g, "").trim();
-  return nome.length > 0 ? `${nome} <${endereco}>` : endereco;
+  // ⚠️ O ENDEREÇO também é entrada não confiável desde a 0341, e antes não era.
+  //
+  // Enquanto ele vinha só do `.env`, mexer nele exigia SSH na VPS — quem podia
+  // fazer isso já tinha o servidor. Agora ele vem de um campo de tela, e um
+  // `\r\n` aqui emenda um cabeçalho novo no `From:` (um `Bcc:` para terceiro, por
+  // exemplo). O nome já era sanitizado por esse motivo; o endereço passa a ser
+  // pelo mesmo, e RECUSA em vez de limpar: endereço com caractere de cabeçalho
+  // não é um endereço a consertar, é um endereço a não usar. Falha fechada.
+  if (/[<>"\r\n,;\s]/.test(endereco)) return null;
+  return remetenteComNome(endereco, fromName);
 }
 
 /**
@@ -88,17 +109,20 @@ function classificar(nome: string, mensagem: string): NonNullable<SendResult["er
 }
 
 export async function sendEmail(args: SendArgs): Promise<SendResult> {
-  const client = getClient();
-  const from = fromAddress(args.fromName);
+  // Banco acima, arquivo de instalação embaixo — a cada envio, nunca do boot.
+  const [chave, remetente] = await Promise.all([
+    valorDaInstalacao("RESEND_API_KEY"),
+    valorDaInstalacao("RESEND_FROM_EMAIL"),
+  ]);
+  const client = criarCliente(chave.valor);
+  const from = fromAddress(remetente.valor, args.fromName);
 
   if (!client || !from) {
     if (process.env.NODE_ENV !== "production") {
       console.warn(
-        "[email] envio desligado — falta RESEND_API_KEY ou RESEND_FROM_EMAIL. Payload:",
+        // Sem destinatário, assunto nem prévia: o log não é lugar de dado do cliente.
+        "[email] envio desligado — falta RESEND_API_KEY ou RESEND_FROM_EMAIL.",
         {
-          to: args.to,
-          subject: args.subject,
-          preview: args.text?.slice(0, 200) ?? args.html.slice(0, 200),
           tem_chave: client !== null,
           tem_remetente: from !== null,
         },
@@ -140,6 +164,10 @@ export async function sendEmail(args: SendArgs): Promise<SendResult> {
  * envio devolve `not_configured`, e uma tela que dissesse "e-mail configurado"
  * mandaria o operador esperar uma mensagem que nunca sai.
  */
-export function isEmailConfigured(): boolean {
-  return getClient() !== null && fromAddress() !== null;
+export async function isEmailConfigured(): Promise<boolean> {
+  const [chave, remetente] = await Promise.all([
+    valorDaInstalacao("RESEND_API_KEY"),
+    valorDaInstalacao("RESEND_FROM_EMAIL"),
+  ]);
+  return criarCliente(chave.valor) !== null && fromAddress(remetente.valor) !== null;
 }

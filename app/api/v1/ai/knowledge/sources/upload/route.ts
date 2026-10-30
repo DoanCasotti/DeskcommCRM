@@ -28,6 +28,7 @@ import { randomUUID } from "node:crypto";
 import { type NextRequest } from "next/server";
 import { z } from "zod";
 import { ok, fail } from "@/lib/api/wrappers";
+import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -114,9 +115,22 @@ export async function POST(req: NextRequest): Promise<Response> {
 
   const ext = resolverExtensao(file.name, file.type);
   if (!ext) {
+    const extBruta = file.name.split(".").pop()?.toLowerCase() ?? "";
+    // Mesma instrução de `extrairTextoDoArquivo` — Excel tem caminho de saída
+    // próprio (exportar como CSV), a genérica não ensina isso.
+    if (extBruta === "xlsx" || extBruta === "xls") {
+      return fail(
+        "unsupported_media_type",
+        t(
+          'Não leio Excel diretamente — no Excel use "Salvar como" → "CSV UTF-8 (delimitado por vírgulas)" e envie o CSV.',
+        ),
+        415,
+        { requestId },
+      );
+    }
     return fail(
       "unsupported_media_type",
-      t("Não sei ler esse tipo de arquivo. Envie PDF, Markdown (.md) ou texto (.txt)."),
+      t("Não sei ler esse tipo de arquivo. Envie PDF, Markdown (.md), CSV (.csv) ou texto (.txt)."),
       415,
       { requestId },
     );
@@ -138,6 +152,7 @@ export async function POST(req: NextRequest): Promise<Response> {
     pdf: "application/pdf",
     md: "text/markdown",
     txt: "text/plain",
+    csv: "text/csv",
   } as const;
 
   const { error: uploadErr } = await admin.storage
@@ -156,6 +171,8 @@ export async function POST(req: NextRequest): Promise<Response> {
   } catch (err) {
     await admin.storage.from(BUCKET_DE_CONHECIMENTO).remove([blobPath]);
     if (err instanceof ErroDeExtracao) {
+      // A resposta leva só a chave; a causa só sobrevive neste log.
+      if (err.detalhe) console.warn("[conhecimento-upload] extração recusada:", err.detalhe);
       return fail("unprocessable_entity", t(err.message), 422, { requestId });
     }
     console.error("[conhecimento-upload] extração falhou:", err);
@@ -211,6 +228,19 @@ export async function POST(req: NextRequest): Promise<Response> {
   if (emitErr) {
     console.warn("[conhecimento-upload] emit_event falhou (não bloqueia):", emitErr.message);
   }
+
+  // Mesmo código da criação em JSON: para a trilha a pergunta é "quem pôs este
+  // material no acervo", não por qual das duas portas ele entrou. Metadados só
+  // com extensão e tamanho — o nome do arquivo pode carregar dado pessoal.
+  void audit({
+    action: "ai.knowledge_source_created",
+    actorUserId: authUser.id,
+    organizationId: activeOrg.orgId,
+    resourceType: "ai_knowledge_source",
+    resourceId: ksId,
+    requestId,
+    metadata: { source_type: "documento", ext, size_bytes: file.size },
+  });
 
   const temChave = await temChaveDeEmbedding(activeOrg.orgId);
 

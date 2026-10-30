@@ -53,8 +53,10 @@
  *
  * ── Sem `event_log` ──────────────────────────────────────────────────────────
  *
- * Confirmado lendo `lib/event-log/register-handlers.ts`: os 12 handlers
- * registrados cobrem IA, RAG, LGPD, automações, follow-up e mídia. Nenhum
+ * Confirmado lendo `lib/event-log/register-handlers.ts`: os handlers
+ * registrados cobrem IA, RAG, LGPD, automações, follow-up, mídia e o aviso de
+ * caso ao suporte — para reconferir sem acreditar nesta linha,
+ * `grep -c 'registerHandler(' lib/event-log/register-handlers.ts`. Nenhum
  * cobriria um tipo `platform_branding.*`, e o drain deixa evento sem handler
  * INTOCADO — a linha nasceria `pending` para sempre em todo clone. Evento sem
  * consumer é o anti-pattern nº 3 do CLAUDE.md. O registro desta mutação é
@@ -81,6 +83,8 @@ export type SementeDoAmbiente = {
   readonly app_name: string | null;
   readonly logo_url: string | null;
   readonly accent_hex: string | null;
+  /** A cor do TEMA ESCURO (#2482, migration 0627). Opcional: linha antiga não a tem. */
+  readonly accent_dark_hex?: string | null;
 };
 
 /**
@@ -100,7 +104,7 @@ export type SementeDoAmbiente = {
  * 0155; tratá-la diferente agora criaria duas regras para o mesmo caso.
  */
 const COLUNAS =
-  "app_name, logo_url, logo_path, accent_hex, show_powered_by, seeded_from_env, fallback_at, fallback_reason";
+  "app_name, logo_url, logo_path, logo_dark_path, favicon_path, accent_hex, accent_dark_hex, show_powered_by, seeded_from_env, fallback_at, fallback_reason";
 
 /**
  * Códigos de recusa — os que significam "a cor configurada NÃO pintou".
@@ -327,10 +331,18 @@ function avisarUmaVez(chave: string, mensagem: string, contexto: Record<string, 
  * cai na camada do `.env`, que é uma instalação funcionando.
  *
  * O caso `42P01` (relation does not exist) é o rollback pela OUTRA ponta: código
- * novo sobre schema velho — o que acontece na Vercel, onde a `main` sobe sem
- * ninguém aplicar migration. Ele degrada para o `.env` igual, com um aviso.
+ * novo sobre schema velho — o que acontece quando a imagem nova sobe antes de o
+ * baseline ser aplicado. Ele degrada para o `.env` igual, com um aviso.
  */
-export async function marcaDaInstalacao(): Promise<LinhaDaMarca | null> {
+export async function marcaDaInstalacao(
+  opcoes: { semMemo?: boolean } = {},
+): Promise<LinhaDaMarca | null> {
+  // Saída enviada é irreversível: deve ler a marca atual, inclusive se outro
+  // processo a alterou. A fachada mantém o cache; envio não o lê nem o grava.
+  if (opcoes.semMemo) {
+    const lido = await lerOuSemear();
+    return lido === "erro" ? null : lido;
+  }
   const memoria = memoEmVigor();
   if (memoria && memoria.expiraEm > Date.now()) return memoria.linha;
 
@@ -350,16 +362,29 @@ export async function marcaDaInstalacao(): Promise<LinhaDaMarca | null> {
   // O `Date.now()` do TTL também passa a ser lido DEPOIS da ida ao banco: antes
   // ele era capturado antes, e a espera do banco descontava do próprio TTL.
   const geracao = globalThis.__geracaoDaMarcaDaInstalacao ?? 0;
-  const linha = await lerOuSemear();
-  if ((globalThis.__geracaoDaMarcaDaInstalacao ?? 0) === geracao) {
-    guardarMemo({ linha, expiraEm: Date.now() + TTL_MS });
+  const lido = await lerOuSemear();
+  // ⚠️ `"erro"` fica FORA do memo, e é a razão de `lerOuSemear` ter três saídas.
+  //
+  // A guarda de geração acima cobre a leitura que volta com a linha PRÉ-ESCRITA
+  // quando a escrita já invalidou. Ela NÃO cobre — e não pode cobrir — a leitura
+  // que FALHOU depois da invalidação: ali a geração não mudou, a guarda passa, e
+  // `null` entra no memo com TTL novo. O efeito é o mesmo sintoma, por outra
+  // porta: `null` = "o banco não falou" → o resolvedor cai na camada do `.env` →
+  // a barra lateral desenha a marca do PRODUTO e `aside img` não existe — por
+  // até TTL_MS inteiros, ATRÁS DO MESMO TOAST VERDE de "Logo atualizado.".
+  //
+  // O contrato do arquivo sempre foi "na FALHA vale o `.env` EM RUNTIME", e o
+  // TTL sempre foi justificado por edição direta no banco — nunca por falha de
+  // transporte. Promover uma falha a fato é um terceiro estado que não existia.
+  if (lido !== "erro" && (globalThis.__geracaoDaMarcaDaInstalacao ?? 0) === geracao) {
+    guardarMemo({ linha: lido, expiraEm: Date.now() + TTL_MS });
   }
-  return linha;
+  return lido === "erro" ? null : lido;
 }
 
-async function lerOuSemear(): Promise<LinhaDaMarca | null> {
+async function lerOuSemear(): Promise<LinhaDaMarca | null | "erro"> {
   const atual = await lerLinha();
-  if (atual === "erro") return null;
+  if (atual === "erro") return "erro";
 
   // `env` e não `process.env` cru: é a mesma fonte que `app/layout.tsx` passa
   // para `camadaDoAmbiente`, já validada por Zod. Duas leituras do ambiente com
@@ -385,6 +410,16 @@ async function lerLinha(): Promise<LinhaDaMarca | null | "erro"> {
       .from("platform_branding")
       .select(COLUNAS)
       .eq("id", 1)
+      // Fora da deduplicação de `fetch` do Next. Dentro de um render, o `fetch`
+      // do servidor (`createDedupeFetch`, aplicado por `patchFetch`) devolve a
+      // QUALQUER GET repetido a resposta guardada da primeira ida — e um render
+      // chama `marcaDaInstalacao()` várias vezes. Quando uma escrita invalida o
+      // memo entre duas dessas chamadas, a segunda captura a geração NOVA,
+      // recebe a linha de ANTES da escrita, passa pela guarda de geração e a
+      // memoiza por um TTL inteiro: a barra lateral sem o logo recém-subido,
+      // atrás do toast "Logo atualizado." (#1218). Levar um `signal` é o opt-out
+      // que o próprio `dedupe-fetch.js` documenta; este nunca é abortado.
+      .abortSignal(new AbortController().signal)
       .maybeSingle();
     if (error) {
       avisarUmaVez(

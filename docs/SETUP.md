@@ -8,6 +8,66 @@
 
 ---
 
+## Instalação local em Ubuntu/VM (PostgreSQL + serviços em Docker)
+
+Em uma VM Ubuntu nova, execute o instalador uma única vez na raiz do clone:
+
+```bash
+chmod +x ubuntu-local-installer.sh
+./ubuntu-local-installer.sh
+```
+
+O instalador sobe o Supabase local em Docker (PostgreSQL com `pgvector`, Auth,
+PostgREST, Storage e Realtime), aplica `supabase/baseline.sql`, e inicia o app,
+worker, scheduler, WAHA e Redis/SRH pelo `docker-compose.local.yml`. As chaves
+ficam somente em `.env.local`, que não é versionado. O primeiro build pode levar
+alguns minutos e precisa de espaço para as imagens do Supabase e do WAHA.
+
+O instalador também cria o usuário inicial e escolhe uma porta livre para o app.
+Não é necessário executá-lo novamente a cada reinício.
+
+### Uso diário
+
+Depois da instalação inicial, use:
+
+```bash
+pnpm local:up
+pnpm local:status
+pnpm local:logs          # ou: bash scripts/local-stack.sh logs worker
+pnpm local:down
+```
+
+`pnpm local:up` verifica se o Supabase local está ativo e confere o `.env.local`.
+Se o arquivo estiver ausente ou incompleto, ele gera automaticamente as URLs e
+chaves locais do PostgreSQL/Supabase, WAHA, Redis/SRH e da aplicação. Se já
+existir um `.env.local` de outro ambiente, ele é preservado como
+`.env.local.cloud-backup` antes da geração local.
+
+Para atualizar o código e aplicar a versão nova:
+
+```bash
+git pull --ff-only
+pnpm local:up
+```
+
+Para aplicar uma alteração manual no `.env.local`, use também `pnpm local:up`,
+pois a aplicação precisa ser recriada e recompilada para carregar as novas
+variáveis. `docker compose restart` sozinho não atualiza o ambiente do
+container.
+
+O endereço e a porta são mostrados ao final do instalador. Se a porta 3000 já
+estiver ocupada, ele escolhe a próxima porta livre. O painel local do Supabase
+fica em `http://127.0.0.1:54323` e o WAHA em `http://127.0.0.1:3030`.
+
+> A senha do dono e a chave da API do WAHA nascem **aleatórias** a cada
+> instalação e são impressas no fim. Elas não estão neste repositório, e o
+> painel do WAHA só atende em `127.0.0.1` — de outra máquina da rede, só o app
+> responde. Quem quiser escolher a senha exporta `OWNER_PASSWORD` antes.
+
+> A cadeia histórica de migrations contém dependências antigas e não é usada
+> para uma instalação fresca. O helper inicia a infraestrutura sem aplicá-la e
+> carrega o baseline versionado, que é o artefato de instalação do self-host.
+
 ## Índice
 
 1. [Antes de começar](#antes-de-começar)
@@ -16,9 +76,9 @@
 4. [Upstash Redis — rate limit + idempotência](#2-upstash-redis--rate-limit--idempotência)
 5. [WAHA — WhatsApp](#3-waha--whatsapp)
 6. [Anthropic + Vercel AI Gateway — IA](#4-anthropic--vercel-ai-gateway--ia)
-7. [OpenAI — embeddings do RAG](#5-openai--embeddings-do-rag)
+7. [OpenAI ou OpenRouter — embeddings do RAG](#5-openai-ou-openrouter--embeddings-do-rag)
 8. [Sentry — monitoramento de erros](#6-sentry--monitoramento-de-erros)
-9. [Resend — email transacional](#7-resend--email-transacional)
+9. [E-mail transacional — SMTP ou Resend](#7-e-mail-transacional--smtp-ou-resend)
 10. [Nuvemshop — integração e-commerce](#8-nuvemshop--integração-e-commerce)
 11. [Chaves geradas localmente](#9-chaves-geradas-localmente--encryption--secrets)
 12. [Verificação final](#verificação-final)
@@ -59,14 +119,14 @@ Se você quer rodar o app o mais rápido possível com o mínimo viável:
 
 **🟡 Pra testar features de IA (+10 min):**
 4. [Anthropic](#4-anthropic--vercel-ai-gateway--ia) ou Vercel AI Gateway.
-5. [OpenAI](#5-openai--embeddings-do-rag) — embeddings do RAG.
+5. [OpenAI ou OpenRouter](#5-openai-ou-openrouter--embeddings-do-rag) — embeddings do RAG.
 
 **🟡 Pra testar WhatsApp (+15 min):**
-6. [WAHA](#3-waha--whatsapp) + ngrok (precisa URL pública).
+6. [WAHA](#3-waha--whatsapp) (roda no Docker e chama o app pela rede local).
 
 **⚪ Pode ficar vazio em dev (degradam graciosamente):**
 - [Sentry](#6-sentry--monitoramento-de-erros) — não monitora erros, mas app sobe.
-- [Resend](#7-resend--email-transacional) — emails não saem (vão pro console.log), mas app sobe.
+- [E-mail](#7-e-mail-transacional--smtp-ou-resend) — sem SMTP e sem Resend, o convite vira link na tela e o export de LGPD fica em revisão pendente; o app sobe igual.
 - [Nuvemshop](#8-nuvemshop--integração-e-commerce) — UI mostra "Integração não configurada".
 
 ---
@@ -171,7 +231,7 @@ No menu lateral → **Storage** → **New bucket**:
 
 ## 3. WAHA — WhatsApp
 
-**O que é:** Servidor que se conecta ao WhatsApp e expõe API HTTP. O default fixo é `devlikeapro/waha:latest-2026.7.2`, engine NOWEB. A prova local desta versão criou duas sessões CORE simultâneas até `SCAN_QR_CODE`; não houve pairing nem envio real. Versão/engine e pós-condição da operação determinam a compatibilidade; o tier sozinho não bloqueia um segundo número.
+**O que é:** Servidor que se conecta ao WhatsApp e expõe API HTTP. O instalador fixa a imagem NOWEB por arquitetura: `devlikeapro/waha:latest-2026.7.2` em x86 e `devlikeapro/waha:noweb-arm-2026.7.2` em ARM64. A prova local desta versão criou duas sessões CORE simultâneas até `SCAN_QR_CODE`; não houve pairing nem envio real. Versão/engine e pós-condição da operação determinam a compatibilidade; o tier sozinho não bloqueia um segundo número.
 
 ### Passo 1 — gerar a API key (plaintext + hash)
 
@@ -219,34 +279,24 @@ WAHA_HMAC_SECRET=<plaintext-do-passo-2>
 # WAHA roda em localhost:3030 (mapeamento do docker-compose, host:3030 → container:3000)
 WAHA_API_BASE_URL=http://localhost:3030
 
-# URL pública que o WAHA chama de volta — preenchido no Passo 4
-WAHA_WEBHOOK_BASE_URL=
+# Endereço que o WAHA chama de volta — ver Passo 4
+WAHA_WEBHOOK_BASE_URL=http://host.docker.internal:3000
 ```
 
-### Passo 4 — URL pública pra webhook (ngrok)
+### Passo 4 — o endereço do webhook
 
-WAHA precisa chamar nossa app de volta quando chega mensagem. Localhost não serve — precisa de URL HTTPS pública.
+WAHA precisa chamar nossa app de volta quando chega mensagem. Ele roda no Docker e o
+`pnpm dev` roda no seu computador, então ele chama o app por `host.docker.internal` —
+pela rede local, sem URL pública. A rota global do webhook só atende a rede interna:
+um túnel público (ngrok, Cloudflare) recebe 404 nela.
+
+Quem define o endereço é a variável `WAHA_HOOK_BASE_URL` do `docker-compose.yml`
+(padrão `http://host.docker.internal:3003`). Se o seu `pnpm dev` roda na porta 3000, suba o
+WAHA no Passo 5 assim:
 
 ```bash
-# Instale ngrok
-brew install ngrok
-
-# Cadastre conta grátis em https://ngrok.com e pegue seu authtoken
-ngrok config add-authtoken <seu-token>
-
-# Em outro terminal, expõe a porta 3000 (onde o Next.js vai rodar)
-ngrok http 3000
+WAHA_HOOK_BASE_URL=http://host.docker.internal:3000 docker compose up -d
 ```
-
-O ngrok mostra: `Forwarding https://abc-123-456.ngrok-free.app -> http://localhost:3000`.
-
-Copie a URL `https://...` e cole em:
-
-```env
-WAHA_WEBHOOK_BASE_URL=https://abc-123-456.ngrok-free.app
-```
-
-> ⚠️ A URL do ngrok muda toda vez que você reinicia (no plano free). Pague $8/mês pelo subdomínio fixo se for trabalhar muito com WAHA, ou use [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) (gratuito com domínio próprio).
 
 ### Passo 5 — subir o WAHA
 
@@ -290,17 +340,11 @@ ANTHROPIC_API_KEY=sk-ant-api03-...
 
 ---
 
-## 5. OpenAI — embeddings do RAG
+## 5. OpenAI ou OpenRouter — embeddings do RAG
 
-**O que é:** Usado **só** pra gerar embeddings (vetores) das bases de conhecimento dos tenants pro chatbot RAG. Não usamos GPT pra gerar texto — esse trabalho é do Claude. **Custo:** baratíssimo. `text-embedding-3-small` = $0.02 / 1M tokens.
+O acervo usa `openai/text-embedding-3-small` com 1536 dimensões para indexar e buscar. A chave pode vir da OpenAI ou da OpenRouter; não troque o modelo só de um lado, porque o agente deixaria de encontrar o material.
 
-1. Acesse <https://platform.openai.com> → **Sign up**. 💳
-2. Adicione método de pagamento (eles não dão mais crédito grátis em conta nova).
-3. **API Keys → Create new secret key** → nome `deskcomm-dev-embeddings` → copie.
-
-```env
-OPENAI_API_KEY=sk-proj-...
-```
+Cadastre a chave em **IA → Credenciais** ou no próprio acervo, escolhendo o provedor. Também é possível definir `OPENAI_API_KEY` ou `OPENROUTER_API_KEY` na instalação. A OpenAI vem primeiro: a chave OpenRouter só é usada quando não há chave OpenAI (da organização ou da instalação) nem gateway de IA configurado. Assim, quem já indexava com a OpenAI continua com ela depois de cadastrar a OpenRouter para a conversa. Entre as duas OpenRouter, a da organização vence a da instalação. A chave OpenAI continua sendo necessária para transcrever áudio, mesmo que o acervo use OpenRouter.
 
 ---
 
@@ -324,7 +368,58 @@ SENTRY_DSN=https://abc123@o456.ingest.sentry.io/789
 
 ---
 
-## 7. Resend — email transacional
+## 7. E-mail transacional — SMTP **ou** Resend
+
+**O que é:** o caminho pelo qual saem convite de equipe, export de LGPD, alarme de SLA
+e afins. Há **dois**, e eles convivem: você escolhe UM, não precisa dos dois, e nenhum
+deles é obrigatório para o app subir.
+
+| | **SMTP** (servidor próprio) | **Resend** (serviço externo) |
+|---|---|---|
+| quando escolher | você já tem servidor de e-mail, ou não quer abrir conta em outro serviço | quer subir rápido sem mexer em servidor de e-mail |
+| onde se configura | tela **Admin › E-mail**, ou as `SMTP_*` do `.env` | as duas chaves `RESEND_*` do `.env` |
+| custo | o do seu servidor | free tier de 3k e-mails/mês, 100/dia |
+
+**Como o sistema escolhe:** se houver SMTP configurado (endereço do servidor **e**
+remetente), a entrega sai por ele; se não houver, sai pela Resend. A decisão é pela
+configuração, não por falha — o sistema não tenta um e cai no outro, para o mesmo
+convite não sair duas vezes. Quem já roda com Resend **não precisa mexer em nada**:
+enquanto o SMTP estiver vazio, tudo segue como antes. A regra mora em
+`lib/email/roteador.ts`.
+
+**Sem nenhum dos dois** o app sobe normalmente: o convite mostra o link de aceite na
+própria tela (para você copiar e mandar como quiser) e o export de LGPD fica em
+revisão pendente, em vez de sumir.
+
+---
+
+### 7a. SMTP — pelo seu próprio servidor
+
+Pela tela, que é o caminho recomendado: entre em **Admin › E-mail** (você precisa ser
+o dono da instalação), preencha os campos, use **Testar conexão** e salve. A senha é
+guardada cifrada e a tela nunca a mostra de volta.
+
+Pelo `.env`, para provisionar uma VPS sem abrir a interface:
+
+```env
+SMTP_HOST=smtp.seudominio.com
+SMTP_PORT=587
+SMTP_SECURITY=starttls
+SMTP_USERNAME=nao-responda@seudominio.com
+SMTP_PASSWORD=...
+SMTP_FROM_EMAIL=nao-responda@seudominio.com
+SMTP_FROM_NAME=Minha Empresa
+```
+
+> 💡 Porta **587** com `starttls`, ou **465** com `tls`. No `SMTP_HOST` vai só o
+> endereço: sem `smtp://` na frente e sem `:porta` no fim.
+>
+> ℹ️ O que estiver gravado pela tela **vale acima** do `.env`. As variáveis ficam como
+> piso de rollback e como caminho de instalação automatizada.
+
+---
+
+### 7b. Resend — pelo serviço externo
 
 **O que é:** Serviço de envio de email. Usado pra magic links, reset de senha, exports LGPD, notificações. **Free tier:** 3k emails/mês, 100/dia. Suficiente pra dev e MVP.
 
@@ -357,7 +452,7 @@ RESEND_FROM_EMAIL=onboarding@resend.dev
 1. Acesse <https://partners.tiendanube.com/> → **Sign up** como parceiro (gratuito).
 2. No dashboard de parceiro → **Apps → Create new app**.
    - **App name:** `DeskcommCRM Dev`.
-   - **Redirect URI:** `https://<sua-url-ngrok>.ngrok-free.app/api/v1/integrations/nuvemshop/callback` (mesmo ngrok do WAHA, ou outro).
+   - **Redirect URI:** `https://<sua-url-ngrok>.ngrok-free.app/api/v1/integrations/nuvemshop/callback` (o callback da Nuvemshop precisa de URL pública: instale o [ngrok](https://ngrok.com), rode `ngrok http 3000` e use a URL `https://` que ele mostra).
    - **Scopes:** marque tudo relacionado a `read_orders`, `read_customers`, `read_products`, `write_orders` (pra atualizar status).
 3. Após criar, a tela do app mostra:
 
@@ -417,6 +512,19 @@ LGPD_SIGNING_KEY=<saída-6>
 > ⚠️ **NUNCA reutilize** a mesma string em produção. Cada uma criptografa uma coisa diferente — se vazar uma, queremos blast radius limitado.
 >
 > ⚠️ **NUNCA mude `CPF_ENCRYPTION_KEY` ou `NUVEMSHOP_OAUTH_ENCRYPTION_KEY` depois que tiver dados em prod** — você não consegue mais descriptografar o que foi salvo. Rotação dessas chaves exige migration de re-encryption.
+>
+> ⚠️ **A chave do CPF precisa chegar ao BANCO**: `encrypt_cpf`/`decrypt_cpf`
+> (migration 0597) leem `private.app_secrets` na linha `cpf_key`. O
+> `install.sh`/`update.sh` semeia sozinho; numa instalação montada à mão:
+>
+> ```sql
+> insert into private.app_secrets (name, value)
+> values ('cpf_key', '<valor de CPF_ENCRYPTION_KEY>')
+> on conflict (name) do update set value = excluded.value, updated_at = now();
+> ```
+>
+> Sem essa linha o contato com CPF é salvo **sem CPF** — a linha entra, mas a
+> busca por CPF não acha ninguém (#2522).
 
 ### Outras vars opcionais
 
@@ -488,16 +596,15 @@ A `anon key` ou `service role key` foi colada errada (cortou no meio). JWTs do S
 Provável: você botou o **hash** em `WAHA_API_KEY` em vez do **plaintext**. Confira: a app envia o que tá no `.env.local` no header — o container WAHA é quem tem o hash (em `WAHA_API_KEY_SHA512`). Refaça o passo 1 do WAHA.
 
 ### Webhook do WAHA não chega
-- O ngrok está rodando? (`ngrok http 3000`)
-- A URL do ngrok atual está em `WAHA_WEBHOOK_BASE_URL`? (muda a cada restart no plano free).
+- O `WAHA_HOOK_BASE_URL` com que você subiu o WAHA aponta para a porta do `pnpm dev`? (ver Passo 4 do WAHA).
 - Você reiniciou o `pnpm dev` depois de mudar o `.env.local`? Variáveis de ambiente são lidas no boot.
 - Confira logs do container: `docker logs deskcomm-waha`.
 
 ### Porta 3000 já em uso
-Algum outro processo rodando. Mata com `lsof -ti:3000 | xargs kill -9` ou roda o Next em outra porta: `pnpm dev -- -p 3001` (e atualize `WAHA_WEBHOOK_BASE_URL` no ngrok pra apontar pra nova porta).
+Algum outro processo rodando. Mata com `lsof -ti:3000 | xargs kill -9` ou roda o Next em outra porta: `pnpm dev -- -p 3001` (e suba o WAHA com `WAHA_HOOK_BASE_URL` apontando pra nova porta).
 
 ### `RESEND_API_KEY is undefined` (mas o app sobe)
-Esperado em dev se você ainda não configurou o Resend. Emails caem no `console.log`. Só configure se for testar fluxos de email (LGPD export, magic link).
+Esperado em dev se você não configurou **nenhum** dos dois caminhos de e-mail (nem SMTP, nem Resend). Emails caem no `console.log`. Só configure se for testar fluxos de email (LGPD export, magic link).
 
 ### Migrations não rodam
 Confira se você está logado: `supabase login` — vai abrir o browser pra autorizar. Depois `supabase link --project-ref <ref>` de novo.

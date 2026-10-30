@@ -14,15 +14,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { requireRole } from "@/lib/auth/require-role";
-import { loadAuthUser, resolveActiveOrg } from "@/lib/auth/server";
+import { loadAuthUser, orgAtivaSemPortao, resolveActiveOrg } from "@/lib/auth/server";
 import type { AuthUser, Role } from "@/lib/auth/types";
 import { createClient } from "@/lib/supabase/server";
 
 vi.mock("@/lib/auth/server", async (importOriginal) => {
   const real = await importOriginal<typeof import("@/lib/auth/server")>();
-  return { ...real, loadAuthUser: vi.fn(), resolveActiveOrg: vi.fn() };
+  return { ...real, loadAuthUser: vi.fn(), resolveActiveOrg: vi.fn(), orgAtivaSemPortao: vi.fn() };
 });
 vi.mock("@/lib/supabase/server", () => ({ createClient: vi.fn() }));
+vi.mock("@/lib/auth/poder-de-plataforma", () => ({ agindoPeloPoderDePlataforma: vi.fn(async () => false) }));
 vi.mock("@/lib/audit", () => ({
   audit: vi.fn(async () => undefined),
   isServiceRoleConfigured: () => false,
@@ -37,17 +38,28 @@ interface Cenario {
   temFator: boolean;
   aal: "aal1" | "aal2";
   isPlatformAdmin?: boolean;
+  /** O banco reconhece a sessão por um dispositivo confiável (`fn_session_mfa_proven`). */
+  confiavel?: boolean;
 }
 
-function montarStub({ role, temFator, aal }: Cenario) {
+function montarStub({ role, temFator, aal, confiavel = false }: Cenario) {
   return {
-    rpc: vi.fn(async () => ({ data: role, error: null })),
+    rpc: vi.fn(async (nome: string) =>
+      nome === "fn_session_mfa_proven" ? { data: confiavel, error: null } : { data: role, error: null },
+    ),
     auth: {
+      // Os fatores vêm do `getUser()` — a mesma ida ao GoTrue que `loadAuthUser`
+      // faz (`sessaoDaRequisicao` em lib/auth/server.ts).
+      getUser: vi.fn(async () => ({
+        data: {
+          user: {
+            id: USER_ID,
+            factors: temFator ? [{ id: "f1", factor_type: "totp", status: "verified" }] : [],
+          },
+        },
+        error: null,
+      })),
       mfa: {
-        listFactors: vi.fn(async () => ({
-          data: { totp: temFator ? [{ id: "f1", status: "verified" }] : [] },
-          error: null,
-        })),
         getAuthenticatorAssuranceLevel: vi.fn(async () => ({
           data: { currentLevel: aal, nextLevel: temFator ? "aal2" : aal },
           error: null,
@@ -57,16 +69,21 @@ function montarStub({ role, temFator, aal }: Cenario) {
   };
 }
 
+/** Só a leitura de PAPEL — a pergunta de MFA ao banco é outra chamada de `rpc`. */
+const chamadasDePapel = (stub: ReturnType<typeof montarStub>) =>
+  stub.rpc.mock.calls.filter(([nome]) => nome === "fn_user_role_in_org").length;
+
 function preparar(cenario: Cenario): void {
   const user: AuthUser = {
     id: USER_ID,
     email: "admin@teste.local",
     is_platform_admin: cenario.isPlatformAdmin ?? false,
+    platform_admin_scope: cenario.isPlatformAdmin ? "full" : null,
     organizations: [],
   } as unknown as AuthUser;
 
   vi.mocked(loadAuthUser).mockResolvedValue(user);
-  vi.mocked(resolveActiveOrg).mockResolvedValue({ orgId: ORG_ID, name: "Org", role: cenario.role });
+  vi.mocked(orgAtivaSemPortao).mockResolvedValue({ orgId: ORG_ID, name: "Org", role: cenario.role, org_status: "active" });
   vi.mocked(createClient).mockResolvedValue(
     montarStub(cenario) as unknown as Awaited<ReturnType<typeof createClient>>,
   );
@@ -91,6 +108,40 @@ describe("requireRole — MFA é política de sessão, não de cadastro", () => 
   it("CONTROLE POSITIVO: o MESMO admin com sessão aal2 PASSA", async () => {
     preparar({ role: "admin", temFator: true, aal: "aal2" });
     const r = await requireRole("admin", { requestId: "req-2" });
+    expect(r.ok).toBe(true);
+  });
+
+  it("sessão aal1 que o BANCO reconhece por dispositivo confiável PASSA", async () => {
+    preparar({ role: "admin", temFator: true, aal: "aal1", confiavel: true });
+    const r = await requireRole("admin", { requestId: "req-3" });
+    expect(r.ok).toBe(true);
+  });
+
+  it("dispositivo confiável NÃO abre poder de plataforma: platform admin que é viewer aqui é barrado", async () => {
+    preparar({ role: "viewer", temFator: true, aal: "aal1", isPlatformAdmin: true, confiavel: true });
+    const r = await requireRole("admin", { allowPlatformAdmin: true });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect((await r.response.json()).error.code).toBe("mfa_required");
+  });
+
+  it("alvo pelo path numa org onde o platform admin NÃO é membro: confiança não basta", async () => {
+    // O cookie aponta para a empresa dele (admin), mas o alvo é outra.
+    preparar({ role: "admin", temFator: true, aal: "aal1", isPlatformAdmin: true, confiavel: true });
+    const r = await requireRole("admin", {
+      allowPlatformAdmin: true,
+      organizationId: "33333333-3333-4333-8333-333333333333",
+      // Sem filiação não há status lido; o caso mede MFA, não suspensão.
+      permiteOrgSuspensa: true,
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect((await r.response.json()).error.code).toBe("mfa_required");
+  });
+
+  it("o dono da instalação, ADMIN da própria empresa, usa a confiança nela", async () => {
+    preparar({ role: "admin", temFator: true, aal: "aal1", isPlatformAdmin: true, confiavel: true });
+    // `agindoPeloPoderDePlataforma` responde false para quem é admin da org ativa
+    // (medido em lib/auth/poder-de-plataforma.test.ts).
+    const r = await requireRole("admin", { allowPlatformAdmin: true });
     expect(r.ok).toBe(true);
   });
 
@@ -146,5 +197,166 @@ describe("requireRole — MFA é política de sessão, não de cadastro", () => 
       const corpo = (await r.response.json()) as { error: { code: string } };
       expect(corpo.error.code).toBe("forbidden_role");
     }
+  });
+});
+
+describe("requireRole — leituras independentes em paralelo", () => {
+  it("inicia MFA enquanto a consulta de papel ainda aguarda o banco", async () => {
+    preparar({ role: "admin", temFator: false, aal: "aal1" });
+    const stub = montarStub({ role: "admin", temFator: false, aal: "aal1" });
+    let liberar!: (value: { data: Role; error: null }) => void;
+    stub.rpc.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          liberar = resolve;
+        }),
+    );
+    vi.mocked(createClient).mockResolvedValue(
+      stub as unknown as Awaited<ReturnType<typeof createClient>>,
+    );
+    const resultado = requireRole("admin");
+    await vi.waitFor(() => expect(stub.auth.getUser).toHaveBeenCalled());
+    liberar({ data: "admin", error: null });
+    expect((await resultado).ok).toBe(true);
+  });
+
+  it("preserva forbidden_role mesmo se a leitura de MFA falhar", async () => {
+    preparar({ role: "viewer", temFator: false, aal: "aal1" });
+    const stub = montarStub({ role: "viewer", temFator: false, aal: "aal1" });
+    stub.auth.getUser.mockRejectedValue(new Error("MFA indisponível"));
+    vi.mocked(createClient).mockResolvedValue(
+      stub as unknown as Awaited<ReturnType<typeof createClient>>,
+    );
+    const resultado = await requireRole("admin");
+    expect(resultado.ok).toBe(false);
+    if (!resultado.ok) expect((await resultado.response.json()).error.code).toBe("forbidden_role");
+  });
+
+  it("não libera acesso quando a leitura de MFA necessária falha", async () => {
+    preparar({ role: "admin", temFator: false, aal: "aal1" });
+    const stub = montarStub({ role: "admin", temFator: false, aal: "aal1" });
+    stub.auth.getUser.mockRejectedValue(new Error("MFA indisponível"));
+    vi.mocked(createClient).mockResolvedValue(
+      stub as unknown as Awaited<ReturnType<typeof createClient>>,
+    );
+    await expect(requireRole("admin")).rejects.toThrow("MFA indisponível");
+  });
+});
+
+describe("requireRole — os caminhos que não passam pela leitura paralela", () => {
+  const SUPORTE = {
+    id: "33333333-3333-4333-8333-333333333333",
+    organization_id: ORG_ID,
+    actor_user_id: USER_ID,
+    auth_session_id: "44444444-4444-4444-8444-444444444444",
+    previous_organization_id: null,
+    expires_at: "2099-01-01T00:00:00Z",
+    name: "Org em suporte",
+    locale: null,
+    access_mode: "full" as const,
+  };
+
+  function comSuporte(status: "active" | "expired", cenario: Cenario) {
+    preparar(cenario);
+    const stub = montarStub(cenario);
+    vi.mocked(createClient).mockResolvedValue(
+      stub as unknown as Awaited<ReturnType<typeof createClient>>,
+    );
+    vi.mocked(loadAuthUser).mockResolvedValue({
+      id: USER_ID,
+      email: "admin@teste.local",
+      is_platform_admin: cenario.isPlatformAdmin ?? false,
+      organizations: [],
+      support: { ...SUPORTE, status },
+    } as unknown as AuthUser);
+    return stub;
+  }
+
+  it("acompanhamento encerrado é 403 sem ler papel nem MFA", async () => {
+    comSuporte("expired", { role: "admin", temFator: true, aal: "aal1" });
+    const r = await requireRole("viewer", { organizationId: ORG_ID });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect((await r.response.json()).error.code).toBe("forbidden");
+    expect(createClient).not.toHaveBeenCalled();
+  });
+
+  it("platform admin FULL com opt-in e sessão aal2 passa sem ler papel", async () => {
+    preparar({ role: "viewer", temFator: true, aal: "aal2", isPlatformAdmin: true });
+    const stub = montarStub({ role: "viewer", temFator: true, aal: "aal2" });
+    vi.mocked(createClient).mockResolvedValue(stub as unknown as Awaited<ReturnType<typeof createClient>>);
+    const r = await requireRole("admin", { allowPlatformAdmin: true });
+    expect(r.ok).toBe(true);
+    expect(stub.rpc).not.toHaveBeenCalled();
+  });
+
+  it("platform admin FULL com fator em aal1 é BARRADO: o atalho de escrita cobra MFA", async () => {
+    preparar({ role: "viewer", temFator: true, aal: "aal1", isPlatformAdmin: true });
+    const r = await requireRole("admin", { allowPlatformAdmin: true });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect((await r.response.json()).error.code).toBe("mfa_required");
+  });
+
+  it("acompanhamento ativo NÃO usa o atalho de platform admin: papel e MFA são lidos", async () => {
+    const stub = comSuporte("active", {
+      role: "admin",
+      temFator: true,
+      aal: "aal1",
+      isPlatformAdmin: true,
+    });
+    const r = await requireRole("admin", { organizationId: ORG_ID, allowPlatformAdmin: true });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect((await r.response.json()).error.code).toBe("mfa_required");
+    expect(chamadasDePapel(stub)).toBe(1);
+    expect(stub.auth.getUser).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("requireRole — a leitura paralela não vaza nem guarda nada", () => {
+  it("MFA que rejeita DEPOIS do 403 de papel não vira unhandled rejection", async () => {
+    // O .then de dois handlers é o que garante isto: quando o papel falha, a
+    // promessa de MFA nunca é aguardada, e sem o segundo handler a rejeição
+    // tardia escaparia do processo.
+    preparar({ role: "viewer", temFator: false, aal: "aal1" });
+    const stub = montarStub({ role: "viewer", temFator: false, aal: "aal1" });
+    let rejeitar!: (e: Error) => void;
+    stub.auth.getUser.mockImplementation(
+      () =>
+        new Promise((_, reject) => {
+          rejeitar = reject;
+        }),
+    );
+    vi.mocked(createClient).mockResolvedValue(
+      stub as unknown as Awaited<ReturnType<typeof createClient>>,
+    );
+    const escapadas: unknown[] = [];
+    const ouvinte = (motivo: unknown) => escapadas.push(motivo);
+    process.on("unhandledRejection", ouvinte);
+    try {
+      const r = await requireRole("admin");
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect((await r.response.json()).error.code).toBe("forbidden_role");
+      rejeitar(new Error("MFA indisponível depois do 403"));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(escapadas).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", ouvinte);
+    }
+  });
+
+  it("cada requisição relê papel e MFA — nada é guardado entre chamadas", async () => {
+    preparar({ role: "admin", temFator: true, aal: "aal2" });
+    const stub = montarStub({ role: "admin", temFator: true, aal: "aal2" });
+    vi.mocked(createClient).mockResolvedValue(
+      stub as unknown as Awaited<ReturnType<typeof createClient>>,
+    );
+    expect((await requireRole("admin")).ok).toBe(true);
+    stub.auth.mfa.getAuthenticatorAssuranceLevel.mockResolvedValue({
+      data: { currentLevel: "aal1", nextLevel: "aal2" },
+      error: null,
+    });
+    const r = await requireRole("admin");
+    expect(r.ok).toBe(false);
+    expect(chamadasDePapel(stub)).toBe(2);
+    expect(stub.auth.getUser).toHaveBeenCalledTimes(2);
   });
 });

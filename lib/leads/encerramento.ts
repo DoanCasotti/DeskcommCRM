@@ -26,6 +26,17 @@ import { audit } from "@/lib/audit";
 import { traduzir } from "@/lib/i18n/dicionario";
 import { emitLeadActivity } from "@/lib/leads/activity-emitter";
 import { registraFalhaDeAtividade } from "@/lib/leads/activity-write-failure";
+import {
+  camposComAnexo,
+  recusaDeCamposObrigatorios,
+  recusaDeMotivoDoGanho,
+  settingsDoFunil,
+  validaCamposExigidos,
+} from "@/lib/leads/campos-exigidos";
+import {
+  razaoDaPerdaNaTimeline,
+  recusaDeMotivoDaPerdaPeloBanco,
+} from "@/lib/leads/motivo-da-perda";
 
 /** Como a demanda terminou. Não há terceira: encerrar é ganhar ou perder. */
 export type DesfechoDaDemanda = "won" | "lost";
@@ -33,8 +44,24 @@ export type DesfechoDaDemanda = "won" | "lost";
 export interface EncerraDemandaInput {
   leadId: string;
   desfecho: DesfechoDaDemanda;
-  /** OBRIGATÓRIO em `lost` (P-03): perder sem motivo não ensina nada a ninguém. */
+  /**
+   * OBRIGATÓRIO em `lost` (P-03): perder sem motivo não ensina nada a ninguém.
+   * Em `won` é o MOTIVO DE GANHO (issue #1536): vai para `crm_leads.won_reason`
+   * na mesma escrita, é texto livre quando o funil não tem lista e passa a ser
+   * exigido quando `settings.won_reason_required` está ligado.
+   */
   motivo?: string | null;
+  /**
+   * A razão da linha na timeline, quando o desfecho padrão ("Ganho" /
+   * "Perdido — <motivo>") diria algo FALSO a quem lê. Hoje só a troca de funil a
+   * usa: a origem fecha como perda porque é o único desfecho que o schema oferece
+   * para "saiu daqui", e "Perdido — other" num negócio que foi levado para outro
+   * funil é uma perda que não aconteceu. O motivo continua gravado na coluna e
+   * no audit; só a frase da tela muda.
+   */
+  razaoNaTimeline?: string;
+  /** Acrescentado ao `payload` da linha (ex.: para onde o negócio foi). */
+  payloadNaTimeline?: Record<string, unknown>;
 }
 
 export interface DemandaEncerrada {
@@ -153,6 +180,66 @@ export async function encerraDemanda(
     throw new ApiError(500, "internal_error", undefined, ctx.requestId, maxPositionErr.message);
   }
 
+  // ── OS CAMPOS OBRIGATÓRIOS E O MOTIVO DE GANHO (issue #1536) ────────────────
+  //
+  // Esta função é o fecho compartilhado: botão "Marcar como ganho/perdido",
+  // `/win`, `/lose`, a origem do clone, `crm_close_demand` (MCP) e a ação
+  // `create_or_move_lead`. Validar AQUI é o que cobre cinco dos seis caminhos da
+  // issue com uma decisão só — e ela precisa vir ANTES do update, porque depois
+  // dele o que existe é a linha gravada.
+  //
+  // O motivo de ganho entra como `faltando` (chave `won_reason`) quando o funil
+  // pede e não veio: o MESMO contrato de `{chave, rotulo}` que a tela já sabe
+  // dialogar, em vez de um código paralelo que a tela teria de tratar à parte.
+  const settings = await settingsDoFunil(
+    supabase,
+    (lead as { pipeline_id: string }).pipeline_id,
+  );
+  const vereditoDeCampos = validaCamposExigidos({
+    lead: lead as Record<string, unknown>,
+    settingsDoFunil: settings,
+    camposComAnexo: await camposComAnexo(
+      supabase,
+      settings,
+      ctx.organization_id,
+      (lead as { id: string }).id,
+    ),
+    destino: { stageId: stage.id, desfecho: input.desfecho },
+    motivoDeGanho: input.desfecho === "won" ? input.motivo ?? null : null,
+  });
+  if (vereditoDeCampos.faltando.length > 0) {
+    const recusa = recusaDeCamposObrigatorios(
+      vereditoDeCampos.faltando,
+      ctx.idioma,
+    );
+    throw new ApiError(
+      422,
+      recusa.codigo,
+      { faltando: vereditoDeCampos.faltando },
+      ctx.requestId,
+      recusa.mensagem,
+    );
+  }
+  // Sem lista cadastrada o motivo de ganho é texto livre; com lista, só o que
+  // está nela passa — quem aplica é o servidor, porque para o GANHO não há
+  // trigger no banco (a CHECK da perda é `crm_leads_lost_reason_required`).
+  if (input.desfecho === "won") {
+    const recusaGanho = recusaDeMotivoDoGanho({
+      motivo: input.motivo,
+      settingsDoFunil: settings,
+      idioma: ctx.idioma,
+    });
+    if (recusaGanho) {
+      throw new ApiError(
+        422,
+        recusaGanho.codigo,
+        undefined,
+        ctx.requestId,
+        recusaGanho.mensagem,
+      );
+    }
+  }
+
   const nextPosition =
     maxPosition?.position_in_stage === null || maxPosition?.position_in_stage === undefined
       ? 1000
@@ -163,6 +250,12 @@ export async function encerraDemanda(
     updated_at: new Date().toISOString(),
   };
   if (input.desfecho === "lost") patch.lost_reason = input.motivo;
+  // O ganho espelha a perda na MESMA escrita: `won_reason` só entra quando há
+  // motivo (a coluna é nullable e sem CHECK — a obrigatoriedade é do funil,
+  // decidida acima, nunca do banco).
+  if (input.desfecho === "won" && input.motivo?.trim()) {
+    patch.won_reason = input.motivo.trim();
+  }
 
   const { error: updErr } = await supabase
     .from("crm_leads")
@@ -171,6 +264,17 @@ export async function encerraDemanda(
     .eq("organization_id", ctx.organization_id);
 
   if (updErr) {
+    // Rede de segurança (#917) — mesma dos outros três caminhos (arrasto, lote,
+    // agente): a recusa do banco por motivo da perda (fora do vocabulário do
+    // funil) vira recusa de negócio (422 lost_reason_invalid), nunca 500. Sem
+    // isto, TODO chamador desta função devolvia o erro cru do Postgres — e são
+    // cinco: `/lose` e `/win` (as rotas humanas), `/leads/[id]/clone` (encerra a
+    // origem), a automação (`create-or-move-lead.ts`) e a capacidade de
+    // encerramento da IA (`lib/mcp/tools/retencao.ts`).
+    const recusa = recusaDeMotivoDaPerdaPeloBanco(updErr, ctx.idioma);
+    if (recusa) {
+      throw new ApiError(422, recusa.codigo, undefined, ctx.requestId, recusa.mensagem);
+    }
     throw new ApiError(500, "internal_error", undefined, ctx.requestId, updErr.message);
   }
 
@@ -204,8 +308,11 @@ export async function encerraDemanda(
     // com a mesma frase duas vezes (ver `motivoLegivel` em retorno-crm.ts).
     // Canônico em português: quem traduz é a LEITURA (`t(item.reason)`). Ver o
     // bloco "vocabulario de dominio persistido" em `lib/i18n/dicionario.ts`.
-    reason: input.desfecho === "won" ? "Ganho" : `Perdido — ${input.motivo}`,
+    reason:
+      input.razaoNaTimeline ??
+      (input.desfecho === "won" ? "Ganho" : razaoDaPerdaNaTimeline(input.motivo ?? "")),
     payload: {
+      ...(input.payloadNaTimeline ?? {}),
       desfecho: input.desfecho,
       from_stage_id: (lead as { stage_id: string }).stage_id,
       to_stage_id: (stage as { id: string }).id,
@@ -236,6 +343,9 @@ export async function encerraDemanda(
       from_stage_id: (lead as { stage_id: string }).stage_id,
       to_stage_id: (stage as { id: string }).id,
       ...(input.desfecho === "lost" ? { lost_reason: input.motivo } : {}),
+      ...(input.desfecho === "won" && input.motivo?.trim()
+        ? { won_reason: input.motivo.trim() }
+        : {}),
     },
   });
 

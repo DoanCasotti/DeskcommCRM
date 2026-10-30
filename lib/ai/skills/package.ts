@@ -32,6 +32,21 @@ const MAX_TOTAL_BYTES = 5 * 1024 * 1024;
 const MAX_FILE_BYTES = 1 * 1024 * 1024;
 const ASSET_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'pdf', 'mp3', 'ogg', 'mp4']);
 
+/**
+ * Alfabeto que o STORAGE (terceiro) aceita em nome de arquivo. O pacote vira chave de objeto
+ * lá ({org}/{nome}/{versionId}/{caminho}), então o nome do arquivo do zip SAI daqui e entra
+ * num sistema de terceiro: quem manda na forma é o alfabeto deles, não o nosso.
+ * Fonte (documentada, seção "File name restrictions"): https://supabase.com/docs/guides/storage/uploads/file-limits
+ * — alfanumérico (A-Z a-z 0-9), pontuação (_ - . ' ,), especiais (! * & $ @ = ; : + ? ( )) e espaço.
+ * A página NÃO documenta teto de comprimento para o nome — por isso não há asserção de tamanho aqui.
+ */
+export const ALFABETO_DO_NOME_NO_STORAGE = /^[A-Za-z0-9_\-.,'!*&$@=;:+?()\s]+$/;
+
+/** Um segmento da chave só pode chegar ao Storage se couber no alfabeto de lá. */
+function segmentoCabeNoStorage(segmento: string): boolean {
+  return ALFABETO_DO_NOME_NO_STORAGE.test(segmento);
+}
+
 function fail(code: string, message: string): ParseSkillResult {
   return { ok: false, error: { code, message } };
 }
@@ -49,8 +64,8 @@ function extensionOf(p: string): string {
 }
 
 /**
- * Lê só as 4 chaves conhecidas do frontmatter (name, description, matcher.any_keywords,
- * matcher.probe_keywords) — parser dedicado, não YAML genérico. Aceita a forma exata do
+ * Lê só as chaves conhecidas do frontmatter (name, description, matcher.any_keywords,
+ * matcher.probe_keywords, matcher.any_tags) — parser dedicado, não YAML genérico. Aceita a forma exata do
  * frontmatter de skill: `chave: valor` na raiz, `matcher:` seguido de `  any_keywords: [a, b]`
  * indentado por baixo.
  */
@@ -83,8 +98,10 @@ function parseFrontmatter(raw: string): { name?: string; description?: string; m
         const subTrimmed = sub.trim();
         const m = /^any_keywords:\s*(.*)$/.exec(subTrimmed);
         const p = /^probe_keywords:\s*(.*)$/.exec(subTrimmed);
+        const t = /^any_tags:\s*(.*)$/.exec(subTrimmed);
         if (m) matcher.any_keywords = parseInlineArray(m[1] ?? '');
         else if (p) matcher.probe_keywords = parseInlineArray(p[1] ?? '');
+        else if (t) matcher.any_tags = parseInlineArray(t[1] ?? '');
         j += 1;
       }
       i = j - 1;
@@ -142,6 +159,13 @@ export function parseSkillPackage(zipBytes: Uint8Array): ParseSkillResult {
     if (!isSafePath(p)) {
       return fail('skill_unsafe_path', `Caminho não permitido no pacote: "${p}" (sem "..", sem caminho absoluto).`);
     }
+    const recusadoPeloStorage = p.split('/').find((segmento) => !segmentoCabeNoStorage(segmento));
+    if (recusadoPeloStorage !== undefined) {
+      return fail(
+        'skill_storage_name_invalid',
+        `O nome "${recusadoPeloStorage}" tem caractere que o Storage recusa em nome de arquivo — use letras sem acento, números, ponto, hífen, sublinhado ou espaço.`,
+      );
+    }
   }
 
   let totalBytes = 0;
@@ -172,6 +196,12 @@ export function parseSkillPackage(zipBytes: Uint8Array): ParseSkillResult {
 
   if (name === undefined || name === '') {
     return fail('skill_frontmatter_invalid', 'SKILL.md precisa de um campo "name" no frontmatter.');
+  }
+  if (!segmentoCabeNoStorage(name)) {
+    return fail(
+      'skill_storage_name_invalid',
+      `O nome da skill ("${name}") tem caractere que o Storage recusa em nome de arquivo — use letras sem acento, números, ponto, hífen, sublinhado ou espaço.`,
+    );
   }
   if (description === undefined || description === '') {
     return fail('skill_frontmatter_invalid', 'SKILL.md precisa de um campo "description" no frontmatter.');

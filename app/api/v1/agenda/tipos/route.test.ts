@@ -1,3 +1,4 @@
+import { DEFAULT_CHANNEL_PROVIDER, CHANNEL_PROVIDER_WACALLS } from "@/lib/channels/capabilities";
 /**
  * LIGAR O LEMBRETE — a superfície que faltava, e as três coisas que ela promete.
  *
@@ -36,6 +37,7 @@ import type { AuthUser } from "@/lib/auth/types";
 import { listaTiposDeAtendimento } from "@/lib/agenda/consulta";
 
 vi.mock("@/lib/auth/require-role", () => ({ requireRole: vi.fn() }));
+vi.mock("@/lib/supabase/server", () => ({ createClient: vi.fn() }));
 vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: vi.fn() }));
 vi.mock("@/lib/audit", () => ({ audit: vi.fn(async () => undefined) }));
 vi.mock("@/lib/agenda/consulta", () => ({ listaTiposDeAtendimento: vi.fn() }));
@@ -77,7 +79,7 @@ interface Escrita {
   filtros: Record<string, unknown>;
 }
 
-function makeAdmin(linhas: Linha[]) {
+function makeAdmin(linhas: Linha[], canais: Array<Record<string, unknown>> = []) {
   const escritas: Escrita[] = [];
 
   function builder() {
@@ -133,6 +135,15 @@ function makeAdmin(linhas: Linha[]) {
 
   vi.mocked(createAdminClient).mockReturnValue({
     from: (tabela: string) => {
+      if (tabela === "channel_sessions") {
+        const filtros: Record<string, unknown> = {};
+        const c = {
+          select: () => c,
+          eq(k: string, v: unknown) { filtros[k] = v; return c; },
+          maybeSingle: async () => ({ data: canais.find((r) => Object.entries(filtros).every(([k,v]) => r[k] === v)) ?? null, error: null }),
+        };
+        return c;
+      }
       expect(tabela, "a rota mexeu em outra tabela").toBe("calendar_event_types");
       return builder();
     },
@@ -258,6 +269,80 @@ describe("PATCH /api/v1/agenda/tipos — ligar e desligar depois", () => {
     expect(linhas[0]?.reminder_enabled).toBe(false);
     expect(linhas[0]?.reminder_minutes_before).toBe(90);
   });
+
+  it("grava o texto próprio, e string em branco VOLTA ao padrão", async () => {
+    authOk();
+    const linhas = [linha({ id: TIPO_DA_ORG, organization_id: ORG })];
+    const db = makeAdmin(linhas);
+    const { PATCH } = await import("./route");
+
+    const gravou = await PATCH(
+      req("PATCH", { id: TIPO_DA_ORG, reminder_body: "  Oi {{nome}}, te espero {{hora}}.  " }),
+    );
+    expect(gravou.status).toBe(200);
+    expect(linhas[0]?.reminder_body).toBe("Oi {{nome}}, te espero {{hora}}.");
+
+    const limpou = await PATCH(req("PATCH", { id: TIPO_DA_ORG, reminder_body: "   " }));
+    expect(limpou.status).toBe(200);
+    expect(linhas[0]?.reminder_body).toBeNull();
+    expect(db.escritas.at(-1)?.campos).toMatchObject({ reminder_body: null });
+  });
+
+  it("recusa texto maior que 1000 caracteres sem escrever", async () => {
+    authOk();
+    const linhas = [linha({ id: TIPO_DA_ORG, organization_id: ORG })];
+    const db = makeAdmin(linhas);
+    const { PATCH } = await import("./route");
+
+    const res = await PATCH(req("PATCH", { id: TIPO_DA_ORG, reminder_body: "x".repeat(1001) }));
+
+    expect(res.status).toBe(422);
+    const corpo = await corpoDeErro(res);
+    expect(corpo.error.message).toMatch(/1000/);
+    expect(db.escritas).toEqual([]);
+  });
+
+  it("grava um texto por extra, e aceita mais de 3 extras", async () => {
+    authOk();
+    const linhas = [linha({ id: TIPO_DA_ORG, organization_id: ORG })];
+    const db = makeAdmin(linhas);
+    const { PATCH } = await import("./route");
+
+    const extras = [180, 120, 60, 30];
+    const res = await PATCH(
+      req("PATCH", {
+        id: TIPO_DA_ORG,
+        reminder_enabled: true,
+        reminder_minutes_before: 1440,
+        reminder_extra_offsets_minutes: extras,
+        reminder_body: "Amanhã",
+        reminder_bodies: { "180": "Falta pouco", "60": "Tô chegando" },
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    expect(linhas[0]?.reminder_extra_offsets_minutes).toEqual(extras);
+    expect(linhas[0]?.reminder_bodies).toEqual({ "180": "Falta pouco", "60": "Tô chegando" });
+    expect(db.escritas.at(-1)?.campos).toMatchObject({
+      reminder_extra_offsets_minutes: extras,
+      reminder_bodies: { "180": "Falta pouco", "60": "Tô chegando" },
+    });
+  });
+
+  it("recusa o 21º extra — teto de segurança, não de produto", async () => {
+    authOk();
+    const linhas = [linha({ id: TIPO_DA_ORG, organization_id: ORG })];
+    const db = makeAdmin(linhas);
+    const { PATCH } = await import("./route");
+
+    const extras = Array.from({ length: 21 }, (_, i) => 15 + i * 15);
+    const res = await PATCH(
+      req("PATCH", { id: TIPO_DA_ORG, reminder_extra_offsets_minutes: extras }),
+    );
+
+    expect(res.status).toBe(422);
+    expect(db.escritas).toEqual([]);
+  });
 });
 
 describe("a faixa aceita — mais estreita que o CHECK do banco, de propósito", () => {
@@ -382,6 +467,10 @@ describe("GET /api/v1/agenda/tipos", () => {
           janelaDeAgendamentoDias: 60,
           lembreteLigado: true,
           lembreteAntecedenciaMin: 180,
+          lembreteDegrausExtras: [],
+          lembreteMensagem: "Oi {{nome}}, te espero {{dia}} às {{hora}}.",
+          lembreteMensagens: {},
+          precoPadraoCents: null,
         },
       ],
     });
@@ -391,9 +480,49 @@ describe("GET /api/v1/agenda/tipos", () => {
 
     expect(res.status).toBe(200);
     const corpo = (await res.json()) as {
-      data: Array<{ reminder_enabled: boolean; reminder_minutes_before: number }>;
+      data: Array<{
+        reminder_enabled: boolean;
+        reminder_minutes_before: number;
+        reminder_body: string | null;
+        reminder_bodies: Record<string, string>;
+      }>;
     };
     expect(corpo.data[0]?.reminder_enabled).toBe(true);
     expect(corpo.data[0]?.reminder_minutes_before).toBe(180);
+    expect(corpo.data[0]?.reminder_body).toBe("Oi {{nome}}, te espero {{dia}} às {{hora}}.");
+    expect(corpo.data[0]?.reminder_bodies).toEqual({});
+  });
+});
+
+
+describe("canal do lembrete na API de tipos", () => {
+  const CANAL = "77777777-7777-4777-8777-777777777777";
+  it("PATCH persiste canal da organização e permite limpar para automático", async () => {
+    authOk();
+    const rows = [linha({ id: TIPO_DA_ORG, organization_id: ORG })];
+    makeAdmin(rows, [{ id: CANAL, organization_id: ORG, provider: DEFAULT_CHANNEL_PROVIDER, archived_at: null }]);
+    const { PATCH } = await import("./route");
+    expect((await PATCH(req("PATCH", { id: TIPO_DA_ORG, reminder_channel_session_id: CANAL }))).status).toBe(200);
+    expect(rows[0]?.reminder_channel_session_id).toBe(CANAL);
+    expect((await PATCH(req("PATCH", { id: TIPO_DA_ORG, reminder_channel_session_id: null }))).status).toBe(200);
+    expect(rows[0]?.reminder_channel_session_id).toBeNull();
+  });
+  it.each([
+    { organization_id: OUTRA_ORG }, { archived_at: "2026-10-01T00:00:00Z" }, { provider: CHANNEL_PROVIDER_WACALLS },
+  ])("recusa canal %j antes de escrever", async (patch) => {
+    authOk();
+    const { escritas } = makeAdmin([linha({ id: TIPO_DA_ORG, organization_id: ORG })], [
+      { id: CANAL, organization_id: ORG, provider: DEFAULT_CHANNEL_PROVIDER, archived_at: null, ...patch },
+    ]);
+    const { PATCH } = await import("./route");
+    expect((await PATCH(req("PATCH", { id: TIPO_DA_ORG, reminder_channel_session_id: CANAL }))).status).toBe(422);
+    expect(escritas).toHaveLength(0);
+  });
+  it("POST valida e persiste a configuração no nascimento", async () => {
+    authOk(); const rows: Linha[] = [];
+    makeAdmin(rows, [{ id: CANAL, organization_id: ORG, provider: DEFAULT_CHANNEL_PROVIDER, archived_at: null }]);
+    const { POST } = await import("./route");
+    expect((await POST(req("POST", { name: "Design", category: "procedimento", duration_minutes: 30, location_kind: "in_person", reminder_channel_session_id: CANAL }))).status).toBe(201);
+    expect(rows[0]?.reminder_channel_session_id).toBe(CANAL);
   });
 });

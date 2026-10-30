@@ -6,6 +6,7 @@ import { apiClient } from "@/lib/api/client";
 import { showApiError } from "@/components/feedback/ApiErrorToast";
 import { useT } from "@/hooks/i18n/useT";
 import type { FlowGraph } from "@/lib/followup/graph-schema";
+import type { FollowupFlowSurface } from "@/lib/followup/api-schemas";
 import type { FollowupFlowStatus } from "./useFollowupFlows";
 
 export interface FollowupFlowDetailRow {
@@ -16,6 +17,8 @@ export interface FollowupFlowDetailRow {
   draft_graph: FlowGraph | null;
   handoff_policy: "pause" | "cancel" | "allow";
   trigger_config: Record<string, unknown>;
+  /** Superfície do fluxo: decide a paleta, os controles da barra e o Fim. */
+  surface: FollowupFlowSurface;
   created_at: string;
   updated_at: string;
   versions_count: number;
@@ -80,10 +83,18 @@ export function usePublishFollowupFlow(id: string) {
       const res = await apiClient.post<SingleResponse>(`/api/v1/ai/followup-flows/${id}/publish`, {});
       return res.data;
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: followupFlowQueryKey(id) });
       qc.invalidateQueries({ queryKey: ["followup", "flows", "list"] });
       toast.success(t("Fluxo publicado."));
+      // OS AVISOS DO GATILHO, um a um, no momento em que a pessoa está olhando.
+      // Eles não reprovam a publicação (ver `avisosDoGatilho`), e guardá-los
+      // para depois é guardá-los para nunca. `duration` longa de propósito: a
+      // frase é longa e diz o que fazer, não só que há algo errado.
+      const avisos = (data as { avisos?: Array<{ code: string; message: string }> } | undefined)?.avisos;
+      for (const aviso of avisos ?? []) {
+        toast.warning(t(aviso.message), { duration: 12_000 });
+      }
     },
   });
 }
@@ -160,6 +171,24 @@ export function useUpdateTriggerConfig(id: string) {
       toast.success(t("Gatilho atualizado."));
     },
     onError: (err) => showApiError(err),
+  });
+}
+
+export function useRenameFollowupFlow() {
+  const t = useT();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, name }: { id: string; name: string }) => {
+      const res = await apiClient.patch<SingleResponse>(`/api/v1/ai/followup-flows/${id}`, { name });
+      return res.data;
+    },
+    onSuccess: (updated) => {
+      qc.setQueryData<FollowupFlowDetailRow>(followupFlowQueryKey(updated.id), (prev) =>
+        prev ? { ...prev, ...updated } : prev,
+      );
+      qc.invalidateQueries({ queryKey: ["followup", "flows", "list"] });
+      toast.success(t("Fluxo renomeado."));
+    },
   });
 }
 

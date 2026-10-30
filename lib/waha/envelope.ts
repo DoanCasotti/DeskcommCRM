@@ -44,6 +44,19 @@ const booleano = z.boolean().nullish();
 const wahaMediaSchema = z.looseObject({
   url: texto,
   mimetype: texto,
+  /**
+   * Nome ORIGINAL do arquivo, só quando a mensagem TEM um (`"some-file.pdf"`;
+   * imagem e áudio vêm `null`) — é o campo `media.filename` documentado pelo
+   * WAHA em "Receive messages" (waha.devlike.pro/docs/how-to/receive-messages).
+   *
+   * Ganha tipo porque o código passa a LÊ-lo sem guarda própria
+   * (`mediaFilenameOf`, em `lib/waha/ingest.ts`) e gravá-lo em
+   * `metadata.media_filename`, que o cartão do Inbox já usa (#2613). `nullish`
+   * idem `url`/`mimetype`: WAHA escreve `null` para "não tenho este campo", e
+   * recusar o payload por isso transformaria mensagem com anexo em mensagem
+   * descartada.
+   */
+  filename: texto,
 });
 
 /**
@@ -63,6 +76,13 @@ const wahaMediaSchema = z.looseObject({
 const wahaKeySchema = z.looseObject({
   remoteJidAlt: texto,
   participantAlt: texto,
+  /**
+   * Quem escreveu, em GRUPO (forma do Baileys). `unknown` e não `texto`: quem o
+   * lê (`remetenteDoGrupo`, em `ingest.ts`) confere `typeof === "string"`
+   * antes — e exigir string aqui transformaria um formato novo do campo em
+   * mensagem descartada inteira, que é a regressão que este arquivo evita.
+   */
+  participant: z.unknown().optional(),
 });
 
 export const wahaPayloadSchema = z.looseObject({
@@ -80,9 +100,43 @@ export const wahaPayloadSchema = z.looseObject({
   mediaUrl: texto,
   mimetype: texto,
   media: wahaMediaSchema.nullish(),
+  /**
+   * O autor de uma mensagem de GRUPO — a doutrina: "Sender é `p.author`, não
+   * `p.from`" (em grupo, `from` é o próprio grupo). O WAHA declara os dois no
+   * `WAMessage`: `participant` e `author`. Nenhum dos dois foi MEDIDO num webhook
+   * real desta instalação (a sonda da Task 0 mediu só a listagem de grupos), então
+   * ficam `unknown` e quem os lê confere o tipo — ver `remetenteDoGrupo`.
+   */
+  participant: z.unknown().optional(),
+  author: z.unknown().optional(),
+  /**
+   * A mensagem que esta responde — o "responder em cima" do WhatsApp.
+   *
+   * O NOWEB normaliza o campo (`payload.replyTo`: id + texto citado — medido em
+   * produção, issue #2474) e repete o id cru em
+   * `_data.message.<tipo>.contextInfo.stanzaId`. `unknown` como `participant` e
+   * `author`: quem o lê (`citacaoDoPayload`, em `ingest.ts`) confere os tipos
+   * campo a campo, e exigir shape aqui transformaria um formato novo do campo
+   * em mensagem descartada inteira — a regressão que este arquivo evita.
+   */
+  replyTo: z.unknown().optional(),
   /** Id da mensagem ORIGINAL nos eventos `message.edited` / `message.revoked`. */
   editedMessageId: texto,
   revokedMessageId: texto,
+  /**
+   * O miolo do evento `message.reaction` — `{ text, messageId }` medido na doc
+   * do WAHA ("Receive messages" > message.reaction): `text` é o emoji (string
+   * VAZIA quando o autor removeu a reação) e `messageId`, o id da mensagem
+   * reagida.
+   *
+   * Ganha tipo porque o código consome `messageId` sem guarda própria
+   * (`handleReaction`, em `ingest.ts`) — é o ponteiro para o alvo, e sem ele a
+   * reação vira linha cega. `unknown` e não `looseObject({...})` de propósito:
+   * `objetoSimples` confere objeto e forma lá na frente, e exigir o shape aqui
+   * transformaria uma mudança de formato do WAHA em reação descartada em
+   * silêncio — a mesma regressão que este arquivo existe para evitar.
+   */
+  reaction: z.unknown().optional(),
   _data: z.looseObject({
     notifyName: texto,
     pushName: texto,
@@ -117,25 +171,42 @@ export type WahaEnvelope = z.infer<typeof wahaEnvelopeSchema>;
  *
  * `docs/prd/03-prd-whatsapp-waha.md` §3.3 tem um AC explícito: "webhook com
  * HMAC válido grava raw em `webhook_events_log` mesmo se o parse falhar
- * depois". Conferir o contrato inteiro antes de arquivar destruiria justamente
- * a evidência que se quer guardar — o corpo cru de um payload cujo formato
- * mudou é o artefato que responde O QUE mudou.
+ * depois". Recusar pelo contrato inteiro antes de arquivar destruiria
+ * justamente a evidência que se quer guardar — o corpo cru de um payload cujo
+ * formato mudou é o artefato que responde O QUE mudou.
  *
- * Então o estágio 1 confere só o que a rota precisa ANTES de poder arquivar:
- * a sessão (que resolve a organização) e o id da mensagem (que vai numa coluna
- * do próprio arquivo). O estágio 2 confere o resto, depois do INSERT.
+ * Então o estágio 1 confere só o que a rota precisa ANTES de poder arquivar, e
+ * isso depende de QUEM resolve a organização em cada rota:
+ *
+ *   - rota por token: o token do caminho resolve. O estágio 1 confere o evento
+ *     e o id da mensagem (que vai numa coluna do próprio arquivo), e só.
+ *   - rota global: a `session` do corpo resolve, então ela entra também.
+ *
+ * Um estágio 1 único, com `session`, fazia a rota por token recusar ANTES do
+ * INSERT um campo que ela nem lê — e o corpo cru sumia (issue #290, item 1). O
+ * estágio 2 confere o resto e decide o status com que a linha é arquivada.
  */
-export const wahaRoteamentoSchema = z.looseObject({
+export const wahaRoteamentoPorTokenSchema = z.looseObject({
   event: texto,
-  session: texto,
   payload: z.looseObject({ id: texto }).nullish(),
 });
 
+export const wahaRoteamentoSchema = z.looseObject({
+  ...wahaRoteamentoPorTokenSchema.shape,
+  session: texto,
+});
+
+export type WahaRoteamentoPorToken = z.infer<typeof wahaRoteamentoPorTokenSchema>;
 export type WahaRoteamento = z.infer<typeof wahaRoteamentoSchema>;
 
-/** Estágio 1 — o mínimo para resolver o tenant e arquivar o corpo. */
+/** Estágio 1 da rota global — o mínimo para resolver o tenant pela sessão e arquivar o corpo. */
 export function lerRoteamentoWaha(rawBody: string): LeituraDeEnvelope<WahaRoteamento> {
   return lerEnvelope(rawBody, wahaRoteamentoSchema);
+}
+
+/** Estágio 1 da rota por token — o tenant já vem do caminho; só o que vai para o arquivo. */
+export function lerRoteamentoWahaPorToken(rawBody: string): LeituraDeEnvelope<WahaRoteamentoPorToken> {
+  return lerEnvelope(rawBody, wahaRoteamentoPorTokenSchema);
 }
 
 /**
@@ -145,6 +216,8 @@ export function lerRoteamentoWaha(rawBody: string): LeituraDeEnvelope<WahaRoteam
  * schema é `loose` em todo nível, então o que ele devolve tem as MESMAS chaves
  * que entraram. Provado em `contrato-do-webhook-waha.test.ts`.
  */
-export function conferirContratoWaha(roteado: WahaRoteamento): LeituraDeEnvelope<WahaEnvelope> {
+export function conferirContratoWaha(
+  roteado: WahaRoteamento | WahaRoteamentoPorToken,
+): LeituraDeEnvelope<WahaEnvelope> {
   return conferirEnvelope(roteado, wahaEnvelopeSchema);
 }

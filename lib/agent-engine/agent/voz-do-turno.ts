@@ -15,7 +15,7 @@
 import type pg from 'pg';
 
 import { resolveOrgLlmConfig, type LlmEdgeConfig } from '../edge/llm/credentials';
-import { aplicarOrcamento, LlmBudgetExceededError, type OrcamentoCallInput } from '../edge/llm/run-model-call';
+import { aplicarOrcamento, LlmBudgetExceededError, type RastroDaChamada } from '../edge/llm/run-model-call';
 import { logger } from '@/lib/logger';
 
 export type VozQuando = 'nunca' | 'espelhar' | 'sempre';
@@ -88,7 +88,7 @@ export async function resolverVozDoTurno(
     });
 
     const modelId = voz.model_id ?? 'eleven_multilingual_v2';
-    const orcamentoInput: OrcamentoCallInput = {
+    const orcamentoInput: RastroDaChamada = {
       tenantId: input.tenantId,
       leadId: input.leadId ?? null,
       jobId: input.jobId ?? null,
@@ -108,6 +108,8 @@ export async function resolverVozDoTurno(
       orcamentoDaConfig: elevenlabs.orcamento,
       orcamentoIndisponivelPorque: elevenlabs.orcamentoIndisponivelPorque,
       chave: input.cfg.budgetEnforcement ?? 'on',
+      // O teto do plano só vincula a chave da INSTALAÇÃO — mesmo critério do chat.
+      origemDaChave: elevenlabs.origemDaChave,
       purpose: 'sintese_de_voz',
       provider: 'elevenlabs',
       model: modelId,

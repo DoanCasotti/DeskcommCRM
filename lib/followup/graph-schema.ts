@@ -1,4 +1,8 @@
 import { z } from 'zod';
+import { variaveisDoModeloSchema } from '@/lib/channels/meta/variaveis-do-fluxo';
+
+import { PRIORIDADES_DA_TAREFA } from '@/lib/tarefas/tipos';
+import { ehOpDeData, OPS_DE_DATA } from './condicao-por-data';
 
 /**
  * Flow graph schema for the follow-up automation system.
@@ -12,7 +16,20 @@ export const NODE_TYPES = [
   'ai_classify',
   'match_reply',
   'repeat',
+  'collect',
+  'skill',
   'action',
+  // Lembrete interno (#1540): grava `crm_tasks` e NÃO envia mensagem. É a caixa
+  // que advocacia, saúde e serviços regulados precisam — o sistema lembra a
+  // equipe, a mensagem sai de uma pessoa.
+  'internal_task',
+  // #2065: dois tipos de ACAO que não falam com o cliente — o fluxo deixa de
+  // só mandar mensagem. `move_lead` move o card para outra etapa (o mesmo
+  // escritor de etapa do board/automação), `edit_lead_tag` grava tag no lead
+  // (a MESMA `add_tag` do motor de automação). "Disparar campanha" ficou de
+  // fora desta fatia e é o passo seguinte da issue.
+  'move_lead',
+  'edit_lead_tag',
   'end',
 ] as const;
 export type NodeType = (typeof NODE_TYPES)[number];
@@ -88,6 +105,25 @@ export const waitConfigSchema = z
     z.strictObject({
       mode: z.literal('fixed'),
       duration_ms: z.number().int().min(300_000).max(7_776_000_000),
+      /**
+       * A espera NÃO é encurtada nem cancelada quando o contato manda mensagem.
+       *
+       * Existe para a cadência longa — o retorno de manutenção de 28 dias — em
+       * que o cliente falar hoje não é motivo para antecipar um toque de daqui a
+       * um mês. Sem isto, `lib/followup/reactivity.ts` ou cancela a inscrição
+       * (`cancel_on_reply`) ou grava `inbound_woke` e corta o timer: os dois
+       * desfechos matam a cadência, e era por isso que a regra de retorno vivia
+       * no prompt do agente chamando `crm_schedule_followup`.
+       *
+       * Só em `fixed`: `smart` é "a IA escolhe dentro de uma faixa", e faixa
+       * adaptativa com imunidade é combinação que ninguém pediu. O `strictObject`
+       * do outro membro já recusa a chave — vira teste, não código.
+       *
+       * Em runtime isto vira o status `dormente` da inscrição (quem projeta é o
+       * handler do nó, em `node-handlers.ts`), e é o status que tira a inscrição
+       * do alcance da reatividade e libera o slot único anti-spam.
+       */
+      immune_to_reply: z.boolean().optional(),
     }),
     z.strictObject({
       mode: z.literal('smart'),
@@ -213,6 +249,14 @@ export const actionConfigSchema = z.discriminatedUnion('mode', [
   z.strictObject({
     mode: z.literal('text'),
     body: z.string().min(1).max(4000),
+    /**
+     * #2734 — MÍDIA OPCIONAL (imagem, vídeo, áudio ou documento, #2972) por URL.
+     * Presente, o `body` vira a
+     * LEGENDA. Opcional de propósito: os grafos publicados não têm a chave e
+     * continuam válidos byte a byte (o `strictObject` só recusa o que ELE não
+     * conhece; um campo novo e opcional é aceito pelos antigos).
+     */
+    media_url: z.string().url().max(2000).optional(),
   }),
   z.strictObject({
     mode: z.literal('ai_message'),
@@ -222,8 +266,74 @@ export const actionConfigSchema = z.discriminatedUnion('mode', [
   z.strictObject({
     mode: z.literal('template'),
     template_id: z.string().uuid(),
+    /**
+     * De onde sai cada variável (`{{1}}`, `{{2}}`…) de um modelo APROVADO:
+     * nome do contato ou campo do negócio, resolvido na hora do envio
+     * (`lib/channels/meta/variaveis-do-fluxo.ts`). Ausente = modelo sem variável.
+     */
+    template_values: variaveisDoModeloSchema.optional(),
   }),
 ]);
+
+/**
+ * Internal task node configuration (#1540) — os MESMOS campos da ação de
+ * automação `create_task`, de propósito: as duas portas criam a mesma tarefa,
+ * e campos diferentes virariam duas telas ensinando duas verdades.
+ *
+ * `atribuir_a` é nominal (`dono_do_lead`) porque o fluxo é publicado sem saber
+ * quem vai atender amanhã — o dono muda, o fluxo não.
+ */
+export const internalTaskConfigSchema = z.strictObject({
+  /** Título com `{{lead.title}}` e `{{contact.name}}`. */
+  titulo: z.string().min(1).max(200),
+  /** De quantos dias o prazo cai a partir do disparo. */
+  vence_em_dias: z.number().int().min(0).max(365),
+  atribuir_a: z.union([
+    z.literal('dono_do_lead'),
+    z.strictObject({ usuario_id: z.string().uuid() }),
+  ]),
+  prioridade: z.enum(PRIORIDADES_DA_TAREFA),
+});
+
+/**
+ * Nó `move_lead` (#2065) — mover o card para outra etapa do MESMO funil.
+ *
+ * Só a etapa, sem `pipeline_id`: quem escolhe o destino é o SELETOR de etapas
+ * da tela, e quem RECUSA troca de funil é a casa — `moveLeadHandler`
+ * (`app/api/v1/leads/_handler`) devolve `pipeline_immutable_use_clone` quando a
+ * etapa não é do funil do lead, a mesma régua do board, das automações e da
+ * tool MCP. Repetir aqui a pergunta de funil seria uma segunda régua para a
+ * mesma regra.
+ *
+ * `stage_id` aceita vazio porque o rascunho é validado SÓ estruturalmente
+ * (`flowGraphSchema`) e o nó nasce sem destino — quem exige etapa escolhida é o
+ * `validate-publish` (`etapa_destino_ausente`), como a condição com regra em
+ * branco.
+ *
+ * `lost_reason` é opcional para não invalidar grafo já publicado: quem montou
+ * o fluxo antes desta régua continua válido, e quem publica com destino em
+ * etapa de perda precisa preenchê-lo (`motivo_da_perda_ausente`).
+ */
+export const moveLeadConfigSchema = z.strictObject({
+  stage_id: z.string().max(64),
+  lost_reason: z.string().max(500).optional(),
+});
+
+/**
+ * Nó `edit_lead_tag` (#2065) — grava tag no lead, o merge idempotente da ação
+ * `add_tag` do motor de automação (`lib/automation/actions/add-tag.ts`), com os
+ * MESMOS limites do schema de webhook (`lib/schemas/webhooks.ts`): até 10 tags
+ * de até 60 caracteres.
+ *
+ * Lista vazia é rascunho em construção (mesma degradação do `stage_id`); o
+ * publish recusa (`tag_ausente`) — um nó que não grava nada não pode ser
+ * publicado como se gravasse.
+ */
+export const editLeadTagConfigSchema = z.strictObject({
+  tags: z
+    .array(z.string().max(60, "Tag muito longa: máximo de 60 caracteres."))
+    .max(10, "No máximo 10 tags por caixa."),
+});
 
 /**
  * One rule of a `condition` node. In `branching: 'per_check'` it IS a branch,
@@ -231,18 +341,52 @@ export const actionConfigSchema = z.discriminatedUnion('mode', [
  * — identity lives on the rule itself, never in a parallel array that would
  * desync the moment the user reorders the rules.
  */
-export const conditionCheckSchema = z.strictObject({
-  id: declaredBranchIdSchema.optional(),
-  label: z.string().min(1).max(60).optional(),
-  field: z.enum([
-    'lead_stage',
-    'tag',
-    'steps_taken',
-    'last_outcome',
-  ]),
-  op: z.enum(['eq', 'neq', 'gte', 'lte', 'contains']),
-  value: z.union([z.string(), z.number()]),
-});
+export const conditionCheckSchema = z
+  .strictObject({
+    id: declaredBranchIdSchema.optional(),
+    label: z.string().min(1).max(60).optional(),
+    field: z.enum([
+      'lead_stage',
+      'tag',
+      'steps_taken',
+      'last_outcome',
+      // Data relativa sobre um campo personalizado do negócio — ver
+      // `condicao-por-data.ts`. É o que permite perguntar "o período de teste
+      // terminou?", que nenhum dos quatro campos acima alcança.
+      'lead_date',
+    ]),
+    op: z.enum(['eq', 'neq', 'gte', 'lte', 'contains', ...OPS_DE_DATA]),
+    value: z.union([z.string(), z.number()]),
+    /**
+     * A chave em `crm_leads.custom_fields` que a regra lê (ex.: `fim_teste`).
+     * Só `lead_date` usa, e para ele é OBRIGATÓRIA no PUBLISH: regra de data
+     * sem campo não tem o que comparar, e deixá-la passar daria uma condição
+     * que responde sempre `false` sem dizer por quê. Aqui, no rascunho, a
+     * chave VAZIA passa — ver o aviso logo abaixo.
+     */
+    key: z.string().max(60, 'Nome do campo muito longo: máximo de 60 caracteres.').optional(),
+  })
+  // ⚠️ `key` VAZIA PASSA AQUI, de propósito, e isso foi achado pela prova de
+  // tela. O rascunho é validado SÓ estruturalmente — a mesma razão pela qual
+  // `move_lead.stage_id` e `edit_lead_tag.tags` aceitam vazio: quem escolhe o
+  // campo de data ainda não digitou o nome dele, e o painel grava a cada
+  // tecla (`commit` → `safeParse`). Exigir a chave aqui fazia aparecer um erro
+  // no instante em que a pessoa escolhia «Data de um campo do negócio», antes
+  // de ela ter chance de preencher — e a regra nem era persistida, então o nó
+  // continuava com a regra ANTERIOR enquanto a tela mostrava a nova.
+  //
+  // Quem exige é o publish (`campo_de_data_ausente` em `validate-publish.ts`),
+  // como exige etapa de destino e tag. O mesmo vale para o prazo: limpar o
+  // campo para redigitar passa por um valor vazio, e o publish é que recusa
+  // (`check_value_not_number`).
+  .refine((c) => c.field !== 'lead_date' || ehOpDeData(c.op), {
+    message: `uma regra de data usa ${OPS_DE_DATA.join(' ou ')}`,
+    path: ['op'],
+  })
+  .refine((c) => c.field === 'lead_date' || !ehOpDeData(c.op), {
+    message: 'passou_ha e falta_para existem só para regra de data',
+    path: ['op'],
+  });
 
 export type ConditionCheck = z.infer<typeof conditionCheckSchema>;
 
@@ -275,12 +419,86 @@ export const conditionConfigSchema = z
   });
 
 /**
+ * Collect node (`collect`) — uma pergunta do fluxo de ATENDIMENTO.
+ *
+ * O nó NÃO envia nada sozinho: ele declara o CAMPO que precisa ser preenchido
+ * (chave, rótulo, tipo) e o executor in-turn injeta a pergunta no contexto do
+ * agente. Quando o valor entra (`flow_collect`, extrator ou resposta do cliente),
+ * o campo deixa de ser pendente e o fluxo avança. `key` casa 1:1 com
+ * `contact_flow_data.field_key` (migration 0236) — a regex espelha o CHECK do
+ * banco (minúsculas, começa com letra).
+ */
+/**
+ * `cpf` (PR 2 do port): o número confere pelo dígito verificador (mod-11 da
+ * Receita) antes de ser aceito — na prova prática, um CPF com dígito errado foi
+ * gravado como resposta porque o campo era "Número".
+ */
+export const contactFlowFieldTypeSchema = z.enum(['text', 'number', 'date', 'boolean', 'select', 'cpf']);
+export type ContactFlowFieldType = z.infer<typeof contactFlowFieldTypeSchema>;
+
+export const collectConfigSchema = z
+  .strictObject({
+    key: z
+      .string()
+      .min(1)
+      .max(60)
+      .regex(/^[a-z][a-z0-9_]*$/, 'Use letras minúsculas, números e underscore'),
+    label: z.string().min(1).max(80),
+    type: contactFlowFieldTypeSchema.default('text'),
+    required: z.boolean().default(true),
+    /**
+     * Permite o cliente CORRIGIR o dado a qualquer momento: com `true` (padrão),
+     * uma nova informação sobrescreve a anterior. Com `false`, o primeiro valor
+     * fica travado.
+     */
+    permite_correcao: z.boolean().default(true),
+    options: z.array(z.string().min(1).max(80)).max(20).optional(),
+    /** Texto sugerido da pergunta; o agente pode reescrever (checklist guiado pela IA). */
+    question: z.string().max(400).optional(),
+  })
+  .refine((c) => c.type !== 'select' || (c.options?.length ?? 0) > 0, {
+    message: 'tipo "select" exige ao menos uma opção',
+    path: ['options'],
+  });
+
+/**
+ * Skill node (`skill`) — puxa uma skill instalada em paralelo ao passo do fluxo.
+ * Ao entrar no nó, o executor in-turn inclui o corpo da skill no contexto do
+ * turno (união com o matcher por keyword). O nome é validado contra as skills
+ * instaladas no executor, não aqui (o grafo é portável entre organizações).
+ */
+export const skillConfigSchema = z.strictObject({
+  skill_name: z.string().min(1).max(80),
+});
+
+/**
+ * Ação ao finalizar um fluxo de atendimento — "quando finaliza, chama qual skill
+ * ou manda pra IA". Opcional para não quebrar grafos existentes; ausente = `nada`
+ * (comportamento anterior).
+ */
+export const endFinishSchema = z.discriminatedUnion('tipo', [
+  z.strictObject({ tipo: z.literal('nada') }),
+  z.strictObject({ tipo: z.literal('ia'), prompt: z.string().max(1000).optional() }),
+  z.strictObject({ tipo: z.literal('skill'), skill_name: z.string().min(1).max(80) }),
+  /**
+   * Encadeia a venda: ao concluir, o motor inicia OUTRO fluxo de atendimento
+   * (`fluxo` = id do `followup_flow_pointers`). A síntese do fluxo concluído
+   * (`completion_note`) entra no contexto do próximo. O id é validado em runtime
+   * contra os fluxos instalados da organização (o grafo é portável) — como
+   * `skill_name`. Autoencadeamento (fluxo → ele mesmo) é ignorado pelo motor.
+   */
+  z.strictObject({ tipo: z.literal('proximo_fluxo'), fluxo: z.string().min(1).max(80) }),
+]);
+export type EndFinish = z.infer<typeof endFinishSchema>;
+
+/**
  * End node configuration.
  * Marks the conclusion of a flow with an outcome.
  */
 export const endConfigSchema = z.strictObject({
   outcome: z.enum(['converted', 'exhausted', 'custom']),
   note: z.string().max(200).optional(),
+  ao_finalizar: endFinishSchema.optional(),
 });
 
 /**
@@ -352,6 +570,28 @@ export const flowNodeSchema = z.discriminatedUnion('type', [
     }),
     config: repeatConfigSchema,
   }),
+  // Collect node: uma pergunta do fluxo de atendimento (coleta um campo)
+  z.strictObject({
+    id: z.string().min(1),
+    type: z.literal('collect'),
+    label: z.string().min(1).max(60),
+    position: z.strictObject({
+      x: z.number(),
+      y: z.number(),
+    }),
+    config: collectConfigSchema,
+  }),
+  // Skill node: puxa uma skill instalada em paralelo ao passo
+  z.strictObject({
+    id: z.string().min(1),
+    type: z.literal('skill'),
+    label: z.string().min(1).max(60),
+    position: z.strictObject({
+      x: z.number(),
+      y: z.number(),
+    }),
+    config: skillConfigSchema,
+  }),
   // Action node: sends a message
   z.strictObject({
     id: z.string().min(1),
@@ -362,6 +602,39 @@ export const flowNodeSchema = z.discriminatedUnion('type', [
       y: z.number(),
     }),
     config: actionConfigSchema,
+  }),
+  // Internal task node (#1540): creates a CRM task, never sends a message
+  z.strictObject({
+    id: z.string().min(1),
+    type: z.literal('internal_task'),
+    label: z.string().min(1).max(60),
+    position: z.strictObject({
+      x: z.number(),
+      y: z.number(),
+    }),
+    config: internalTaskConfigSchema,
+  }),
+  // Nó de ação (#2065): move o card para outra etapa do funil
+  z.strictObject({
+    id: z.string().min(1),
+    type: z.literal('move_lead'),
+    label: z.string().min(1).max(60),
+    position: z.strictObject({
+      x: z.number(),
+      y: z.number(),
+    }),
+    config: moveLeadConfigSchema,
+  }),
+  // Nó de ação (#2065): grava tag no lead, sem mensagem
+  z.strictObject({
+    id: z.string().min(1),
+    type: z.literal('edit_lead_tag'),
+    label: z.string().min(1).max(60),
+    position: z.strictObject({
+      x: z.number(),
+      y: z.number(),
+    }),
+    config: editLeadTagConfigSchema,
   }),
   // End node: terminal state
   z.strictObject({
@@ -415,6 +688,69 @@ export type FlowEdge = z.infer<typeof flowEdgeSchema>;
 export type FlowEdgeCondition = FlowEdge['condition'];
 
 /**
+ * Configurações do fluxo (nível do grafo, não de um nó). Opcional: um grafo
+ * antigo sem `settings` continua válido e cai nos defaults.
+ */
+export const flowSettingsSchema = z.strictObject({
+  /**
+   * Quantas vezes uma pergunta pode ser feita SEM resposta antes de ser
+   * encerrada como não respondida (deixa de ser feita e não bloqueia a
+   * conclusão). Default 3.
+   */
+  max_tentativas_pergunta: z.number().int().min(1).max(10).default(3),
+  /**
+   * Palavras/expressões que LIGAM este fluxo: quando a mensagem do cliente
+   * contém uma delas, o MOTOR inicia o fluxo (entrada por gatilho, sem depender
+   * do modelo). Vazio/ausente = este fluxo só começa por `etapas_do_funil`, pelo
+   * roteador ou encadeado no fim de outro — `flow_start` não existe no código,
+   * e citá-lo aqui prometia uma entrada que ninguém podia configurar.
+   */
+  gatilhos: z.array(z.string().min(1).max(60)).max(30).optional(),
+  /**
+   * As ETAPAS DO FUNIL que LIGAM este roteiro: quando o card do contato está
+   * numa delas, o MOTOR começa o roteiro no próximo turno daquela conversa —
+   * a entrada por etapa, irmã da palavra-gatilho, e sem depender da mensagem.
+   *
+   * ⚠️ POR QUE AQUI (no `settings` do grafo) E NÃO EM `trigger_config`. Para o
+   * follow-up, a entrada por etapa mora no gatilho (`kind: 'stage_change'`,
+   * `lib/followup/gatilho-etapa.ts`, event-driven). No roteiro de atendimento
+   * isso é impossível por construção: o CHECK
+   * `followup_flow_pointers_roteiro_so_manual` (0394) obriga
+   * `trigger_config->>'kind' = 'manual'` na superfície `atendimento`, e o
+   * publicador devolve 422 a qualquer outro kind. O `settings` é o lugar do
+   * vocabulário do roteiro (é onde já vivem `gatilhos`, `expira_em_horas` e
+   * `pode_recomecar`), é versionado junto do grafo e passa pelo schema.
+   *
+   * O id é o da ETAPA (`crm_stages.id`) — o mesmo que `crm_leads.stage_id`, que
+   * é o que o turno lê. A etapa já identifica o funil, então não há par
+   * (funil, etapa) a guardar; o nome do funil existe na tela, para distinguir
+   * etapas homônimas de funis diferentes. Vazio/ausente = nenhuma etapa liga.
+   */
+  etapas_do_funil: z.array(z.string().min(1).max(64)).max(30).optional(),
+  /**
+   * Em quantas horas SEM mensagem do cliente o roteiro em andamento expira
+   * (0397, `fn_encerrar_roteiros_vencidos`). Ausente = 72 h. Sem prazo, um
+   * roteiro abandonado voltava a perguntar semanas depois (prova do #1130).
+   */
+  expira_em_horas: z.number().int().min(1).max(720).optional(),
+  /**
+   * O roteiro pode começar de novo para um cliente que JÁ o concluiu (#1130,
+   * decisão do doc 69: cada roteiro escolhe). Ausente = NÃO recomeça: repetir a
+   * palavra-gatilho de um cadastro já feito reabria as mesmas perguntas.
+   * Agendamento, que precisa repetir, liga.
+   */
+  pode_recomecar: z.boolean().optional(),
+  /**
+   * SOMENTE INTERNO (#1540): o fluxo inteiro não fala com o cliente. A
+   * publicação (`validate-publish.ts`) recusa qualquer nó de ENVIO num fluxo
+   * com esta marca — é a garantia de que "só lembrete" não é uma intenção que
+   * alguém esquece de conferir antes de publicar.
+   */
+  somente_interno: z.boolean().optional(),
+});
+export type FlowSettings = z.infer<typeof flowSettingsSchema>;
+
+/**
  * Complete flow graph schema.
  * Contains nodes and edges defining the flow automation.
  *
@@ -432,6 +768,7 @@ export const flowGraphSchema = z
   .strictObject({
     nodes: z.array(flowNodeSchema).min(2).max(60),
     edges: z.array(flowEdgeSchema).max(120),
+    settings: flowSettingsSchema.optional(),
   })
   .superRefine((grafo, ctx) => {
     const idsDeNo = new Set<string>();
@@ -531,7 +868,17 @@ export type FlowBranch = {
   condition: FlowEdgeCondition;
 };
 
+/** Nó de saída ÚNICA: a aresta sai por ali sempre, e é isso que o rótulo diz. */
 const FALLBACK_ALWAYS_LABEL = 'Sempre';
+/**
+ * Nó que JÁ tem saídas específicas. O motor só usa esta aresta quando nenhuma
+ * outra serve (`selectEdge`, node-handlers), e nunca manda o lead por duas ao
+ * mesmo tempo — "Sempre" ao lado de "Interessado" e "Sem resposta" prometia
+ * justamente isso, e quem montava o fluxo ligava aqui a mensagem que queria
+ * mandar a todo mundo.
+ */
+const FALLBACK_OTHERS_LABEL = 'Outros casos';
+/** O mesmo escape num nó cujas saídas são REGRAS: "o resto", dito com a palavra das regras. */
 const FALLBACK_NONE_LABEL = 'Nenhuma delas';
 const NO_REPLY_LABEL = 'Sem resposta';
 
@@ -585,7 +932,7 @@ export function nodeBranches(node: BranchableNode): FlowBranch[] {
           kind: 'match',
           condition: { type: 'cond_result', value: false },
         },
-        fallbackBranch(FALLBACK_ALWAYS_LABEL),
+        fallbackBranch(FALLBACK_OTHERS_LABEL),
       ];
     }
 
@@ -617,7 +964,7 @@ export function nodeBranches(node: BranchableNode): FlowBranch[] {
             ? { type: 'branch', branch_id: NO_REPLY_BRANCH_ID }
             : { type: 'class_match', value: NO_REPLY_BRANCH_ID },
         },
-        fallbackBranch(FALLBACK_ALWAYS_LABEL),
+        fallbackBranch(FALLBACK_OTHERS_LABEL),
       ];
     }
 
@@ -638,7 +985,7 @@ export function nodeBranches(node: BranchableNode): FlowBranch[] {
           kind: 'match',
           condition: { type: 'branch', branch_id: NO_REPLY_BRANCH_ID },
         },
-        fallbackBranch(FALLBACK_ALWAYS_LABEL),
+        fallbackBranch(FALLBACK_OTHERS_LABEL),
       ];
     }
 
@@ -658,7 +1005,7 @@ export function nodeBranches(node: BranchableNode): FlowBranch[] {
           kind: 'match',
           condition: { type: 'branch', branch_id: REPEAT_DONE_BRANCH_ID },
         },
-        fallbackBranch(FALLBACK_ALWAYS_LABEL),
+        fallbackBranch(FALLBACK_OTHERS_LABEL),
       ];
 
     default:

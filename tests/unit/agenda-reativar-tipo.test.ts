@@ -307,10 +307,51 @@ function chavesEnviadas(arquivo: ts.SourceFile, metodo: string, caminho: string)
   return [...chaves];
 }
 
+function chavesDoExtend(arquivo: ts.SourceFile, nome: string): string[] {
+  /*
+   * As chaves que `<nome>` acrescenta em `.extend({ … })`.
+   *
+   * `alterarSchema` NÃO é `criarSchema.partial().extend({ id })` e ponto: ele
+   * estende com os campos que só existem no PATCH (a mensagem do lembrete
+   * nasce de fábrica e é escrita depois). Reconstruir a lista aceita apenas de
+   * `camposDoTipo` + `id` fazia este guarda acusar campo que a rota ACEITA —
+   * falso positivo, e do pior tipo: o que ensina a ignorar o gate. Lendo o
+   * `.extend` no mesmo AST, a lista aceita passa a ser a de verdade, e uma
+   * chave que nenhum dos dois lados conhece continua reprovando.
+   */
+  let achadas: string[] | null = null;
+  percorre(arquivo, (no) => {
+    if (
+      ts.isVariableDeclaration(no) &&
+      ts.isIdentifier(no.name) &&
+      no.name.text === nome &&
+      no.initializer
+    ) {
+      percorre(no.initializer, (dentro) => {
+        if (
+          ts.isCallExpression(dentro) &&
+          ts.isPropertyAccessExpression(dentro.expression) &&
+          dentro.expression.name.text === "extend" &&
+          dentro.arguments.length === 1 &&
+          ts.isObjectLiteralExpression(dentro.arguments[0]!)
+        ) {
+          achadas = (dentro.arguments[0] as ts.ObjectLiteralExpression).properties.flatMap((pr) =>
+            pr.name && (ts.isIdentifier(pr.name) || ts.isStringLiteral(pr.name)) ? [pr.name.text] : [],
+          );
+        }
+      });
+    }
+  });
+  if (achadas === null) throw new Error(`não achei \`const ${nome} = … .extend({ … })\` — a rota mudou de forma`);
+  return achadas;
+}
+
 describe("travessia tela → rota: a tela não manda campo que a rota descarta", () => {
   const rota = ast(ROTA_TIPOS);
   const tela = ast(TELA);
   const camposDoTipo = chavesDaConstante(rota, "camposDoTipo");
+  const soNoPatch = chavesDoExtend(rota, "alterarSchema");
+  const soNaCriacao = chavesDoExtend(rota, "criarComRascunhoSchema");
 
   it("CONTROLE: as duas pontas foram realmente lidas", () => {
     // Sem isto, um `camposDoTipo` que o leitor não achasse viraria lista vazia e
@@ -325,9 +366,19 @@ describe("travessia tela → rota: a tela não manda campo que a rota descarta",
     ).not.toContain("is_active");
   });
 
+  it("CONTROLE: o `.extend` do alterarSchema foi lido, e não trouxe `is_active`", () => {
+    // Sem esta linha, um `.extend` que o leitor não achasse viraria lista vazia
+    // e o caso abaixo voltaria a reprovar campo que a rota aceita. E a segunda
+    // asserção guarda a distinção que o defeito original custou: desativar tem
+    // rota própria, então `is_active` não pode entrar pelo PATCH nem por aqui.
+    expect(soNoPatch, "`.extend` do alterarSchema veio vazio — o leitor de AST cegou").toContain("id");
+    expect(soNoPatch).not.toContain("is_active");
+  });
+
   it("PATCH: toda chave enviada é aceita pelo `alterarSchema`", () => {
-    // `alterarSchema` é `criarSchema.partial().extend({ id })`.
-    const aceitas = new Set([...camposDoTipo, "id"]);
+    // `alterarSchema` é `criarSchema.partial().extend({ … })` — os campos do
+    // `.extend` são lidos do fonte, não supostos.
+    const aceitas = new Set([...camposDoTipo, ...soNoPatch]);
     const enviadas = chavesEnviadas(tela, "patch", "/api/v1/agenda/tipos");
     expect(enviadas.length).toBeGreaterThan(1);
     expect(
@@ -339,10 +390,17 @@ describe("travessia tela → rota: a tela não manda campo que a rota descarta",
   });
 
   it("POST: toda chave enviada na criação é aceita pelo `criarSchema`", () => {
-    const aceitas = new Set(camposDoTipo);
+    const aceitas = new Set([...camposDoTipo, ...soNaCriacao]);
     const enviadas = chavesEnviadas(tela, "post", "/api/v1/agenda/tipos");
     expect(enviadas.length).toBeGreaterThan(1);
     expect(enviadas.filter((c) => !aceitas.has(c))).toEqual([]);
+  });
+
+  it("rascunho é aceito apenas na criação efetivamente usada, sem liberar is_active no PATCH", () => {
+    expect(soNaCriacao).toContain("service_draft");
+    expect(soNaCriacao).not.toContain("is_active");
+    expect([...camposDoTipo, ...soNoPatch]).not.toContain("service_draft");
+    expect(readFileSync(ROTA_TIPOS, "utf8")).toContain("criarComRascunhoSchema.safeParse");
   });
 
   it("o botão Reativar aponta para uma rota que EXISTE", () => {

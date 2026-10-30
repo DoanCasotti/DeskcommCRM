@@ -90,7 +90,10 @@ const ORG = "00000000-0000-4000-8000-000000000236";
 function configurar() {
   vi.stubEnv("META_PHONE_NUMBER_ID", "1103328999528818");
   vi.stubEnv("META_SYSTEM_USER_TOKEN", "tok");
-  vi.stubEnv("META_GRAPH_VERSION", "v22.0");
+  // Versão DIFERENTE do default de propósito: com o mesmo número do default, o
+  // teste passaria mesmo se o adapter ignorasse a variável e falasse a versão
+  // do código — era o que acontecia antes de a versão ter um lugar só.
+  vi.stubEnv("META_GRAPH_VERSION", "v19.0");
 }
 
 function stubFetch(resposta: unknown, ok = true) {
@@ -174,7 +177,7 @@ describe("adapter meta_cloud — envio", () => {
 
     expect(r).toEqual({ externalId: "wamid.T" });
     const [url, init] = spy.mock.calls[0]!;
-    expect(url).toContain("/v22.0/1103328999528818/messages");
+    expect(url).toContain("/v19.0/1103328999528818/messages");
     const corpo = JSON.parse(init.body as string) as Record<string, unknown>;
     expect(corpo).toMatchObject({ messaging_product: "whatsapp", to: "5531998966398", type: "text" });
     expect(corpo).not.toHaveProperty("session");
@@ -302,7 +305,7 @@ describe("adapter meta_cloud — mídia recebida", () => {
     expect([...media.buffer]).toEqual([79, 103, 103, 83]);
     expect(media.mime).toBe("audio/ogg");
     expect(spy.mock.calls.map(([url]) => url)).toEqual([
-      "https://graph.facebook.com/v22.0/987654321",
+      "https://graph.facebook.com/v19.0/987654321",
       "https://lookaside.fbsbx.com/whatsapp_business/attachments/?mid=987654321",
     ]);
     for (const [, init] of spy.mock.calls) {
@@ -398,5 +401,81 @@ describe("elegibilidade é do `send` — os desfechos da #674", () => {
 
     const auth = spy.mock.calls.map((c) => (c[1].headers as Record<string, string>).Authorization);
     expect(auth).toEqual(["Bearer tok-A", "Bearer tok-B"]);
+  });
+});
+
+describe("adapter meta_cloud — digitando", () => {
+  const SINAL = {
+    organizationId: ORG,
+    sessionRef: "x",
+    recipient: "5531998966398",
+    inboundExternalId: "wamid.RECEBIDA",
+  };
+
+  it("marca a mensagem recebida como lida COM o indicador, no phone_number_id da URL", async () => {
+    // Na Graph o "digitando" não existe sozinho: é `status: read` da mensagem
+    // que se está respondendo, com `typing_indicator` no mesmo corpo.
+    configurar();
+    const spy = stubFetch({ success: true });
+    await a().signalTyping!(SINAL);
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    const [url, init] = spy.mock.calls[0]!;
+    expect(url).toContain("/v19.0/1103328999528818/messages");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body as string)).toEqual({
+      messaging_product: "whatsapp",
+      status: "read",
+      message_id: "wamid.RECEBIDA",
+      typing_indicator: { type: "text" },
+    });
+  });
+
+  it("sem mensagem do cliente para responder é no-op — nada vai à rede", async () => {
+    configurar();
+    const spy = vi.fn();
+    vi.stubGlobal("fetch", spy);
+    await expect(a().signalTyping!({ ...SINAL, inboundExternalId: null })).resolves.toBeUndefined();
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("sem credencial é no-op, não erro — o indicador é decoração", async () => {
+    vi.stubEnv("META_PHONE_NUMBER_ID", "");
+    vi.stubEnv("META_SYSTEM_USER_TOKEN", "");
+    const spy = vi.fn();
+    vi.stubGlobal("fetch", spy);
+    await expect(a().signalTyping!(SINAL)).resolves.toBeUndefined();
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("recusa da Graph LANÇA com o código — quem engole é quem chama", async () => {
+    configurar();
+    stubFetch({ error: { code: 131009, message: "Parameter value is not valid" } }, false);
+    await expect(a().signalTyping!(SINAL)).rejects.toThrow(/meta_131009/);
+  });
+
+  it("duas organizações: cada sinal sai com o token do SEU tenant", async () => {
+    const OUTRA = "00000000-0000-4000-8000-0000000000bb";
+    sessaoNoBanco.porOrg = {
+      [`${ORG}|pn-a`]: { cifrado: "\\xaa", token: "tok-A" },
+      [`${OUTRA}|pn-b`]: { cifrado: "\\xbb", token: "tok-B" },
+    };
+    const spy = stubFetch({ success: true });
+
+    await a().signalTyping!({ ...SINAL, organizationId: ORG, sessionRef: "pn-a" });
+    await a().signalTyping!({ ...SINAL, organizationId: OUTRA, sessionRef: "pn-b" });
+
+    const auth = spy.mock.calls.map((c) => (c[1].headers as Record<string, string>).Authorization);
+    expect(auth).toEqual(["Bearer tok-A", "Bearer tok-B"]);
+  });
+
+  it("usa o token da SESSÃO quando ele existe, como o envio", async () => {
+    configurar();
+    sessaoNoBanco.token = "tok-da-sessao";
+    const spy = stubFetch({ success: true });
+    await a().signalTyping!(SINAL);
+    const [url, init] = spy.mock.calls[0]!;
+    expect(url).toContain("/sessao-pn/messages");
+    expect((init.headers as Record<string, string>).Authorization).toBe("Bearer tok-da-sessao");
   });
 });

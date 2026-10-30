@@ -82,7 +82,7 @@ function buildPatterns(target: string): RegExp[] {
     // (2c) ESTADO passivo alegado — não uma promessa de AÇÃO futura (vai resolver),
     //      e sim uma AFIRMAÇÃO de que já está sendo tratado agora: "está em análise
     //      pela equipe", "ficou em análise com o responsável". Achado em produção
-    //      (tenant YADEA, 2026-08-30): o agente respondeu a uma reclamação de garantia
+    //      (2026-08-30): o agente respondeu a uma reclamação de garantia
     //      de quase 1 dia dizendo que estava "em análise pela equipe responsável" sem
     //      NENHUM caso aberto — as 7 regras acima exigem verbo de AÇÃO (vai/vamos/
     //      encaminho) e nenhuma casa uma alegação de estado já em curso.
@@ -116,15 +116,32 @@ function escapeRegex(word: string): string {
 }
 
 /**
+ * Pergunta de consentimento ("quer que eu encaminhe para a equipe?") ainda não é
+ * operação executada. A isenção vale para a mensagem INTEIRA, nunca frase a
+ * frase: basta uma frase com operação alegada, prazo ou retorno anunciado
+ * ("O responsável retorna em 10 minutos") para a análise voltar ao texto todo.
+ */
+function soPedeConsentimento(text: string): boolean {
+  const frases = text.split(/(?<=[.!?\n])/).map((f) => f.trim()).filter(Boolean);
+  return frases.length > 0 && frases.every((f) =>
+    f.endsWith("?") &&
+    /^(?:(?:voce|vc)\s+)?(?:quer|gostaria|prefere|deseja|autoriza|posso|podemos)\b/.test(f) &&
+    /\b(?:encaminh|transfer|pass|fal|consult|verific|cham)\w*/.test(f) &&
+    !/\b(?:ja|vou|vamos|vai|vao|ira|irao|transferi|encaminhei|registrei|acabei)\b/.test(f) &&
+    !/\b(?:hoje|amanha|agora|logo|ate|minutos?|horas?|semana|dias?|\d+\s*h|\d{1,2}:\d{2})\b/.test(f) &&
+    !/\b(?:te|lhe)\s+(?:lig|retorn|respond|contat|procur|cham|d[ae])\w*|\bretorn\w*|\bentr\w*\s+em\s+contato/.test(f));
+}
+
+/**
  * True se a candidata promete envolver um humano/retaguarda. Determinístico,
  * conservador (spec §10.2). Vazio/whitespace = false.
  *
  * `extraHumanNames` (opcional) — nome(s) próprio(s) que o PROMPT do tenant usa
- * para a retaguarda humana (ex.: "Fernando", o gerente citado no system_prompt
- * do agente YADEA). Sem isto, um agente cujo prompt nomeia a pessoa em vez do
- * cargo ("vou confirmar com o Fernando") escapa 100% do detector — TARGET só
- * conhece cargos genéricos (medido em produção, 2026-08-29/30, tenant YADEA:
- * dezenas de promessas nomeando "Fernando", 1 só detecção em 3 dias). A fonte
+ * para a retaguarda humana (ex.: "Fulano", o gerente citado no system_prompt
+ * de um agente em produção). Sem isto, um agente cujo prompt nomeia a pessoa em vez do
+ * cargo ("vou confirmar com o Fulano") escapa 100% do detector — TARGET só
+ * conhece cargos genéricos (medido em produção, 2026-08-29/30:
+ * dezenas de promessas nomeando o gerente pelo nome, 1 só detecção em 3 dias). A fonte
  * natural é `ai_agent_versions.handoff_keywords` — já é o vocabulário que o
  * tenant escreveu pra "isto é uma pessoa/situação que exige humano" (reusado
  * hoje só do lado do CLIENTE, em `matchesHandoffKeyword`); aqui aplicamos o
@@ -135,6 +152,7 @@ function escapeRegex(word: string): string {
 export function detectHumanPromise(body: string, extraHumanNames?: readonly string[]): boolean {
   if (body.trim() === "") return false;
   const text = normalize(body);
+  if (soPedeConsentimento(text)) return false;
   if (extraHumanNames === undefined || extraHumanNames.length === 0) {
     return PATTERNS.some((re) => re.test(text));
   }

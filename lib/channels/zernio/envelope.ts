@@ -15,11 +15,27 @@
  *
  * ─── A REGRA deste arquivo (leia antes de acrescentar campo) ────────────────
  *
- * Um campo ganha tipo quando o código o consome **sem guarda própria**. Campo
- * que o código já trata em qualquer forma fica `z.unknown()` — o exemplo vivo é
- * `attachments`, lido por `Array.isArray(...) ? ... : []`: exigir array aqui
- * trocaria "anexo ignorado" por "MENSAGEM descartada", que é a regressão que
- * este arquivo existe para não causar.
+ * Um campo ganha tipo quando o LEITOR o normaliza: `str()` para string, `obj()`
+ * para objeto (os dois em `./webhook.ts`). É o OPOSTO da regra que este
+ * cabeçalho declarava antes — reservar o tipo para o campo lido **sem guarda** —,
+ * e a inversão é o ponto: a normalização devolve `null` para a forma errada, e
+ * é justamente esse `null` que o tipo transforma em 400 nomeado: `str()` sobre
+ * um `conversationId` numérico devolve `null`, o parser devolve `null`, e a
+ * rota respondia 200 como se o evento não interessasse (ver o topo).
+ *
+ * O tipo também segura quem lê o envelope JÁ VALIDADO, sem conferir a forma:
+ * `../inbound.ts` chama `payload.event?.startsWith(...)` e lê
+ * `payload.number?.phoneNumber` confiando no schema. Afrouxar `event` ou
+ * `number` aqui quebra o typecheck ali — e é para quebrar.
+ *
+ * Sem tipo (o leitor aceita qualquer forma): `attachments`.
+ *
+ * `attachments` é lido por `Array.isArray(...) ? ... : []`, que trata qualquer
+ * forma — exigir array aqui trocaria "anexo ignorado" por "MENSAGEM descartada",
+ * que é a regressão que este arquivo existe para não causar.
+ *
+ * `error.code` é a exceção DECLARADA ao `str()`: chega número no payload real
+ * (`"code": 131047`), então o tipo é `z.union([z.string(), z.number()])`.
  *
  * O objeto é `loose` em todo nível: campo que ninguém catalogou passa intacto.
  */
@@ -68,7 +84,8 @@ export const zernioEnvelopeSchema = z.looseObject({
   account: z.looseObject({ id: texto, accountId: texto }).nullish(),
   conversation: z.looseObject({ participantId: texto, participantName: texto }).nullish(),
   template: z.looseObject({ name: texto, status: texto, reason: texto }).nullish(),
-  number: z.looseObject({ reason: texto }).nullish(),
+  /** `phoneNumber` decide se o evento de número é DESTA sessão (ver `zernioInbound`). */
+  number: z.looseObject({ reason: texto, phoneNumber: texto }).nullish(),
   /**
    * O `code` chega como NÚMERO no payload real (`"code": 131047`) e o leitor
    * trata as duas formas — medido nos logs de entrega, ver `explicacaoDoErro`.

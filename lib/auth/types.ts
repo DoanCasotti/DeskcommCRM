@@ -1,5 +1,7 @@
 import type { InterfaceSettings } from "@/lib/navigation/interface";
 import type { Idioma } from "@/lib/i18n/idiomas";
+import type { ModuloOpcional } from "@/lib/instalacao/modulos";
+import type { CapacidadeDaOrganizacao } from "@/lib/organizacao/capacidades";
 
 /**
  * Papéis dentro do tenant.
@@ -44,6 +46,25 @@ export function roleAtLeast(role: string | null | undefined, min: Role): boolean
   return rank >= ROLE_RANK[min];
 }
 
+/**
+ * O platform admin pode ESCREVER pulando o papel do tenant?
+ *
+ * `is_platform_admin` sozinho responde "tem a linha em platform_admins" — e o
+ * `support_readonly` também tem. Todo atalho do tipo
+ * `!user.is_platform_admin && ROLE_RANK[...] < ROLE_RANK.admin` deixava o
+ * `support_readonly` que é membro comum de uma empresa escrever nela como se
+ * administrasse. Só `scope === "full"` escreve; ausente = sem escrita.
+ *
+ * Mora aqui, e não em `requirePlatformAdmin.ts`, porque é puro: as server actions
+ * que o usam já importam `ROLE_RANK` daqui e não ganham dependência de servidor.
+ * MFA não entra: quem chama já confere `mfaEmDivida` como fazia antes.
+ */
+export function escreveComoPlatformAdmin(
+  user: Pick<AuthUser, "is_platform_admin" | "platform_admin_scope">,
+): boolean {
+  return user.is_platform_admin && user.platform_admin_scope === "full";
+}
+
 /** Papéis que uma PESSOA pode ter. Espelha `user_organizations_role_check`. */
 export const PAPEIS_HUMANOS: ReadonlyArray<Role> = ["viewer", "agent", "manager", "admin"];
 
@@ -57,11 +78,59 @@ export const ROTULO_DO_PAPEL: Record<Role, string> = {
 };
 
 /**
+ * Para papel vindo da API como `string` (listas de membros e convites). Papel
+ * desconhecido devolve o próprio código: nunca some da tela.
+ */
+export function rotuloDoPapel(papel: string): string {
+  return (ROTULO_DO_PAPEL as Record<string, string>)[papel] ?? papel;
+}
+
+/**
  * Escopo de visualização de conversas por atendente (G4-01, spec 13 §3.5).
  * Só restringe o role `agent`; viewer/manager/admin seguem org-wide.
+ *
+ * ESTA É A ÚNICA LISTA dos três modos. O tipo sai dela e o schema do PATCH
+ * (`lib/schemas/routing.ts`) valida a partir dela — antes eram duas listas
+ * literais em arquivos diferentes, mantidas iguais por um teste que comparava
+ * array com array. Um modo a mais aqui passa a valer nos dois lugares sem
+ * ninguém sincronizar nada.
  */
-export type VisibilityMode = "all" | "own_and_unassigned" | "own";
+export const VISIBILITY_MODES = ["all", "own_and_unassigned", "own"] as const;
+export type VisibilityMode = (typeof VISIBILITY_MODES)[number];
 export const DEFAULT_VISIBILITY_MODE: VisibilityMode = "own_and_unassigned"; // G1-06a
+
+/**
+ * O Atendente é RESTRITO por este modo? (o predicado único, lido pela tela e
+ * pelo catálogo de recursos)
+ *
+ * Duas coisas que o produto confunde com facilidade, e que este par separa:
+ *
+ *   • `visibilidadeRestritaAoAtendente` — o modo tira do Atendente a visão da
+ *     organização inteira. É o que a aba "Todas" do Inbox e o recurso opcional
+ *     "Atendente só vê os seus" querem dizer.
+ *   • `somenteOProprio` — o modo é o mais estreito (`own`), em que nem a conversa
+ *     SEM DONO conta. É o modo da #3479: a conversa nasce sem dono, o Atendente
+ *     não a enxerga, e é por isso que o fluxo que a abre precisa dar dono a ela
+ *     (`app/api/v1/conversations/open-with-contact/route.ts`).
+ *
+ * Antes deste par a mesma pergunta estava escrita à mão em três lugares
+ * (`=== "own" || === "own_and_unassigned"`, `!== "all"` e o par do default), e
+ * quem mexesse num deles deixava os outros mentindo em silêncio — o modo em que
+ * a fila sem dono conta é justamente o que a #3479 mediu errado.
+ *
+ * Aceita `unknown` de propósito: quem lê vem de `settings` (jsonb) e pode ser
+ * qualquer coisa. Valor que não é modo nenhum conta como NÃO restrito aqui — a
+ * RLS é quem fecha em "não vê nada" (o `else` de `fn_can_view_conversation`),
+ * e uma tela que adivinhasse "restrito" esconderia a aba de quem não devia.
+ */
+export function visibilidadeRestritaAoAtendente(modo: unknown): boolean {
+  return modo === "own" || modo === "own_and_unassigned";
+}
+
+/** O modo mais estreito: o Atendente só enxerga o que já é dele. */
+export function somenteOProprio(modo: unknown): boolean {
+  return modo === "own";
+}
 
 export interface UserOrgMembership {
   interface_settings?: InterfaceSettings;
@@ -76,6 +145,33 @@ export interface UserOrgMembership {
    * para responder algo que a primeira já tinha em mãos.
    */
   locale?: string | null;
+  /**
+   * Fuso IANA da organização (`organizations.timezone`).
+   *
+   * Pela mesma razão do `locale` acima: quem escolhe a organização ativa é
+   * quem precisa saber em que fuso a tela desenha o calendário, e buscá-lo
+   * depois seria uma segunda ida ao banco para responder o que a primeira já
+   * trouxe. Pode vir nulo ou inutilizável — nenhum escritor valida a coluna —,
+   * então quem usa passa por `fusoValido` e cai em `FUSO_PADRAO`.
+   */
+  timezone?: string | null;
+  /**
+   * Moeda e país da organização (`organizations.currency` / `.country`).
+   *
+   * Mesma carona de `locale` e `timezone`, e pelo mesmo motivo: são as telas do
+   * negócio e do contato que precisam deles — o rótulo do valor e o documento
+   * do titular —, e sem esta carona cada diálogo cravaria `R$` e `CPF`, que foi
+   * exatamente o defeito. `country` nulo significa Brasil (`PAIS_PADRAO`).
+   */
+  currency?: string | null;
+  country?: string | null;
+  /**
+   * `organizations.status` da empresa. Quem decide se ela opera é `ehOperante`
+   * (`lib/organizacao/operante.ts`); ausente ou nulo = NÃO operante.
+   */
+  org_status?: string | null;
+  /** `organizations.suspended_kind` — só significa algo com status 'suspended'. */
+  suspended_kind?: string | null;
 }
 
 export interface AuthUser {
@@ -85,6 +181,11 @@ export interface AuthUser {
   full_name: string | null;
   avatar_url: string | null;
   is_platform_admin: boolean;
+  /**
+   * `platform_admins.scope` (`full` | `support_readonly`), nulo para quem não é
+   * platform admin. Escrita de platform admin exige `=== "full"`; ausente = sem escrita.
+   */
+  platform_admin_scope?: string | null;
   /**
    * Idioma da interface, de `user_metadata.locale`.
    *
@@ -138,7 +239,17 @@ export interface AuthUser {
 
 export interface ActiveOrg {
   interface_settings?: InterfaceSettings;
+  /** Moeda da organização — o rótulo do valor do negócio sai dela. */
+  currency?: string | null;
+  /** País da organização (ISO-3166 alpha-2); nulo = Brasil. */
+  country?: string | null;
+  /** Status da org ativa (`orgAtivaSemPortao` sempre preenche). Ausente/nulo = não operante. */
+  org_status?: string | null;
+  /** Tipo da suspensão — só significa algo com status 'suspended'. */
+  suspended_kind?: string | null;
   orgId: string;
+  /** Fuso IANA da organização — ver `UserOrgMembership.timezone`. */
+  timezone?: string | null;
   name: string;
   role: Role;
   /**
@@ -147,6 +258,41 @@ export interface ActiveOrg {
    * de autorização — a RLS (fn_can_view_conversation) é quem garante o escopo.
    */
   visibility_mode?: VisibilityMode;
+  /**
+   * A regra "cliente pela agenda" está ligada nesta organização
+   * (`organizations.settings.crm.cliente_pela_agenda`, migration 0262)?
+   *
+   * Opcional pelo mesmo motivo de `visibility_mode`: só o layout de `/app`
+   * preenche, e ausente é desligado. NÃO é autorização nem é quem aplica a
+   * regra — quem decide é o banco (o trigger lê a chave). Serve para a tela não
+   * mostrar selo, data e funil de clientes de uma regra desligada, em que
+   * `first_service_at` está congelada.
+   */
+  cliente_pela_agenda?: boolean;
+  /**
+   * A regra "cliente pela venda" está ligada nesta organização
+   * (`organizations.settings.crm.cliente_pela_venda`, #3644)?
+   *
+   * Contato com negócio GANHO e nenhum aberto conta como cliente, e a conversa
+   * nova nasce no funil de clientes em vez do de captação. Opcional pelo mesmo
+   * motivo de `cliente_pela_agenda`: só o layout de `/app` preenche, e ausente é
+   * desligado. Serve ao MESMO par de controles (marcar um funil como de
+   * clientes e o selo do quadro), que passam a fazer sentido com qualquer uma
+   * das duas regras.
+   */
+  cliente_pela_venda?: boolean;
+  /**
+   * Os módulos opcionais LIGADOS na instalação (`lib/instalacao/modulos.ts`).
+   * É da instalação, não da organização — mora aqui porque este é o contexto
+   * que o layout de `/app` entrega à casca. Ausente vale como nenhum: a porta
+   * de módulo desligado não aparece no menu.
+   */
+  modulos_ligados?: readonly ModuloOpcional[];
+  /**
+   * Capacidades que ESTA organização ligou (`lib/organizacao/capacidades.ts`).
+   * Só o layout de `/app` preenche; ausente vale como nenhuma no menu.
+   */
+  capacidades_ligadas?: readonly CapacidadeDaOrganizacao[];
   /**
    * O que ESTA organização definiu para si — CAMPO A CAMPO, e só o que ela
    * mesma definiu.
@@ -172,5 +318,9 @@ export interface ActiveOrg {
    * banco: `app/layout.tsx` resolve a pilha e o `<PublicEnvScript/>` a injeta em
    * `window.__PUBLIC_ENV__`, de onde `branding()` a lê.
    */
-  marca?: { readonly nome?: string; readonly logoUrl?: string | null };
+  marca?: {
+    readonly nome?: string;
+    readonly logoUrl?: string | null;
+    readonly logoDarkUrl?: string | null;
+  };
 }

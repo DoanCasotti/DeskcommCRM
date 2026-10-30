@@ -1,24 +1,43 @@
 import { InterfaceRefresh } from "@/hooks/auth/InterfaceRefresh";
 import { redirect } from "next/navigation";
 import { cookies } from "next/headers";
-import { isMfaEnrolled, loadAuthUser, requiresMfa, resolveActiveOrg } from "@/lib/auth/server";
-import { DEFAULT_VISIBILITY_MODE, type VisibilityMode } from "@/lib/auth/types";
+import {
+  exigirProvaDeMfa,
+  isMfaEnrolled,
+  loadAuthUser,
+  requiresMfa,
+  resolveActiveOrg,
+} from "@/lib/auth/server";
+import { DEFAULT_VISIBILITY_MODE, roleAtLeast, type VisibilityMode } from "@/lib/auth/types";
+import { clientePelaAgendaLigado, clientePelaVendaLigado } from "@/lib/schemas/settings";
 import { AuthProvider } from "@/hooks/auth/AuthProvider";
+import { ProvedorDeCoresDasEtiquetas } from "@/components/tags/CoresDasEtiquetas";
 import { AppShell } from "./_components/AppShell";
 import { EstiloDaMarcaDaOrganizacao } from "./_components/EstiloDaMarcaDaOrganizacao";
+import { EstiloDoTemaDaExtensao } from "./_components/EstiloDoTemaDaExtensao";
 import { MfaEnrollGate } from "@/components/auth/MfaEnrollGate";
 import { cssDaMarca, ESCOPO_DA_ORGANIZACAO } from "@/lib/branding/css";
+import { cssDaExtensaoDeTema, linhaBrutaDeTema, temaAplicavel } from "@/lib/extensions/tema";
 import { marcaDaInstalacao } from "@/lib/branding/instalacao";
 import { resolverMarcaDaOrganizacao } from "@/lib/branding/organizacao";
 import { env } from "@/lib/env";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { createClient } from "@/lib/supabase/server";
+import { modulosLigados } from "@/lib/instalacao/modulos";
+import { capacidadesLigadas } from "@/lib/organizacao/capacidades";
+import { ehOperante } from "@/lib/organizacao/operante";
 import {
   ImpersonateBanner,
 } from "@/components/app/ImpersonateBanner";
 import { ConexaoCaidaBanner } from "@/components/app/ConexaoCaidaBanner";
+import { FaixaDaCobranca } from "@/components/cobranca/FaixaDaCobranca";
+import { FaixasDeCima } from "@/components/shell/FaixasDeCima";
+import { faixaDaCobranca, type FaixaDaCobranca as Faixa } from "@/lib/cobranca/faixa";
+import { logger } from "@/lib/logger";
 import { IdiomaProvider } from "@/lib/i18n/IdiomaProvider";
 import { listarConexoesCaidas, type ConexaoCaida } from "@/lib/channels/health";
 import { VoiceCallProvider } from "@/components/voice/VoiceCallContext";
+import { ProvedorDaOcupacaoDoRodape } from "@/lib/ui/rodape-ocupado";
 import { acessoFoiRevogado } from "@/lib/auth/vinculo-revogado";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
@@ -51,17 +70,48 @@ export default async function AppLayout({ children }: { children: React.ReactNod
    * e não aqui: a precedência é regra do produto, não detalhe deste layout.
    */
   let cssDaOrganizacao: string | null = null;
+  // O tema de extensão, se a organização escolheu um. `null` = quem não
+  // escolheu — e aí o `EstiloDoTemaDaExtensao` não renderiza nada.
+  let cssDoTemaDaExtensao: string | null = null;
 
   // EPIC-02: gate /app/* on completed onboarding.
   // EPIC-11: gate /app/* on org not being suspended (S-11.08).
   let conexoesCaidas: ConexaoCaida[] = [];
+  let faixa: Faixa = null;
+  let orgFuso: string | null = null;
   let enrolled = false;
   let needsMfaGate = false;
 
   if (activeOrg) {
     const admin = createAdminClient();
+    // O tema de extensão NUNCA derruba a casca. A leitura ARRANCA aqui, junto
+    // com o lote abaixo, mas só é ESPERADA depois do portão de organização
+    // (suspensa / onboarding / ilegível): o portão continua decidindo o destino
+    // antes de qualquer resultado dela ser usado. Em fila, depois do lote, ela
+    // somava mais uma ida ao banco a TODA tela de `/app`. `lerCssDoTemaDaExtensao`
+    // nunca rejeita — uma falha (tabela ausente numa instalação antiga, RLS,
+    // formato inesperado) desce para `null`, e quem a escolheu só perde a pintura
+    // naquele render. No caminho raro do `redirect`, a leitura corre à toa.
+    const temaDaExtensao = lerCssDoTemaDaExtensao(admin, activeOrg.orgId);
+
     /**
-     * As quatro consultas que TODA página de `/app` paga, disparadas juntas.
+     * A faixa lê com a identidade da sessão, como GET /api/v1/channel-sessions,
+     * para respeitar a RLS em vez de atravessá-la com o cliente de serviço.
+     *
+     * A SELECT nativa de channel_sessions é por organização, com o acesso de
+     * plataforma previsto na policy. Ela não divide canais por atendente.
+     * O relato #3088 veio de uma instalação adaptada: esta passagem de cliente
+     * respeita uma restrição adicional se ela estiver na RLS. Um filtro local
+     * apenas na rota não é herdado por esta consulta direta do layout.
+     *
+     * Sem linhas visíveis, a lista fica vazia. Não acrescentamos uma regra de
+     * papel ou vínculo; a consulta abaixo mantém o filtro da organização ativa.
+     * createClient monta o cliente com os cookies, sem uma consulta extra aqui.
+     */
+    const daSessao = await createClient();
+
+    /**
+     * As cinco consultas que TODA página de `/app` paga, disparadas juntas.
      *
      * Elas eram sequenciais e independentes: cada uma esperava a anterior sem
      * precisar do resultado dela, e a soma aparecia como a tela que não reage ao
@@ -83,14 +133,18 @@ export default async function AppLayout({ children }: { children: React.ReactNod
      *    `tests/unit/faixa-de-conexao-caida-vem-do-seam.test.tsx`, que EXECUTA
      *    este layout — a cerca anterior lia o texto-fonte e reprovava esta
      *    refatoração sem que nada tivesse quebrado.
+     *  - QUEM enxerga o quê é decidido pelo cliente que o seam recebe
+     *    (`daSessao`, acima): a mesma RLS que a rota do seletor de canais
+     *    aplica. Vigiado por
+     *    `tests/unit/faixa-respeita-os-canais-do-atendente.test.tsx`.
      */
-    const [orgRes, conexoes, isEnrolled, mfaRequired] = await Promise.all([
+    const [orgRes, conexoes, isEnrolled, mfaRequired, modulos] = await Promise.all([
       admin
         .from("organizations")
-        .select("onboarded_at, status, settings")
+        .select("onboarded_at, status, settings, timezone")
         .eq("id", activeOrg.orgId)
         .maybeSingle(),
-      listarConexoesCaidas(admin, activeOrg.orgId),
+      listarConexoesCaidas(daSessao, activeOrg.orgId),
       isMfaEnrolled(),
       requiresMfa(
         activeOrg.role,
@@ -98,20 +152,61 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         user.id,
         activeOrg.orgId,
       ),
+      // Da INSTALAÇÃO: decide se a porta de um módulo opcional entra no menu.
+      modulosLigados(admin),
     ]);
 
     const orgRow = orgRes.data;
+    // Erro de leitura LANÇA: `orgRow` nulo passava por "sem onboarding pendente
+    // e não suspensa" e renderizava a casca de uma org que ninguém conseguiu ler.
+    if (orgRes.error) {
+      throw new Error(`organizacao_ilegivel: ${orgRes.error.message}`);
+    }
     conexoesCaidas = conexoes;
     enrolled = isEnrolled;
     needsMfaGate = mfaRequired;
 
+    // Suspensão ANTES de onboarding: a org suspensa que nunca terminou o
+    // onboarding ia para `/onboarding` e escapava da tela da suspensão.
+    if (!ehOperante(orgRow?.status)) redirect("/account-suspended");
     if (orgRow && !orgRow.onboarded_at && !user.support) redirect("/onboarding");
-    if (orgRow?.status === "suspended") redirect("/account-suspended");
     // G4-02: expõe visibility_mode ao client (inbox decide visões visíveis).
     // Fonte confiável (admin client, org do cookie validado) — nunca do body.
     const mode = (orgRow?.settings as { visibility_mode?: VisibilityMode } | null)
       ?.visibility_mode;
-    activeOrg = { ...activeOrg, visibility_mode: mode ?? DEFAULT_VISIBILITY_MODE };
+    activeOrg = {
+      ...activeOrg,
+      visibility_mode: mode ?? DEFAULT_VISIBILITY_MODE,
+      // Mesma linha de `settings` já lida acima — nenhuma consulta a mais.
+      cliente_pela_agenda: clientePelaAgendaLigado(orgRow?.settings),
+      // #3644 — a regra da venda também decide se o funil de clientes está em
+      // uso: o menu e o selo do quadro não podem sumir de uma organização que
+      // roteia por ela. Mesma linha de `settings`, nenhuma consulta a mais.
+      cliente_pela_venda: clientePelaVendaLigado(orgRow?.settings),
+      modulos_ligados: modulos,
+      // Mesma linha de `settings` já lida acima — nenhuma consulta a mais.
+      capacidades_ligadas: capacidadesLigadas(orgRow?.settings, modulos),
+    };
+
+    // A faixa do teste grátis (spec da cobrança §9): uma consulta a mais SÓ com
+    // a cobrança ligada (quem não administra só vê o atraso). Falha aberta na INFORMAÇÃO: sem a
+    // leitura, nenhuma faixa — o que ela diz não trava nada.
+    if (modulos.includes("cobranca")) {
+      const { data, error } = await admin
+        .from("cobranca_assinaturas")
+        .select("estado, trial_ate, vencida_desde, cancela_no_fim, proximo_vencimento, link_de_pagamento, provedor")
+        .eq("organization_id", activeOrg.orgId)
+        .maybeSingle();
+      if (error) {
+        logger.warn("app: assinatura ilegível — sem faixa da cobrança", {
+          organization_id: activeOrg.orgId,
+          codigo: error.code,
+        });
+      } else {
+        orgFuso = orgRow?.timezone ?? null;
+        faixa = faixaDaCobranca(data, new Date(), roleAtLeast(activeOrg.role, "admin"));
+      }
+    }
 
     // `marcaDaInstalacao()` é memoizada por TTL no PROCESSO (`lib/branding/
     // instalacao.ts`), e a derivação da cor é cacheada por régua+semente em
@@ -136,6 +231,8 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       cssDaOrganizacao = cssDaMarca(marca.cor, ESCOPO_DA_ORGANIZACAO).css;
     }
 
+    cssDoTemaDaExtensao = await temaDaExtensao;
+
     // Desce para o menu CAMPO A CAMPO, e só o campo que a organização definiu.
     // Sem a condição por campo, `marca.name` seria o nome da instalação (ou o
     // padrão do produto) e o menu passaria a ler um caminho novo para exibir
@@ -155,6 +252,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     // do produtor existir, de propósito — foi o que fez o upload por organização
     // ser só a camada, sem mais uma passada pela casca inteira.
     const marcaDoTenant = {
+      logoDarkUrl: marca.logoDarkUrl ?? null,
       ...(marca.origens.nome === "organizacao" ? { nome: marca.name } : {}),
       ...(marca.origens.logoUrl === "organizacao" && marca.logoUrl !== null
         ? { logoUrl: marca.logoUrl }
@@ -172,6 +270,11 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     needsMfaGate = mfaRequired;
   }
 
+  // Cadastrar e provar são perguntas diferentes: o `MfaEnrollGate` abaixo cuida
+  // de quem a política obriga a cadastrar; isto, de quem JÁ tem fator e ainda
+  // não o provou nesta sessão — com ou sem política.
+  await exigirProvaDeMfa();
+
   // Read sidebar collapsed state SSR to avoid flash.
   const store = await cookies();
   const collapsed = store.get("sidebar_collapsed")?.value === "1";
@@ -181,10 +284,22 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     expiresAt: user.support.expires_at, accessMode: user.support.access_mode,
   } : null;
 
+  // O CONTRATO DE OCUPAÇÃO DO RODAPÉ (issue #1305) envolve a casca E as peças de
+  // voz. O `VoiceCallProvider` desenha o painel de chamada DEPOIS dos children,
+  // ou seja: o painel é IRMÃO do `AppShell`, não filho dele. Um provedor por
+  // dentro do `VoiceCallProvider` deixaria o painel de fora — ele declararia o
+  // que ocupa e ninguém descontaria, que é exatamente o defeito da #1305.
   const shell = (
-    <VoiceCallProvider>
-      <AppShell sidebarCollapsed={collapsed}>{children}</AppShell>
-    </VoiceCallProvider>
+    <ProvedorDaOcupacaoDoRodape>
+      <VoiceCallProvider>
+        <AppShell
+          sidebarCollapsed={collapsed}
+          podeAtender={Boolean(activeOrg && roleAtLeast(activeOrg.role, "agent"))}
+        >
+          {children}
+        </AppShell>
+      </VoiceCallProvider>
+    </ProvedorDaOcupacaoDoRodape>
   );
 
   return (
@@ -193,6 +308,19 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     // acoplamento com a autenticação que derrubou 32 casos.
     <IdiomaProvider locale={user.idioma}>
     <AuthProvider user={user} activeOrg={activeOrg}>
+      {/*
+        A COR DA ETIQUETA, uma leitura por tela.
+
+        O chip aparece em LISTA — uma fila de duzentas conversas desenha quatro
+        centenas deles — e todos consultam o mesmo mapa, montado uma vez aqui.
+        Um `useQuery` por chip seria o mesmo cache (o react-query deduplica a
+        rede), mas cada atualização acordaria todas as assinaturas.
+
+        Dentro do `AuthProvider` porque a leitura é da organização ativa, e FORA
+        do `AppShell` porque o gate de MFA substitui a casca: o mapa precisa
+        sobreviver ao portão, e não ser relido quando ele sai.
+      */}
+      <ProvedorDeCoresDasEtiquetas>
       <InterfaceRefresh userId={user.id} org={activeOrg} support={!!user.support} />
       {/*
         O MARCADOR da marca da organização — o elemento cuja existência define o
@@ -211,8 +339,13 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       */}
       <div data-marca-org="" className="contents">
         <EstiloDaMarcaDaOrganizacao css={cssDaOrganizacao} />
-        <ImpersonateBanner impersonating={impersonating} />
-        <ConexaoCaidaBanner caidas={conexoesCaidas} />
+        <EstiloDoTemaDaExtensao css={cssDoTemaDaExtensao} />
+        {/* As faixas medidas: a casca e o Inbox descontam a altura delas. */}
+        <FaixasDeCima>
+          <ImpersonateBanner impersonating={impersonating} />
+          <ConexaoCaidaBanner caidas={conexoesCaidas} />
+          {faixa !== null && <FaixaDaCobranca faixa={faixa} fuso={orgFuso} />}
+        </FaixasDeCima>
         {needsMfaGate ? (
           // Gate always mounted for MFA-required roles; it latches the blocking
           // decision client-side so the enroll Server Action's revalidation
@@ -222,7 +355,35 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           shell
         )}
       </div>
+      </ProvedorDeCoresDasEtiquetas>
     </AuthProvider>
     </IdiomaProvider>
   );
+}
+
+/** O CSS do tema de extensão escolhido pela organização, ou `null`. Nunca rejeita. */
+async function lerCssDoTemaDaExtensao(
+  admin: ReturnType<typeof createAdminClient>,
+  orgId: string,
+): Promise<string | null> {
+  try {
+    const temaTrace = await admin
+      .from("organization_extensions")
+      .select(
+        "configuration," +
+          "extension_installations!organization_extensions_installation_id_fkey(" +
+          "extension_artifacts!extension_installations_artifact_id_fkey(manifest))",
+      )
+      .eq("organization_id", orgId)
+      .eq("enabled", true)
+      .limit(50);
+    if (temaTrace.error) return null;
+    const linhas = (temaTrace.data ?? [])
+      .map(linhaBrutaDeTema)
+      .filter((linha): linha is NonNullable<typeof linha> => linha !== null);
+    const temaEscolhido = temaAplicavel(linhas);
+    return temaEscolhido === null ? null : cssDaExtensaoDeTema(temaEscolhido).css;
+  } catch {
+    return null;
+  }
 }

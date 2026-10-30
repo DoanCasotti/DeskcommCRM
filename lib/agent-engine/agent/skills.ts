@@ -10,7 +10,8 @@
  * estável org-wide (vai junto do system do playbook — prefixo cacheável F2-17). O CORPO
  * carrega SÓ quando o matcher if-then dispara no turno, e vai no SUFIXO por-lead (situacional,
  * volátil — depois do breakpoint de cache), NUNCA no prefixo estável. Situação neutra → 0
- * corpos injetados (economia de tokens por construção).
+ * corpos injetados (economia de tokens por construção). Situação neutra = nenhuma palavra-chave
+ * e nenhuma etiqueta casa ⇒ 0 corpos (a etiqueta da conversa ou do contato é um sinal além do texto).
  *
  * O matcher é DETERMINÍSTICO — opera sobre sinais do contexto do turno (a última mensagem
  * inbound do lead), jamais sobre um LLM vivo: mesmo sinal ⇒ mesmo conjunto de skills. Isso
@@ -18,15 +19,13 @@
  *
  * Misses de matching ('devia ter usado a skill X e não usou') viram candidatos ao golden
  * set (blueprint 3.3): um `probe_keyword` que dispara SEM o `any_keyword` do hard-match é um
- * near-miss — o runtime grava o trace em GOLDEN_CANDIDATES_DIR (fs em runtime, não a tool
- * Write) para curadoria humana. O sinal (texto do lead, PII) vai ao ARQUIVO de curadoria,
- * mas NUNCA a log (regra dura 8).
+ * near-miss — o runtime grava o candidato como LINHA em `golden_candidates` (migration 0428,
+ * issue #1695), nunca como arquivo em disco. A linha leva SÓ rótulo (skill + motivo) e os
+ * ponteiros do lead e do job: o texto do cliente (PII) não vai nem a disco nem a log
+ * (regra dura 8) — quem quiser ler a conversa abre a ficha pelo ponteiro.
  *
  * tenant_id é fonte confiável (row do job); skill de um tenant NUNCA vaza para outro.
  */
-import { mkdir, writeFile } from 'node:fs/promises';
-import path from 'node:path';
-
 import { z } from 'zod';
 
 import type { Queryable } from '../queue/queue';
@@ -40,6 +39,9 @@ export const MAX_SKILL_BODY_LINES = 200;
  * Condição if-then determinística (guideline-matching). `any_keywords`: hard-match →
  * injeta o corpo. `probe_keywords`: sinal FRACO da situação — dispara SEM hard-match =
  * near-miss (candidato ao golden). Sem sinal fraco, use só any_keywords.
+ * `any_tags` (opcional): hard-match quando uma ETIQUETA da conversa ou do contato é igual a
+ * uma delas. Serve para a prospecção, em que o cliente quase nunca escreve o nome do ramo.
+ * `any_keywords` continua obrigatório: skill sem palavra-chave não passa no schema.
  * ponytail: matcher por keyword (substring normalizado) cobre os 4 tipos de skill do
  * blueprint; adicionar matcher temporal/por-stage quando uma skill precisar (ex.: D+30
  * "dias desde o último inbound") — o campo matcher é jsonb, extensível sem migration.
@@ -47,6 +49,8 @@ export const MAX_SKILL_BODY_LINES = 200;
 export const skillMatcherSchema = z.strictObject({
   any_keywords: z.array(z.string().min(1).max(120)).min(1).max(50),
   probe_keywords: z.array(z.string().min(1).max(120)).max(50).optional(),
+  // 40 = TAMANHO_MAXIMO_DA_TAG: etiqueta gravada nunca passa disso, então mais longa não casaria nunca.
+  any_tags: z.array(z.string().trim().min(1).max(40)).max(20).optional(),
 });
 export type SkillMatcher = z.infer<typeof skillMatcherSchema>;
 
@@ -242,22 +246,32 @@ export interface SkillMatchResult {
 
 /**
  * Guideline-matching if-then DETERMINÍSTICO: avalia cada skill contra o SINAL do turno
- * (texto). `any_keywords` casando (substring normalizado) = hard-match → o corpo carrega.
+ * (texto) e contra as ETIQUETAS do turno (da conversa e do contato, já juntadas pelo
+ * chamador). A skill entra (hard-match → o corpo carrega) quando:
+ *   - alguma `any_keywords` casa no texto (substring normalizado), ou
+ *   - alguma etiqueta do turno é IGUAL a uma de `any_tags` (igualdade normalizada: caixa e
+ *     acento, sem substring).
  * `probe_keywords` casando SEM hard-match = near-miss → candidato ao golden. Sinal vazio
- * (ex.: follow-up sem inbound) ⇒ nada casa, nada vira candidato.
+ * (ex.: follow-up sem inbound) não casa palavra-chave nem vira candidato, mas uma etiqueta
+ * ainda pode casar: é o caso da prospecção, em que o cliente responde só "Olá".
+ * Função pura: as etiquetas chegam por parâmetro; quem lê o banco é o chamador.
  */
-export function matchSkills(skills: readonly LoadedSkill[], signal: string): SkillMatchResult {
+export function matchSkills(
+  skills: readonly LoadedSkill[],
+  signal: string,
+  tags: readonly string[] = [],
+): SkillMatchResult {
   const norm = normalize(signal);
+  const temTexto = norm.trim() !== '';
+  const etiquetas = new Set(tags.map((t) => normalize(t.trim())).filter((t) => t !== ''));
   const matched: LoadedSkill[] = [];
   const missCandidates: SkillMissCandidate[] = [];
-  if (norm.trim() === '') {
-    return { matched, missCandidates };
-  }
   const hit = (keywords: readonly string[]): boolean => keywords.some((k) => norm.includes(normalize(k)));
   for (const skill of skills) {
-    if (hit(skill.matcher.any_keywords)) {
+    const porEtiqueta = (skill.matcher.any_tags ?? []).some((t) => etiquetas.has(normalize(t.trim())));
+    if (porEtiqueta || (temTexto && hit(skill.matcher.any_keywords))) {
       matched.push(skill);
-    } else if (skill.matcher.probe_keywords !== undefined && hit(skill.matcher.probe_keywords)) {
+    } else if (temTexto && skill.matcher.probe_keywords !== undefined && hit(skill.matcher.probe_keywords)) {
       missCandidates.push({ skill: skill.name, reason: 'probe_matched_without_hard_match' });
     }
   }
@@ -295,40 +309,73 @@ export function latestInboundSignal(messages: readonly LeadContextMessage[]): st
 }
 
 /**
- * Grava os near-misses como candidatos ao golden set (blueprint 3.3) — fs em RUNTIME
- * (mkdir recursivo + writeFile), NÃO a tool Write, então o freeze do golden não se aplica
- * a este caminho executado. O arquivo é para CURADORIA HUMANA: carrega o sinal (texto do
- * lead), então NUNCA é logado (regra dura 8) — só a CONTAGEM e os nomes das skills vão a log.
- * Um arquivo por (skill, job): retry re-grava o mesmo candidato, não acumula duplicata.
+ * SINAL do matcher considerando o CONTEXTO recente, não só a última mensagem.
+ *
+ * Medido ao vivo (2026-09-21): depois de o agente mostrar "CB 300" e o cliente
+ * responder "A 2025" (a escolha), a skill `catalogo-apresentacao` NÃO era
+ * acionada — "A 2025" não tem palavra-chave —, o modelo não consultava o
+ * catálogo e as FOTOS da moto escolhida não eram enviadas. Concatenar as últimas
+ * mensagens INBOUND mantém a skill viva enquanto o assunto continua (a conversa
+ * está claramente sobre motos). Só inbound: é o que o CLIENTE disse.
+ */
+export function recentInboundSignal(
+  messages: readonly LeadContextMessage[],
+  janela = 6,
+): string {
+  const inbounds: string[] = [];
+  for (let i = messages.length - 1; i >= 0 && inbounds.length < janela; i -= 1) {
+    const m = messages[i];
+    if (m !== undefined && m.direction === 'inbound' && m.body.trim() !== '') {
+      inbounds.unshift(m.body);
+    }
+  }
+  return inbounds.join(' \n ');
+}
+
+/**
+ * Grava os near-misses como candidatos ao golden set (blueprint 3.3) — LINHA em
+ * `golden_candidates` (migration 0428, issue #1695), não arquivo em disco: o
+ * JSON no disco do contêiner era lido por nenhuma tela, morria a cada atualização
+ * da imagem e ficava fora da cascata de anonimização da LGPD.
+ *
+ * A linha leva SÓ rótulo (skill, motivo) e ponteiros (`lead_id`, `job_id`) — sem
+ * o texto do lead, que é PII: a conversa que a curadoria lê fica atrás do
+ * ponteiro, na ficha que a cascata já alcança. Log leva só a CONTAGEM e os nomes
+ * das skills (regra dura 8). Um registro por (skill, job): o `on conflict do
+ * nothing` dos índices parciais faz o retry regravar o mesmo candidato, sem
+ * acumular duplicata. Falha de banco NÃO derruba o turno — candidato é telemetria
+ * de curadoria, não caminho do atendimento.
  */
 export async function recordSkillMissCandidates(
-  dir: string,
-  trace: { tenantId: string; leadId: string; jobId: string; signal: string; candidates: readonly SkillMissCandidate[] },
+  db: Queryable,
+  trace: {
+    tenantId: string;
+    leadId: string;
+    jobId: string;
+    candidates: readonly SkillMissCandidate[];
+  },
   log: Logger,
 ): Promise<void> {
   if (trace.candidates.length === 0) {
     return;
   }
-  await mkdir(dir, { recursive: true });
-  for (const c of trace.candidates) {
-    const record = {
-      recorded_at: new Date().toISOString(),
-      source: 'skill_match_miss',
-      note:
-        `devia ter usado a skill '${c.skill}' e não usou (near-miss de matching: ${c.reason}) — ` +
-        'candidato ao golden set para curadoria humana (blueprint 3.3).',
-      tenant_id: trace.tenantId,
-      lead_id: trace.leadId,
-      job_id: trace.jobId,
-      expected_skill: c.skill,
-      reason: c.reason,
-      // sinal do turno (texto do lead — PII): fica no ARQUIVO de curadoria, jamais em log.
-      signal: trace.signal,
-    };
-    const file = path.join(dir, `skill-miss_${c.skill}_${trace.jobId}.json`);
-    await writeFile(file, `${JSON.stringify(record, null, 2)}\n`, 'utf8');
+  try {
+    for (const c of trace.candidates) {
+      await db.query(
+        `insert into public.golden_candidates
+           (organization_id, lead_id, job_id, fonte, skill, motivo)
+         values ($1, $2, $3, 'skill_match_miss', $4, $5)
+         on conflict do nothing`,
+        [trace.tenantId, trace.leadId, trace.jobId, c.skill, c.reason],
+      );
+    }
+  } catch (erro) {
+    log.warn('candidato ao golden set não gravado (skill match miss)', {
+      skills: trace.candidates.map((c) => c.skill),
+      erro: erro instanceof Error ? erro.message : String(erro),
+    });
+    return;
   }
-  // PII fora do log: só contagem e nomes das skills (não o sinal).
   log.info('candidatos ao golden set registrados (skill match miss)', {
     count: trace.candidates.length,
     skills: trace.candidates.map((c) => c.skill),

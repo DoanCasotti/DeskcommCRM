@@ -24,7 +24,8 @@ import { type NextRequest } from "next/server";
 import { ok, fail } from "@/lib/api/wrappers";
 import { requireRole } from "@/lib/auth/require-role";
 import { audit } from "@/lib/audit";
-import { encryptCpfSql, hashCpf } from "@/lib/contacts/cpf";
+import { camposCpfParaGravar } from "@/lib/contacts/cpf";
+import { abrirConversaDoContatoNovo } from "@/lib/contacts/conversa-ao-criar";
 import { traduzir } from "@/lib/i18n/dicionario";
 import {
   CSV_MAX_BYTES,
@@ -34,7 +35,9 @@ import {
   mapLinha,
   parseCsv,
 } from "@/lib/contacts/csv";
-import { contactCreateSchema, isValidCpf } from "@/lib/schemas";
+import { contactCreateSchemaDoPais } from "@/lib/schemas";
+import { perfilDaOrganizacao } from "@/lib/legal/perfil-do-pais";
+import { contatosDonosDosExtras } from "@/lib/channels/contato-por-telefone";
 import { phoneLookupVariants } from "@/lib/channels/phone-variants";
 import { createClient } from "@/lib/supabase/server";
 
@@ -66,6 +69,13 @@ export async function POST(req: NextRequest): Promise<Response> {
   const user = authz.user;
   const orgId = authz.org.orgId;
   const t = (texto: string) => traduzir(texto, user.idioma);
+
+  // O documento do titular, na régua do PAÍS da organização (issue #1033): o
+  // cabeçalho aceito, a normalização do valor e a validação saem daqui. O país
+  // vem da coluna da organização — nunca do arquivo enviado.
+  const perfil = await perfilDaOrganizacao(supabase, orgId);
+  const doc = perfil.documento;
+  const schemaDoPais = contactCreateSchemaDoPais(perfil);
 
   let file: File;
   try {
@@ -116,7 +126,7 @@ export async function POST(req: NextRequest): Promise<Response> {
     return fail("validation_failed", t("CSV vazio ou sem linhas de dados."), 422, { requestId });
   }
   const header = rows[0]!;
-  const mapeado = mapHeader(header, t);
+  const mapeado = mapHeader(header, t, doc);
   if (mapeado.motivo !== null) {
     return fail("validation_failed", `${t("Cabeçalho inválido:")} ${mapeado.motivo}.`, 422, {
       details: { header: header.join(", ") },
@@ -140,16 +150,20 @@ export async function POST(req: NextRequest): Promise<Response> {
 
   for (let i = 0; i < dataRows.length; i++) {
     const linha = i + 2; // 1-based contando o cabeçalho — bate com o editor de planilhas.
-    const { contato, motivo } = mapLinha(dataRows[i]!, indices, t);
+    const { contato, motivo } = mapLinha(dataRows[i]!, indices, t, doc, perfil.telefoneExemplo);
     if (motivo !== null) {
       errors.push({ linha, motivo });
       continue;
     }
-    if (contato.cpf && !isValidCpf(contato.cpf)) {
-      errors.push({ linha, motivo: t("CPF inválido: ") + `"${contato.cpf}"` });
+    if (contato.cpf && !doc.valida(contato.cpf)) {
+      // O texto sai do PERFIL: no Brasil continua "CPF inválido: …" (a mesma
+      // chave do dicionário), e país sem checksum público diz na mensagem que a
+      // conferência é de FORMA — prometer dígito verificado que não existe é o
+      // que a issue #1033 proíbe.
+      errors.push({ linha, motivo: t(doc.mensagemInvalido + ": ") + `"${contato.cpf}"` });
       continue;
     }
-    const parsed = contactCreateSchema.safeParse({ ...contato, source: SOURCE_IMPORT_CSV });
+    const parsed = schemaDoPais.safeParse({ ...contato, source: SOURCE_IMPORT_CSV });
     if (!parsed.success) {
       const primeiro = parsed.error.issues[0];
       errors.push({ linha, motivo: primeiro?.message ?? t("dados inválidos") });
@@ -170,7 +184,7 @@ export async function POST(req: NextRequest): Promise<Response> {
 
   // ─── Pré-filtro de duplicados contra o banco (uma query por identificador) ──
   //
-  // Os índices únicos são parciais (excluem mesclados/anonimizados), então a
+  // Os índices únicos são parciais (excluem mesclados), então a
   // busca espelha o WHERE do índice — filtrar pelo que o índice não cobre
   // produziria "duplicado" imaginário.
   const phones = candidatos
@@ -187,6 +201,7 @@ export async function POST(req: NextRequest): Promise<Response> {
       .from("contacts")
       .select("phone_number")
       .eq("organization_id", orgId)
+      .is("is_merged_into", null)
       .not("phone_number", "is", null)
       .in("phone_number", lookup);
     for (const r of data ?? []) {
@@ -194,12 +209,19 @@ export async function POST(req: NextRequest): Promise<Response> {
         existentes.add(`tel:${v}`);
       }
     }
+    // Número que é EXTRA de uma ficha viva já é contato da org: conta como
+    // duplicado aqui, em vez de chegar ao insert e cair no 23505 do banco.
+    const donosDosExtras = await contatosDonosDosExtras(supabase, orgId, lookup);
+    for (const numero of donosDosExtras.keys()) {
+      for (const v of phoneLookupVariants(numero)) existentes.add(`tel:${v}`);
+    }
   }
   if (emails.length > 0) {
     const { data } = await supabase
       .from("contacts")
       .select("email_normalized")
       .eq("organization_id", orgId)
+      .is("is_merged_into", null)
       .in("email_normalized", emails.map((e) => e.toLowerCase()));
     for (const r of data ?? []) existentes.add(`email:${(r as { email_normalized: string }).email_normalized}`);
   }
@@ -236,11 +258,11 @@ export async function POST(req: NextRequest): Promise<Response> {
       consent: {},
     };
     if (contato.cpf) {
-      insertRow.cpf_hash = hashCpf(contato.cpf as string);
-      // LGPD: além do hash (dedupe), grava a versão cifrada — igual ao create
-      // unitário, senão o contato importado nasce sem CPF recuperável.
-      const enc = await encryptCpfSql(supabase, contato.cpf as string);
-      if (enc) insertRow.cpf_encrypted = enc;
+      // LGPD: hash (dedupe) e versão cifrada nascem JUNTOS — o CHECK
+      // `contacts_cpf_consistency` recusa a linha se só um dos dois existir
+      // (#2522). Sem cifra disponível a linha segue SEM CPF, em vez de voltar
+      // em `errors` e parar a reimportação inteira.
+      Object.assign(insertRow, await camposCpfParaGravar(supabase, contato.cpf as string));
     }
 
     const { data: criado, error: insErr } = await supabase
@@ -262,6 +284,33 @@ export async function POST(req: NextRequest): Promise<Response> {
     imported += 1;
     if (phone) existentes.add(`tel:${phone}`);
     if (email) existentes.add(`email:${email.toLowerCase()}`);
+
+    // ── CRIAR CONTATO ABRE CONVERSA? AQUI, NÃO (#3718) ─────────────────────
+    //
+    // A criação unitária abre a conversa do contato novo; esta porta não abre, e
+    // isso é REGRA, não esquecimento. A decisão é uma só e mora em
+    // `lib/contacts/conversa-ao-criar.ts` — as duas portas chamam a MESMA
+    // função e só declaram qual porta são; aqui o desfecho é `porta_nao_abre`.
+    //
+    // O preço, medido: o arquivo aceita até `CSV_MAX_DATA_ROWS` (500) contatos.
+    // Abrir conversa para todos seria, por linha, `sessaoProntaParaEnvio` (1–2
+    // SELECT em `channel_sessions`) + RPC `fn_service_begin` (advisory lock +
+    // SELECT em `contacts` + SELECT … FOR NO KEY UPDATE em `conversations` +
+    // SELECT em `channel_sessions` + INSERT em `conversations`) — ~2.500
+    // statements neste request, que já faz 500 INSERTs e 500 `emit_event`. E o
+    // que sobra não é o custo: é a caixa de entrada com 500 conversas `open`
+    // que ninguém pediu e ninguém vai atender.
+    //
+    // A chamada é por linha de propósito (uma porta, um lugar para a regra), mas
+    // ela responde ANTES de qualquer leitura: zero consulta ao banco por este
+    // caminho, medido em `./route.test.ts`.
+    await abrirConversaDoContatoNovo(supabase, {
+      porta: "importacao_csv",
+      organizationId: orgId,
+      contactId: (criado as { id: string }).id,
+      phoneNumber: phone ?? null,
+      requestId,
+    });
 
     // Mesmo evento do create unitário — quem consome `contact.created`
     // (workers, métricas) trata importado e manual igual.

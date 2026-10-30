@@ -1,12 +1,14 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useState } from "react";
 
 import { useT } from "@/hooks/i18n/useT";
 import { recoverOrganization } from "@/app/actions/auth/recoverOrganization";
+import { AvisoSemResposta, useEnvioComTeto } from "@/components/auth/teto-da-espera";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import type { PlanoDoCadastro } from "@/lib/cobranca/cadastro";
 
 /**
  * As frases em português são as CHAVES do dicionário — a mesma convenção do
@@ -18,6 +20,8 @@ const MENSAGENS: Record<string, string> = {
   rate_limited: "Muitas tentativas. Aguarde alguns minutos antes de tentar novamente.",
   invite_pending:
     "Esta conta tem um convite pendente ou inválido. Use o link do convite ou peça um novo ao administrador.",
+  somente_convite:
+    "Esta instalação aceita cadastro apenas por convite. Peça um convite a quem administra o sistema.",
   provision_failed:
     "Não foi possível concluir a organização agora. Tente novamente ou contate o administrador da instalação.",
   // Diz a verdade sobre o que aconteceu. Antes, quem tinha o acesso revogado
@@ -26,6 +30,9 @@ const MENSAGENS: Record<string, string> = {
   // resolveria nada.
   access_revoked:
     "Seu acesso a esta organização foi retirado. Fale com quem administra a empresa — criar uma organização nova não devolve o acesso.",
+  pedido_recusado:
+    "Quem administra esta instalação não aprovou o pedido. Se você recebeu um convite, use o link que chegou no seu e-mail.",
+  plano_obrigatorio: "Escolha um plano para criar a empresa.",
 };
 
 /**
@@ -36,20 +43,36 @@ const MENSAGENS: Record<string, string> = {
  * recuperação precisa digitar de novo um dado que o sistema já tem, no momento
  * em que ela está mais propensa a desistir.
  */
-export function RecoverOrganizationForm({ nomeSugerido }: { nomeSugerido?: string }) {
+export function RecoverOrganizationForm({
+  nomeSugerido,
+  comAprovacao = false,
+  planos = [],
+  planoInicial,
+}: {
+  nomeSugerido?: string;
+  /** Instalação em `com_aprovacao`: o envio vira pedido, e o botão diz isso. */
+  comAprovacao?: boolean;
+  /** Planos oferecidos no cadastro (#2846): com eles, a empresa nasce no escolhido. */
+  planos?: readonly PlanoDoCadastro[];
+  planoInicial?: string;
+}) {
   const t = useT();
   const [name, setName] = useState(nomeSugerido ?? "");
+  const [plano, setPlano] = useState(planoInicial ?? "");
   const [error, setError] = useState<string | null>(null);
-  const [isPending, startTransition] = useTransition();
+  const { pendente: isPending, semResposta, enviar } = useEnvioComTeto();
 
   function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(null);
-    startTransition(async () => {
-      const result = await recoverOrganization(name);
-      // O caminho de sucesso não volta: a action redireciona para o onboarding.
-      if (!result.ok) setError(t(MENSAGENS[result.error] ?? MENSAGENS.provision_failed!));
-    });
+    // O caminho de sucesso não volta: a action redireciona (onboarding, ou a
+    // própria tela mostrando o pedido enviado).
+    void enviar(
+      () => recoverOrganization(name, plano || undefined),
+      (result) => {
+        if (!result.ok) setError(t(MENSAGENS[result.error] ?? MENSAGENS.provision_failed!));
+      },
+    );
   }
 
   return (
@@ -66,13 +89,37 @@ export function RecoverOrganizationForm({ nomeSugerido }: { nomeSugerido?: strin
           aria-invalid={Boolean(error)}
         />
       </div>
+      {planos.length > 0 && (
+        <div className="space-y-1.5">
+          <Label htmlFor="recovery-plano">{t("Plano")}</Label>
+          <select
+            id="recovery-plano"
+            className="h-10 w-full rounded-md border bg-background px-3 text-sm"
+            value={plano}
+            onChange={(event) => setPlano(event.target.value)}
+            disabled={isPending}
+          >
+            {planos.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.nome} — {new Intl.NumberFormat(undefined, { style: "currency", currency: "BRL" }).format(p.preco_cents / 100)} / {p.intervalo === "ano" ? t("ano") : t("mês")}
+                {p.trial_dias > 0 ? ` · ${p.trial_dias} ${t("dias de teste")}` : ` · ${t("sem período de teste")}`}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
       {error && (
         <p className="text-sm text-destructive" role="alert">
           {error}
         </p>
       )}
+      {semResposta && <AvisoSemResposta />}
       <Button className="w-full" type="submit" disabled={isPending || name.trim().length < 2}>
-        {isPending ? t("Preparando seu ambiente…") : t("Continuar para o onboarding")}
+        {isPending
+          ? t("Preparando seu ambiente…")
+          : comAprovacao
+            ? t("Enviar pedido")
+            : t("Continuar para o onboarding")}
       </Button>
     </form>
   );

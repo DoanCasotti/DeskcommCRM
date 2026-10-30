@@ -44,6 +44,26 @@ log_err() {  # log_err <mensagem> — grava com timestamp, corta pra ~200 linhas
 # base num número que não descreve o que está no ar.
 recusar_projeto_de_outra_arvore log_err || exit 0
 
+# A senha das rotinas que o log do sistema guardou (#1054) é trocada AQUI quando
+# a atualização veio do botão da tela: o `update.sh` dirigido por um agent.sh
+# não pode trocá-la (o agente que o dirige fala com a senha velha até o fim).
+# Esta execução já é a do kit novo — o cron relê o arquivo a cada 5 minutos — e
+# ainda não segura nenhuma atualização. Uma vez só: a marca em disco encerra.
+# Depois da troca, `setup_event_log_drain_cron` reescreve a linha do crontab
+# (numa instalação que atualizou por um update.sh antigo, ela ainda carrega a
+# senha escrita) e o SECRET desta execução passa a ser o novo.
+if [ ! -e "${PROJECT_DIR}/${MARCA_SEGREDO_DO_CRON_NOME}" ]; then
+  if trocar_segredo_do_cron_vazado >/dev/null 2>&1; then
+    if [ -n "${SEGREDO_DO_CRON_TROCADO:-}" ]; then
+      setup_event_log_drain_cron >/dev/null 2>&1 || true
+      log_err "troquei a senha interna das rotinas (a antiga ficou no log do sistema por versões anteriores do instalador). Recomendado: apagar os logs antigos — sudo truncate -s 0 /var/log/syslog && sudo rm -f /var/log/syslog.* && sudo journalctl --rotate && sudo journalctl --vacuum-time=1s"
+    fi
+  else
+    log_err "não consegui trocar a senha interna das rotinas nesta execução — tento de novo na próxima"
+  fi
+  SECRET="${INTERNAL_CRON_SECRET:-${INTERNAL_SECRET:-}}"
+fi
+
 post() {  # post <json> → corpo da resposta em 2xx; VAZIO em qualquer falha
   # (quem chama, ex. o laço de retry do run_result, usa "saiu vazio" como sinal
   # de falha — por isso o corpo só é impresso no ramo de sucesso).
@@ -65,8 +85,46 @@ post() {  # post <json> → corpo da resposta em 2xx; VAZIO em qualquer falha
   esac
 }
 
+# A volta sozinha contada ao painel (#2757).
+#
+# O agente já fala com o app por esta rota (heartbeat e run_result); este é o
+# terceiro recado, e existe porque a volta automática era invisível para quem
+# usa a tela: o registro ficava só no `.update-agent.log` da VPS, e quem abria
+# o painel via a versão mudar sem explicação. O corpo não leva comando nenhum —
+# só o fato (de qual versão para qual, por quê) —, pela mesma regra do resto da
+# rota: o que atravessa a fronteira é informação, nunca instrução.
+#
+# O recado leva o DESFECHO da volta (#3271), num campo próprio (`ok`). Sem ele
+# o painel tratava igual a volta que terminou bem e a que falhou: a tela
+# afirmava "está no ar agora" nos dois casos e ainda oferecia o botão de voltar
+# apontando para a versão que já estava rodando. O motivo continua no `reason`
+# (é o texto que quem lê entende), mas quem decide o desfecho é o campo: código
+# 0 = a volta terminou; qualquer outro = não terminou.
+#
+# Falha aqui NÃO derruba nada: a volta já aconteceu, e o pior desfecho de um
+# aviso que não passa é o `.update-agent.log` de sempre.
+avisar_volta_no_painel() {  # avisar_volta_no_painel <para onde voltou> <versão que não respondeu> <falhas> <rc da volta>
+  local para="${1:-}" falhou="${2:-}" falhas="${3:-}" rc="${4:-0}" ok motivo corpo
+  [ -n "$para" ] || return 0
+  motivo="o site não respondeu em ${falhas:-2} healthchecks seguidos logo depois da atualização"
+  if [ "${rc:-0}" = "0" ]; then
+    ok="true"
+  else
+    ok="false"
+    motivo="$motivo (a volta terminou com código $rc)"
+  fi
+  corpo="{\"kind\":\"rollback\",\"returned_to\":\"$(esc "$para")\",\"failed_version\":\"$(esc "$falhou")\",\"ok\":$ok,\"reason\":\"$(esc "$motivo")\"}"
+  post "$corpo" >/dev/null 2>&1 || true
+  return 0
+}
+
 json_field() {  # json_field <corpo> <campo> — sem jq, que pode não existir no VPS
   printf '%s' "$1" | tr ',' '\n' | grep -o "\"$2\":[^,}]*" | head -1 | cut -d: -f2- | tr -d '" '
+}
+
+# Não confunde o booleano JSON true com a string "true" ou outro valor.
+json_bool_true() {
+  printf '%s' "$1" | LC_ALL=C grep -E "\"$2\"[[:space:]]*:[[:space:]]*true([[:space:]]*[,}]|[[:space:]]*$)" >/dev/null
 }
 
 # Escapa texto pra caber dentro de uma string JSON, sem depender de jq:
@@ -108,7 +166,17 @@ git fetch --tags --quiet origin 2>/dev/null || FETCH_OK=0
 
 CURRENT_TAG="$(git describe --tags --exact-match HEAD 2>/dev/null || true)"
 CURRENT_SHA="$(git rev-parse --short HEAD 2>/dev/null || echo '?')"
-LATEST_TAG="$(git tag -l 'v*' --sort=-v:refname | head -1)" || true
+# A AUTORIDADE é a release publicada, NUNCA a maior tag. Ver
+# `ultima_release_estavel` em _common.sh para o caso real que obrigou a troca
+# (v1.20.0 existia como tag manual, sem release — e a pergunta antiga mandava
+# instalá-la). O `git fetch --tags` acima continua necessário: a API decide
+# QUAL tag, o git fornece o CONTEÚDO dela (changelog, ancestralidade).
+LATEST_TAG="$(ultima_release_estavel)" || true
+# "A API não respondeu" é diferente de "não há release". Sem esta distinção o
+# app leria o silêncio como boa notícia e diria "você está em dia" a uma
+# instalação atrasada — o mesmo defeito que COMPARE_FAILED já evita do outro
+# lado.
+if [ -n "$LATEST_TAG" ]; then RELEASE_OK=1; else RELEASE_OK=0; fi
 
 # Guardado ANTES de qualquer zeragem abaixo: "vi uma tag" e "não anunciei"
 # são coisas diferentes. Sem isto, um fork sem NENHUMA tag `v*` chega ao app
@@ -121,6 +189,21 @@ if [ -n "$CURRENT_TAG" ]; then
   CURRENT="$CURRENT_TAG"; OFF_RELEASE=false
 else
   CURRENT="$CURRENT_SHA";  OFF_RELEASE=true
+fi
+
+# The checkout still supplies release notes and update scripts; it does not
+# identify containers. An old kit remains compatible, with explicit legacy
+# status on the API, until this collector is installed alongside the agent.
+RUNTIME_CONFIRMATION=null
+RUNTIME_CONFIRMED=false
+if [ -f "$(dirname "$0")/_runtime.sh" ]; then
+  source "$(dirname "$0")/_runtime.sh"
+  collect_runtime_confirmation
+  if [ "$RUNTIME_CONFIRMED" = true ]; then
+    CURRENT="v$RUNTIME_VERSION"; CURRENT_SHA="$RUNTIME_REVISION"
+    CURRENT_TAG="$CURRENT"
+    if [ "$RUNTIME_REVISION" = "$RUNTIME_BASE" ]; then OFF_RELEASE=false; else OFF_RELEASE=true; fi
+  fi
 fi
 
 # Tag que já está CONTIDA no que roda aqui não é atualização — é retrocesso, e
@@ -139,13 +222,64 @@ fi
 # atrasada. Por isso o "não sei" viaja explícito no heartbeat.
 COMPARE_FAILED=false
 if [ -n "$LATEST_TAG" ]; then
-  is_already_in_head "$LATEST_TAG" && CONTIDA=0 || CONTIDA=$?
+  if [ "$RUNTIME_CONFIRMED" = true ]; then
+    git merge-base --is-ancestor "$LATEST_TAG" "$RUNTIME_REVISION" 2>/dev/null && CONTIDA=0 || CONTIDA=$?
+  elif [ "$RUNTIME_CONFIRMATION" != null ]; then
+    CONTIDA=2
+  else
+    is_already_in_head "$LATEST_TAG" && CONTIDA=0 || CONTIDA=$?
+  fi
+  case "$CONTIDA" in 0|1) ;; *) CONTIDA=2 ;; esac
   [ "$CONTIDA" = 2 ] && COMPARE_FAILED=true
   [ "$CONTIDA" = 1 ] || LATEST_TAG=""   # 0 = retrocesso, 2 = não sei: nos dois, não anuncia
 fi
 # Sem nenhuma tag conhecida E sem ter conseguido buscar: também não dá para
 # afirmar que não há versão nova — nem sabemos se existe alguma publicada.
 [ -z "$LATEST_TAG" ] && [ "$FETCH_OK" = 0 ] && COMPARE_FAILED=true
+# Idem quando quem não respondeu foi a API de releases: não sabemos se existe
+# versão nova, e dizer que não existe seria mentir com cara de boa notícia.
+[ -z "$LATEST_TAG" ] && [ "$RELEASE_OK" = 0 ] && COMPARE_FAILED=true
+
+# ── A ETIQUETA PODE SAIR NA FRENTE DA IMAGEM ─────────────────────────────────
+#
+# MEDIDO em 2026-09-13: a tela ofereceu a "Nova versão · 1.17.16" enquanto a
+# imagem dela ainda estava sendo construída — porque este agente decidia olhando
+# SÓ a etiqueta no Git. São uns seis minutos entre uma coisa e outra.
+#
+# Antes da pausa dos serviços, clicar naquela janela era um susto: a atualização
+# avisava "a versão ainda está publicando" e o sistema seguia no ar com a versão
+# antiga. Agora o app é PARADO antes do banco e a volta usa o endereço da imagem
+# NOVA. Sem imagem, ele não volta.
+#
+# ⚠️ E aqui o silêncio é ESCOLHIDO, ao contrário de todo o resto deste arquivo.
+# Este bloco não acende `COMPARE_FAILED`: seria inventar um sinal falso, porque
+# a comparação funcionou — o que falta é a imagem, não a resposta. E não há
+# campo no batimento para "existe versão nova, mas ainda não dá para instalar".
+# Ficar calado por alguns minutos é a escolha certa aqui e só aqui, por três
+# razões: o estado é transitório, ele se cura sozinho na passada seguinte (5
+# min), e a alternativa é um botão que derruba o sistema.
+VEREDITO_IMAGEM=""
+if [ -n "$LATEST_TAG" ] && [ "$LATEST_TAG" != "$CURRENT" ]; then
+  VEREDITO_IMAGEM="$(veredito_da_imagem_do_app "${LATEST_TAG#v}" "${CURRENT_TAG#v}")" || VEREDITO_IMAGEM=""
+  # Só `ausente` cala. `indisponivel` é "não consegui perguntar ao registro", e
+  # nesse caso anunciar é o que preserva o comportamento de sempre — uma VPS com
+  # saída de rede ruim não pode ficar sem atualização para sempre, em silêncio.
+  [ "$VEREDITO_IMAGEM" = "ausente" ] && LATEST_TAG=""
+  # ── E a release tem as QUATRO imagens? (#1955, critério 1) ──────────────
+  # O veredito de cima olha SÓ a imagem do app. Um run de publicação que morre
+  # no meio deixa a ETIQUETA publicada com o worker (ou o scheduler, ou a voz)
+  # inexistente — e quem clica em "Atualizar" descobre no `up -d`, com o CRM
+  # parado e o build local queimando a memória da VPS. Uma release sem todas
+  # as imagens prontas não é oferecida: o silêncio aqui é transitório (a
+  # próxima passada, 5 min, reavalia) e a alternativa é um botão que derruba
+  # o sistema.
+  # Só `incompleta` cala, pelo MESMO motivo do `ausente`: `indisponivel` é o
+  # registro fora do ar, e uma VPS com rede ruim não pode ficar sem
+  # atualização para sempre, em silêncio.
+  if [ -n "$LATEST_TAG" ] && [ "$(veredito_das_imagens_da_release "${LATEST_TAG#v}")" = "incompleta" ]; then
+    LATEST_TAG=""
+  fi
+fi
 
 CHANGELOG=""
 if [ -n "$LATEST_TAG" ] && [ "$LATEST_TAG" != "$CURRENT" ]; then
@@ -165,8 +299,13 @@ if [ -n "$LATEST_TAG" ] && [ "$LATEST_TAG" != "$CURRENT" ]; then
   # salto grande. `index()` e não regex: o rótulo tem `[` e `]`, e escapar isso
   # em awk é onde se erra. Instalação fora de release (CURRENT é um SHA) nunca
   # casa, cai no arquivo inteiro cortado, e o app declara que não alcançou.
-  # MANTENHA numa linha física só: tests/unit/changelog-cabe-na-tela-da-vps.test.ts
-  # lê o teto daqui por regex de linha única e EXPLODE se ela for quebrada.
+  # MANTENHA numa linha física só: `lib/release/cabe-na-tela.ts` lê o teto E o
+  # `-v cur=` daqui por regex de linha única e EXPLODE se ela for quebrada. São
+  # dois os leitores, com atores diferentes — o teste que cobra o AUTOR DO PR
+  # (tests/unit/changelog-cabe-na-tela-da-vps.test.ts) e o que cobra a CASA
+  # (pnpm release:acervo-cabe, fora de pull_request) —, mas a régua é uma só:
+  # duas cópias do número seriam duas fontes da verdade, e a que envelhece é
+  # sempre a cópia.
   CHANGELOG="$(git show "${LATEST_TAG}:CHANGELOG.md" 2>/dev/null | awk -v cur="## [${CURRENT#v}]" 'index($0, cur) == 1 { print; exit } { print }' | head -c 30000 || true)"
   # `head -c` corta em byte fixo, e o CHANGELOG tem emoji/acento multi-byte
   # (UTF-8) — um corte no meio de um caractere quebraria o JSON de um jeito
@@ -201,7 +340,68 @@ PIN_CORRIGIDO="$(completar_pin_ausente .env)" || PIN_CORRIGIDO=""
 # do operador e não se toca. Aqui só se avisa.
 PIN_FALTANDO="$(pin_incompleto .env)" || PIN_FALTANDO=""
 
-BODY="{\"kind\":\"heartbeat\",\"current_version\":\"${CURRENT}\",\"current_sha\":\"${CURRENT_SHA}\",\"off_release\":${OFF_RELEASE},\"latest_version\":\"${LATEST_TAG}\",\"compare_failed\":${COMPARE_FAILED},\"has_known_release\":${HAS_KNOWN_RELEASE},\"changelog\":\"$(esc "$CHANGELOG")\"}" || true
+# ── 2. Uma atualização por vez — e o cadeado cobre o agente INTEIRO (#2757) ─
+# O `flock` protegia só o caminho de quem executa o pedido. A vigília do app
+# logo abaixo TAMBÉM dispara uma atualização (a volta sozinha), então o
+# cadeado passa a valer desde aqui: um segundo cron que suba enquanto este
+# segura um update — ou uma volta — não sonda o app no meio da troca nem
+# encosta nas marcas da vigília. `flock -n`: quem não pegou sai em silêncio,
+# e o próximo ciclo (5 minutos) pega.
+exec 9>"$LOCK"
+flock -n 9 || exit 0
+
+# ── 3. O app caiu logo após uma atualização? (#2757) ───────────────────────
+#
+# O `update.sh` devolve os serviços em qualquer saída e o bloco lá embaixo
+# devolve a IMAGEM quando o run termina com erro — mas os dois dependem de
+# alguém ver a falha acontecer. Quando o app cai DEPOIS disso, quem mais
+# precisa de saída é o dono com o painel em 502: o botão de voltar mora
+# dentro do app que parou.
+#
+# Esta seção é a resposta, e ela roda ANTES do heartbeat de propósito: com o
+# app fora do ar o POST não tem resposta, e o `|| exit 0` logo abaixo encerraria
+# o agente — o cenário inteiro desta vigília. A marca que a autoriza nasce no
+# `update.sh` (passo 1.6), e quem a desarma é a própria vigília: app
+# respondendo, janela vencida ou volta já disparada.
+DE_VOLTA="$(vigia_ler)" || DE_VOLTA=""
+if [ -n "$DE_VOLTA" ]; then
+  if app_esta_no_ar; then
+    # Respondeu: a contagem recomeça. A marca segue de pé — é a janela de
+    # validade (duas horas) que encerra a vigília, não um healthcheck bom.
+    vigia_zerar
+  else
+    FALHAS="$(vigia_falhou)" || FALHAS=0
+    log_err "o app não respondeu em $FALHAS de $VIGIA_FALHAS_SEGUIDAS healthchecks seguidos logo após a atualização — se continuar assim, volto para a $DE_VOLTA sozinho"
+    if [ "${FALHAS:-0}" -ge "$VIGIA_FALHAS_SEGUIDAS" ]; then
+      # A marca sai ANTES de rodar: UMA tentativa por vigília, sempre. Se a
+      # volta falhar, o motivo fica no log para alguém ler — repetir sozinha
+      # a cada 5 minutos viraria laço de atualização num app que não sobe
+      # nem na versão anterior.
+      vigia_encerrar
+      # A versão que NÃO respondeu, lida ANTES da volta: depois do
+      # `update.sh --to`, o código em disco já é o da versão anterior, e o
+      # aviso do painel diria que a volta foi para ela mesma.
+      VERSAO_QUE_FALHOU="$CURRENT"
+      log_err "voltando sozinho para a $DE_VOLTA: o app ficou fora do ar em $FALHAS healthchecks seguidos logo após a atualização"
+      set +e
+      bash "$(dirname "$0")/update.sh" --to "$DE_VOLTA" --force >>"$LOG" 2>&1
+      RC_VOLTA=$?
+      set -e
+      log_err "volta para a $DE_VOLTA terminou com código $RC_VOLTA — a saída completa está em .update.log"
+      # A volta sozinha é a única troca de versão que ninguém pediu pela tela:
+      # sem este aviso, quem abre o painel vê a versão mudar sem explicação (o
+      # registro ficava só no `.update-agent.log` da VPS). O canal é o mesmo
+      # que o agente já usa — ver `avisar_volta_no_painel`.
+      avisar_volta_no_painel "$DE_VOLTA" "$VERSAO_QUE_FALHOU" "$FALHAS" "$RC_VOLTA"
+      # O fim desta passada: seguir para um pedido de atualização (ou sondar
+      # de novo) com o app no meio da troca só mistura as duas histórias. O
+      # próximo ciclo volta a contar com tudo.
+      exit 0
+    fi
+  fi
+fi
+
+BODY="{\"kind\":\"heartbeat\",\"supports_forced_update\":true,\"current_version\":\"${CURRENT}\",\"current_sha\":\"${CURRENT_SHA}\",\"off_release\":${OFF_RELEASE},\"latest_version\":\"${LATEST_TAG}\",\"compare_failed\":${COMPARE_FAILED},\"has_known_release\":${HAS_KNOWN_RELEASE},\"changelog\":\"$(esc "$CHANGELOG")\",\"runtime_confirmation\":$RUNTIME_CONFIRMATION}" || true
 
 # Só no log do host, de propósito. Mandar isto no heartbeat seria inútil: o
 # schema da rota é `z.object` sem `.strict()`, então o Zod DESCARTA chave
@@ -217,10 +417,19 @@ RESP="$(post "$BODY")"
 RUN_ID="$(json_field "$RESP" run_id)" || true
 [ -n "$RUN_ID" ] || exit 0
 
-# ── 2. Alguém pediu. Uma atualização por vez. ────────────────────────────────
-exec 9>"$LOCK"
-flock -n 9 || exit 0
+# Revalida também pedidos antigos. Força nunca usa o fallback legado sem
+# observação: o helper pode ter sumido depois de o app aceitar o pedido.
+FORCA_PEDIDA=""
+json_bool_true "$RESP" force_requested && FORCA_PEDIDA=1
+if { [ "$RUNTIME_CONFIRMATION" != null ] || [ -n "$FORCA_PEDIDA" ]; } &&
+   { [ "$RUNTIME_CONFIRMATION" = null ] || ! runtime_can_install_release; }; then
+  post "{\"kind\":\"run_result\",\"run_id\":\"${RUN_ID}\",\"status\":\"failed\",\"log_tail\":\"A execução está incompleta ou personalizada. Concilie e confirme os serviços antes de instalar imagens de uma release pública.\"}" >/dev/null || true
+  exit 0
+fi
 
+# ── 4. Alguém pediu. Uma atualização por vez. ───────────────────────────────
+# (o cadeado já está na mão desde a seção 2 — a vigência também dispara
+# atualização, e as duas não podem correr ao mesmo tempo.)
 report() { post "{\"kind\":\"run_progress\",\"run_id\":\"${RUN_ID}\",\"step\":\"$1\"}" >/dev/null; }
 
 # Guarda a imagem em execução ANTES de puxar a nova: é por onde a gente volta
@@ -269,12 +478,41 @@ fi
 # 422 "Invalid UUID" — RUN_ID chegava vazio no filho). `declare -f` também
 # precisa incluir post, não só report.
 export API SECRET ERRLOG RUN_ID
-# Sem tag anunciada (instalação à frente da última publicada, ou sem tags),
-# roda sem --to: o update.sh resolve o alvo sozinho e recusa em português o
-# que não for atualização de verdade — o motivo chega à tela pelo log_tail,
-# em vez de o run sumir sem explicação.
+# O alvo vem do RUN, e não da última release: a tela pode ter pedido um
+# VOLTAR (#2757) — e aí instalar a última publicada seria reinstalar
+# exatamente a versão que acabou de quebrar. Rota anterior a #2757 não manda
+# `to_version`; run sem ele cai no de sempre, que é a última release
+# publicada (e, sem tag anunciada, o update.sh resolve o alvo sozinho e
+# recusa em português o que não for atualização de verdade — o motivo chega
+# à tela pelo log_tail, em vez de o run sumir sem explicação).
+ALVO="$(json_field "$RESP" to_version)" || ALVO=""
+[ -n "$ALVO" ] || ALVO="$LATEST_TAG"
+# O alvo vem da rota autenticada, mas o host mantém o vocabulário restrito.
+if [ -n "$ALVO" ] && ! [[ "$ALVO" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  log_err "pedido de atualização recusado: alvo não é uma tag de versão publicada"
+  post "{\"kind\":\"run_result\",\"run_id\":\"${RUN_ID}\",\"status\":\"failed\",\"log_tail\":\"O alvo do pedido não é uma versão publicada válida. Nenhuma atualização foi executada.\"}" >/dev/null || true
+  exit 0
+fi
 UPDATE_ARGS=()
-[ -n "$LATEST_TAG" ] && UPDATE_ARGS=(--to "$LATEST_TAG")
+[ -n "$ALVO" ] && UPDATE_ARGS=(--to "$ALVO")
+# A MESMA guarda do update.sh contra "versão ANTERIOR à já instalada"
+# (o bloco que recusa sem --force), decidida AQUI, onde o git está: alvo
+# contido no que roda aqui é voltar no tempo. Sem esta linha o pedido de volta
+# morreria na recusa do próprio update.sh — o run fecharia "failed" mandando
+# quem clicou rodar, no terminal, o comando que este agente tinha em mãos.
+VOLTA_NO_TEMPO=""
+if [ -n "$ALVO" ] && [ "$ALVO" != "$CURRENT_TAG" ]; then
+  is_already_in_head "$ALVO" && CONTIDA=0 || CONTIDA=$?
+  [ "$CONTIDA" = 0 ] && VOLTA_NO_TEMPO=1
+fi
+if [ -n "$VOLTA_NO_TEMPO" ] || [ -n "$FORCA_PEDIDA" ]; then UPDATE_ARGS+=(--force); fi
+
+# Cada execução do agente começa sem medição nenhuma do banco: o arquivo da
+# rodada é desta rodada, e resíduo da execução anterior não pode virar história
+# desta (a tela conta o que aconteceu AGORA). Quem grava é o reaplicar_baseline,
+# no _common.sh.
+export RODADA_DO_BANCO_ARQUIVO="${TMPDIR:-/tmp}/deskcomm-rodada-do-banco.$$"
+rm -f "$RODADA_DO_BANCO_ARQUIVO" 2>/dev/null || true
 set +e
 DESKCOMM_AGENT_REPORT=1 \
 DESKCOMM_AGENT_PREV_IMAGE="$PREV_IMAGE" \
@@ -283,7 +521,7 @@ DESKCOMM_AGENT_REPORT_CMD="$(declare -f post report log_err); report" \
 RC=$?
 set -e
 
-# ── 3. O app voltou? Se não, volta a imagem anterior. ───────────────────────
+# ── 5. O app voltou? Se não, volta a imagem anterior. ───────────────────────
 STATUS="success"
 if [ $RC -eq "$REFUSED_RC" ]; then
   # O update.sh recusou ANTES de tocar em qualquer coisa (alvo anterior ao
@@ -329,9 +567,19 @@ fi
 
 TAIL="$(esc "$(tail -40 "$LOG" || true)")" || true
 
+# O que a rodada do banco contou de si mesma — três campos PLANOS, com os nomes
+# que a rota lê (`disputa_de_banco`, `retentativas_do_banco`, `passada_do_banco`).
+# Vazio = não medido: os três chegam ausentes e a tela se cala, em vez de afirmar
+# zero. O corpo é montado em pedaços porque campo ausente não vira `null` nem
+# vírgula solta no fim.
+RODADA_DO_BANCO="$(ler_rodada_do_banco 2>/dev/null || true)"
+BODY="{\"kind\":\"run_result\",\"run_id\":\"${RUN_ID}\",\"status\":\"${STATUS}\",\"log_tail\":\"${TAIL}\""
+[ -z "$RODADA_DO_BANCO" ] || BODY="${BODY},${RODADA_DO_BANCO}"
+BODY="${BODY}}"
+
 # O app acabou de reiniciar: insiste por ~2 min antes de desistir.
 for _ in $(seq 1 12); do
-  OUT="$(post "{\"kind\":\"run_result\",\"run_id\":\"${RUN_ID}\",\"status\":\"${STATUS}\",\"log_tail\":\"${TAIL}\"}")"
+  OUT="$(post "$BODY")"
   [ -n "$OUT" ] && break
   sleep 10
 done

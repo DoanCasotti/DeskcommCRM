@@ -1,12 +1,13 @@
 "use server";
 
+import { ipDoCliente } from "@/lib/http/ip-do-cliente";
 import { supportWriteError } from "@/lib/impersonate/support";
 import { headers } from "next/headers";
 import { revalidatePath } from "next/cache";
 
 import { audit } from "@/lib/audit";
 import { loadAuthUser, mfaEmDivida, resolveActiveOrg } from "@/lib/auth/server";
-import { ROLE_RANK } from "@/lib/auth/types";
+import { podeAdministrarEmpresa } from "@/lib/auth/pode-administrar-empresa";
 import { normalizarHex } from "@/lib/branding/rampa";
 import {
   marcaDaOrganizacaoSchema,
@@ -34,11 +35,15 @@ export type UpdateMarcaDaOrganizacaoResult =
  *
  * ── Por que RPC, e não `.update({ settings })` ───────────────────────────────
  *
- * `organizations.settings` já tem TRÊS donos com gates diferentes — a aba
- * Organização (`updateTenant.ts:56-83`, admin), o PATCH de atendimento
- * (`api/v1/settings/routing`, manager) e a régua de atrito (`api/v1/metrics/
- * atrito`, manager) — e os três leem o jsonb INTEIRO, espalham em memória e
- * regravam o objeto inteiro, em round-trips separados. A perda é medida:
+ * `organizations.settings` tem vários donos com gates diferentes, e cada um
+ * lê o jsonb INTEIRO, espalha em memória e regrava o objeto inteiro, em
+ * round-trips separados. Quem são hoje, sem acreditar nesta linha:
+ *
+ *     git grep -n "update({ settings" -- app lib workers
+ *
+ * (a aba Organização saiu dessa lista no PR #1209 — ela não escreve mais
+ * `settings`; por isso aqui vai o comando, e não uma contagem que envelhece.)
+ * A perda é medida:
  * `visibility_mode` volta de `own` para `all` sem erro em lugar nenhum, e essa
  * chave é lida DIRETO pela RLS (`fn_can_view_conversation`, `fn_can_view_lead`).
  * Um write de COR reverteria, em silêncio, uma decisão de exposição de dado de
@@ -94,7 +99,7 @@ export async function updateMarcaDaOrganizacao(
   if (supportWriteError(authUser.support)) return { ok: false, error: "forbidden_role" };
   const activeOrg = await resolveActiveOrg(authUser);
   if (!activeOrg) return { ok: false, error: "forbidden_tenant" };
-  if (!authUser.is_platform_admin && ROLE_RANK[activeOrg.role] < ROLE_RANK.admin) {
+  if (!podeAdministrarEmpresa(authUser, activeOrg)) {
     return { ok: false, error: "forbidden_role" };
   }
   // DEPOIS do papel, de propósito: quem nem tem o papel recebe `forbidden_role`,
@@ -112,13 +117,18 @@ export async function updateMarcaDaOrganizacao(
 
   const hdrs = await headers();
   const requestId = hdrs.get("x-request-id");
-  const ip = hdrs.get("x-forwarded-for")?.split(",")[0]?.trim() ?? null;
+  const ip = ipDoCliente(hdrs);
   const userAgent = hdrs.get("user-agent") ?? null;
 
-  // Os dois campos vazios significam "volte ao que vem da instalação", e é `null`
+  // Os campos vazios significam "volte ao que vem da instalação", e é `null`
   // que a função entende como apagar a chave `branding` — gravar `{}` deixaria um
   // envelope vazio que o resolvedor teria de aprender a ignorar.
-  const limpar = parsed.data.app_name === null && parsed.data.accent_hex === null;
+  const limpar =
+    parsed.data.app_name === null &&
+    parsed.data.accent_hex === null &&
+    parsed.data.accent_dark_hex === null &&
+    parsed.data.email_from_name === null &&
+    parsed.data.email_reply_to === null;
   const marca = limpar
     ? null
     : {
@@ -129,6 +139,18 @@ export async function updateMarcaDaOrganizacao(
         // "mudou?" ser uma pergunta com resposta.
         accent_hex:
           parsed.data.accent_hex === null ? null : normalizarHex(parsed.data.accent_hex),
+        // O par da cor (#2482): mesma normalização, mesma regex da função SQL.
+        accent_dark_hex:
+          parsed.data.accent_dark_hex === null
+            ? null
+            : normalizarHex(parsed.data.accent_dark_hex),
+        // O remetente da automação (#3287, fatia 1). Texto livre: a função SQL
+        // não os valida (só `accent_hex`), então quem garantiu a forma foi o
+        // `marcaDaOrganizacaoSchema` acima — o endereço de resposta, inclusive.
+        // Vão no MESMO objeto `branding` porque é a mesma prancheta da tela e o
+        // merge da função preserva só o `logo_path`, que tem escritor próprio.
+        email_from_name: parsed.data.email_from_name,
+        email_reply_to: parsed.data.email_reply_to,
         updated_by: authUser.id,
         updated_at: new Date().toISOString(),
       };
@@ -183,6 +205,10 @@ export async function updateMarcaDaOrganizacao(
       fields_changed: Object.keys(parsed.data),
       accent_definido: parsed.data.accent_hex !== null,
       nome_definido: parsed.data.app_name !== null,
+      // Forma, nunca identidade: o endereço de resposta NÃO entra na trilha —
+      // só o fato de a organização ter definido um remetente (#3287).
+      remetente_da_automacao_definido:
+        parsed.data.email_from_name !== null || parsed.data.email_reply_to !== null,
     },
   });
 

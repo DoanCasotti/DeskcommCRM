@@ -83,8 +83,21 @@ function paraEscrita(components: unknown[]): unknown[] {
   return components.map((c) => {
     if (!c || typeof c !== "object") return c;
     const obj = c as Record<string, unknown>;
-    return typeof obj.type === "string" ? { ...obj, type: obj.type.toLowerCase() } : obj;
+    const normalizado = typeof obj.type === "string" ? { ...obj, type: obj.type.toLowerCase() } : obj;
+    // O botão tem o MESMO discriminador, um nível abaixo: `QUICK_REPLY` volta
+    // `400 Invalid discriminator value. Expected 'quick_reply' | 'url' | …`.
+    // Medido em 02/10/2026 criando um modelo com botões pela mesma função da
+    // tela (`montarComponents`, que escreve o tipo em maiúscula).
+    return Array.isArray(normalizado.buttons)
+      ? { ...normalizado, buttons: normalizado.buttons.map(botaoParaEscrita) }
+      : normalizado;
   });
+}
+
+function botaoParaEscrita(b: unknown): unknown {
+  if (!b || typeof b !== "object") return b;
+  const obj = b as Record<string, unknown>;
+  return typeof obj.type === "string" ? { ...obj, type: obj.type.toLowerCase() } : obj;
 }
 
 /** Organização + conta: as DUAS pontas que identificam uma sessão (issue #236). */
@@ -181,13 +194,17 @@ export const zernioTemplateOps: ChannelTemplateOps = {
    * sem avisar, e negar uma edição que a plataforma teria aceito. O erro sobe
    * com o texto dela, que é o que diz ao operador o que fazer.
    */
-  async update({ organizationId, sessionRef, name, patch }): Promise<ChannelTemplate> {
+  async update({ organizationId, sessionRef, name, language, patch }): Promise<ChannelTemplate> {
     const j = await call<{ template?: RawTemplate; data?: RawTemplate }>(
       { organizationId, sessionRef },
       `/v1/whatsapp/templates/${encodeURIComponent(name)}`,
       {
         method: "PATCH",
         body: {
+          // Sempre, não só quando há variantes: o provedor exige com variantes e
+          // aceita sem — mandar sempre é o único caminho que nunca edita a
+          // variante errada (changelog 28/08).
+          language,
           ...(patch.components ? { components: paraEscrita(patch.components) } : {}),
           ...(patch.category ? { category: patch.category } : {}),
         },
@@ -200,7 +217,9 @@ export const zernioTemplateOps: ChannelTemplateOps = {
     await call<unknown>(
       { organizationId, sessionRef },
       `/v1/whatsapp/templates/${encodeURIComponent(name)}`,
-      { method: "DELETE", ...(language ? { query: { language } } : {}) },
+      // `language` SEMPRE vai: desde 28/08, DELETE por nome sem idioma apaga
+      // TODAS as variantes — e a assinatura agora obriga o chamador a escolher.
+      { method: "DELETE", query: { language } },
     );
   },
 };

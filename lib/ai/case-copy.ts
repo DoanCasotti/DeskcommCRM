@@ -123,6 +123,11 @@ const EVENT_LABEL: Record<CaseEvent["kind"], string> = {
   resolved: "Concluído",
   escalated: "Virou atendimento humano",
   cancelled: "Cancelado",
+  // Os dois que faltavam e o que nasce com a 0292. `Record<CaseEvent["kind"],
+  // string>` é o que os cobra: acrescentar um kind no union do cliente sem
+  // rótulo aqui para de compilar, em vez de virar enum cru na tela.
+  agent_noted: "A IA registrou o que aconteceu",
+  alert_sent: "Avisamos o suporte no WhatsApp",
 };
 
 const HUMAN_ACTION_LABEL: Record<CaseHumanAction, string> = {
@@ -132,9 +137,16 @@ const HUMAN_ACTION_LABEL: Record<CaseHumanAction, string> = {
 };
 
 /** Traduz um evento da timeline pra uma frase pt-br — nunca o enum cru. */
-export function caseEventLabel(event: Pick<CaseEvent, "kind" | "actor_kind" | "human_action">): string {
+export function caseEventLabel(
+  event: Pick<CaseEvent, "kind" | "actor_kind" | "human_action"> & { source?: string | null },
+): string {
   if (event.kind === "opened" && event.actor_kind === "system") {
     return "O sistema abriu o caso automaticamente";
+  }
+  // Pelo WhatsApp de avisos não há usuário logado: "Você ..." atribuiria a
+  // decisão a quem estiver olhando a tela.
+  if (event.kind === "human_replied" && event.source === "whatsapp") {
+    return "A equipe respondeu pelo WhatsApp";
   }
   if (event.kind === "human_replied" && event.human_action) {
     return HUMAN_ACTION_LABEL[event.human_action];

@@ -76,6 +76,16 @@ export type MotivoDoAviso =
 /**
  * Traduz o `last_handoff_reason` gravado no banco para o motivo que muda a frase.
  * Aceita `string` porque a coluna é vocabulário ABERTO — ver `MotivoDoAviso`.
+ *
+ * ⚠️ **Só `requested_human` vira `pediu_humano`, e isso é a régua (#3310).** Todo
+ * o resto — a escalação que o PRÓPRIO agente decidiu (`low_confidence`,
+ * `critical_stage`, `caso_escalado`…), o teto de gasto, o sentimento, um motivo
+ * novo que ninguém mapeou — cai em `outro`, a frase genérica e honesta
+ * ("Esse caso é melhor resolvido por uma pessoa"). Inventar um pedido do cliente
+ * na abertura é o defeito que a issue mediu: quem só perguntou do check-in
+ * recebia "Sem problema. Acabei de acionar uma pessoa do time", resposta a um
+ * pedido que ele não fez. Por isso o mapeamento NÃO adivinha: ele depende de o
+ * código do pedido chegar de fato até aqui (ver `motivoCodigoDoTexto`).
  */
 export function motivoDoAviso(reason: string): MotivoDoAviso {
   if (reason === "requested_human") return "pediu_humano";
@@ -119,7 +129,7 @@ const ABERTURAS: Record<MotivoDoAviso, readonly string[]> = {
   ],
   pediu_humano: [
     "Claro! Já estou chamando alguém da equipe para falar com você.",
-    "Sem problema — acabei de acionar uma pessoa do time para continuar daqui.",
+    "Sem problema. Acabei de acionar uma pessoa do time para continuar daqui.",
     "Perfeito. Passei sua conversa para um atendente humano agora.",
   ],
   orcamento_de_ia: [
@@ -146,7 +156,7 @@ const FECHOS = {
   fora_de_expediente: [
     "No momento ninguém está disponível, mas seu pedido ficou registrado.",
     "Agora não tem ninguém livre; deixei sua solicitação anotada para o time.",
-    "Não há atendente disponível neste instante — sua conversa entrou na fila.",
+    "Não há atendente disponível neste instante; sua conversa entrou na fila.",
   ],
   /** Há gente elegível: pode convidar a aguardar. */
   com_equipe: [
@@ -155,6 +165,141 @@ const FECHOS = {
     "Aguarde só um momento nesta conversa, por favor.",
   ],
 } as const;
+
+/**
+ * OS MESMOS avisos em espanhol. O cliente lê a frase no idioma da ORGANIZAÇÃO
+ * (`organizations.locale`) — a conversa com ele acontece nesse idioma, e um
+ * aviso em português no meio de uma venda em espanhol é a própria prova de que
+ * ali tem um robô. Medido numa loja em espanhol (26/09/2026): o cliente irritado
+ * recebeu "Esse caso é melhor resolvido por uma pessoa…" no meio do pedido.
+ *
+ * Espanhol NEUTRO (tú, sem voseo): este texto serve a toda organização em `es`.
+ * "Consulta", e não "pedido": numa loja, "pedido" é a compra.
+ */
+const ABERTURAS_ES: Record<MotivoDoAviso, readonly string[]> = {
+  suspeita_de_opt_out: [
+    "Entendido. Dejo de enviarte mensajes automáticos por aquí.",
+    "Listo, anotado: no se envían más mensajes automáticos a este número.",
+    "¡Ok! Detengo ahora mismo los envíos automáticos de este canal.",
+  ],
+  pediu_humano: [
+    "¡Claro! Ya estoy llamando a alguien del equipo para que siga contigo.",
+    "Sin problema: acabo de avisar a una persona del equipo para que continúe desde aquí.",
+    "Perfecto. Pasé tu conversación a una persona del equipo.",
+  ],
+  orcamento_de_ia: [
+    "Voy a pasar tu atención a una persona del equipo.",
+    "A partir de aquí te atiende alguien del equipo.",
+    "Estoy transfiriendo esta conversación a una persona del equipo.",
+  ],
+  outro: [
+    "Esto lo resuelve mejor una persona del equipo. Ya les avisé.",
+    "Prefiero no arriesgarme: pasé tu consulta a una persona del equipo.",
+    "Voy a pedir ayuda a alguien del equipo para que lo vea contigo.",
+  ],
+};
+
+const FECHOS_ES = {
+  sem_equipe: [
+    "Tu consulta quedó registrada y el equipo te responde lo antes posible.",
+    "Dejé todo anotado; te respondemos apenas podamos.",
+    "Ya quedó registrado, y alguien te responde en la primera oportunidad.",
+  ],
+  fora_de_expediente: [
+    "En este momento no hay nadie disponible, pero tu consulta quedó registrada.",
+    "Ahora no hay nadie libre; dejé tu consulta anotada para el equipo.",
+    "No hay una persona disponible en este instante: tu conversación quedó en la cola.",
+  ],
+  com_equipe: [
+    "Solo espera un momento aquí en la conversación.",
+    "Quédate por aquí, que ya te responden.",
+    "Espera un momento en esta conversación, por favor.",
+  ],
+} as const;
+
+/**
+ * OS MESMOS avisos em turco, pela mesma razão do espanhol: o cliente de uma
+ * organização em `tr` conversa em turco, e o aviso em português no meio da
+ * conversa denuncia o robô.
+ *
+ * Tratamento por "siz" (o formal), que é o de uma empresa com o cliente. Frases
+ * curtas, sem prazo: o fecho promete o mesmo que o português, e nada além.
+ */
+const ABERTURAS_TR: Record<MotivoDoAviso, readonly string[]> = {
+  suspeita_de_opt_out: [
+    "Anladım. Buradan size otomatik mesaj göndermeyi bırakıyorum.",
+    "Tamam, not ettim: bu numaraya artık otomatik mesaj gönderilmeyecek.",
+    "Peki! Bu kanaldaki otomatik gönderimleri hemen durduruyorum.",
+  ],
+  pediu_humano: [
+    "Tabii! Sizinle görüşmesi için ekibimizden birini çağırıyorum.",
+    "Sorun değil. Buradan devam etmesi için ekipten birine haber verdim.",
+    "Elbette. Konuşmanızı şimdi ekibimizden bir çalışana aktardım.",
+  ],
+  orcamento_de_ia: [
+    "Görüşmenizi ekibimizden birine aktarıyorum.",
+    "Bundan sonra sizinle ekibimizden biri ilgilenecek.",
+    "Bu konuşmayı ekibimizden bir çalışana aktarıyorum.",
+  ],
+  outro: [
+    "Bu konuyu bir çalışanımız daha iyi çözer. Ekibe haber verdim.",
+    "Burada risk almak istemem: talebinizi ekibimizden bir çalışana ilettim.",
+    "Bu konuda sizinle ilgilenmesi için ekipten birinden yardım istiyorum.",
+  ],
+};
+
+const FECHOS_TR = {
+  sem_equipe: [
+    "Talebiniz kaydedildi, ekibimiz en kısa sürede yanıt verecek.",
+    "Her şeyi not ettim; size en kısa zamanda dönüş yapacağız.",
+    "Kaydınızı aldım, ilk fırsatta biri size yanıt verecek.",
+  ],
+  fora_de_expediente: [
+    "Şu anda müsait kimse yok, ancak talebiniz kaydedildi.",
+    "Şu an boşta kimse yok; talebinizi ekip için not ettim.",
+    "Şu anda müsait bir çalışan yok; konuşmanız sıraya alındı.",
+  ],
+  com_equipe: [
+    "Konuşmada kısa bir süre beklemeniz yeterli.",
+    "Burada kalın, birazdan size yanıt verilecek.",
+    "Lütfen bu konuşmada biraz bekleyin.",
+  ],
+} as const;
+
+interface TextosDoAviso {
+  aberturas: Record<MotivoDoAviso, readonly string[]>;
+  fechos: { sem_equipe: readonly string[]; fora_de_expediente: readonly string[]; com_equipe: readonly string[] };
+  fechoDoOptOut: string;
+}
+
+const TEXTOS: Record<"pt" | "es" | "tr", TextosDoAviso> = {
+  pt: {
+    aberturas: ABERTURAS,
+    fechos: FECHOS,
+    fechoDoOptOut: "Encaminhei seu pedido para uma pessoa da equipe confirmar.",
+  },
+  es: {
+    aberturas: ABERTURAS_ES,
+    fechos: FECHOS_ES,
+    fechoDoOptOut: "Le pasé tu pedido a una persona del equipo para que lo confirme.",
+  },
+  tr: {
+    aberturas: ABERTURAS_TR,
+    fechos: FECHOS_TR,
+    fechoDoOptOut: "Talebinizi onaylaması için ekibimizden birine ilettim.",
+  },
+};
+
+/**
+ * `organizations.locale` → o conjunto de frases. Idioma sem frases próprias (ou
+ * ausente) segue em português, que é o comportamento de antes desta tabela.
+ */
+function textosDoIdioma(idioma: string | null | undefined): TextosDoAviso {
+  const codigo = (idioma ?? "").trim().toLowerCase();
+  if (codigo.startsWith("es")) return TEXTOS.es;
+  if (codigo.startsWith("tr")) return TEXTOS.tr;
+  return TEXTOS.pt;
+}
 
 /**
  * Variante DETERMINÍSTICA por lead: sha256(lead_id) → uint32 → módulo.
@@ -186,22 +331,24 @@ export function textoDoAviso(
   motivo: MotivoDoAviso,
   quem: QuemPodeAssumir | null,
   leadId: string,
+  idioma: string | null = null,
 ): string {
-  const abertura = variante(leadId, ABERTURAS[motivo]);
+  const textos = textosDoIdioma(idioma);
+  const abertura = variante(leadId, textos.aberturas[motivo]);
 
   if (motivo === "suspeita_de_opt_out") {
     // Sem fecho de expediente: quem pediu para parar não está esperando
     // atendimento, então "aguarde um instante" seria a resposta errada à
     // pergunta que ele fez.
-    return `${abertura} Encaminhei seu pedido para uma pessoa da equipe confirmar.`;
+    return `${abertura} ${textos.fechoDoOptOut}`;
   }
 
   const fecho =
     quem === null || quem.total === 0
-      ? variante(leadId, FECHOS.sem_equipe)
+      ? variante(leadId, textos.fechos.sem_equipe)
       : quem.disponiveis === 0
-        ? variante(leadId, FECHOS.fora_de_expediente)
-        : variante(leadId, FECHOS.com_equipe);
+        ? variante(leadId, textos.fechos.fora_de_expediente)
+        : variante(leadId, textos.fechos.com_equipe);
 
   return `${abertura} ${fecho}`;
 }

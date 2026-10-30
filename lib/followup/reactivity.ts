@@ -8,8 +8,8 @@
  * sugeria um cursor próprio em `watchdog_cursors` drenado DENTRO do tick do
  * `runFollowupTick`. Investiguei o consumidor de `event_log` REALMENTE em
  * produção neste repo — `lib/event-log/dispatcher.ts` + `drain.ts` +
- * `app/api/v1/cron/event-log-drain/route.ts` (roda a cada minuto, tanto no
- * Vercel quanto no cron do kit self-host — ver README.md) — e ele já resolve
+ * `app/api/v1/cron/event-log-drain/route.ts` (roda a cada minuto pelo serviço
+ * `scheduler` do kit self-host — ver README.md) — e ele já resolve
  * exatamente este problema: múltiplos consumidores por `event_type`,
  * idempotência via `consumed_by[]` (sem duplo efeito em re-drain), retry com
  * backoff, dead-letter. `watchdog_cursors` tem ZERO consumidores TS neste
@@ -34,7 +34,8 @@
  *      (`opted_out`). Senão, para enrollments `waiting_reply` do contato:
  *      `cancel_on_reply` no `trigger_config` do pointer → cancela
  *      (`replied`); senão, acorda (marker `inbound_woke` + `next_eval_at=now`).
- *      Inscrições `active` no nó `wait` também acordam — a resposta corta o timer.
+ *      Inscrições `active` no nó `wait` seguem a mesma política: com
+ *      `cancel_on_reply`, cancelam; sem ela, acordam e cortam o timer.
  *   2. `ai.handoff_triggered` (handoff aberto) — já emitido em produção por
  *      `lib/ai/handoff/orchestrator.ts` (triggerHandoff, chamado por
  *      workers/ai-response-worker.ts, workers/ai-handoff-from-sentiment.handler.ts,
@@ -52,6 +53,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import type { EventRow } from "@/lib/event-log/dispatcher";
+import { inboundEhDestaPergunta } from "@/lib/followup/aplicar-inbound";
 import type { EnrollmentPatch } from "./engine";
 import { triggerConfigSchema } from "./api-schemas";
 import type { EnrollmentOutcome, EnrollmentStatus } from "./node-handlers";
@@ -60,7 +62,42 @@ import { idsDoContatoEGemeos } from "@/lib/channels/contato-por-telefone";
 /** Grace pós-resume (spec §4: "grace configurável, default 30min, knob"). */
 export const RESUME_GRACE_MS = 30 * 60_000;
 
+/**
+ * Os status que REAGEM AO INBOUND. `dormente` está fora, e é isso que faz a
+ * espera longa imune existir sem custo nenhum aqui: a inscrição adormecida não é
+ * carregada, então `cancel_on_reply` não a cancela e `acordarPorInbound` não
+ * corta o timer dela — sem uma query a mais por mensagem recebida e sem esta
+ * camada precisar ler o grafo para saber que o nó era imune.
+ *
+ * ⚠️ NÃO é a mesma lista de "vivo" da FILA (`QueueTab`/`queue/route.ts`), que
+ * INCLUI o dormente de propósito: 28 dias de gente invisível seria uma ilha.
+ * Duas listas parecidas com significados diferentes; o nome daqui diz qual é.
+ */
 export const LIVE_STATUSES: readonly EnrollmentStatus[] = ["active", "waiting_reply", "paused_handoff"];
+
+/**
+ * O opt-out alcança o dormente também — e a pausa manual.
+ *
+ * STOP e LGPD são hard stop: não admitem exceção de status, e uma espera de 28
+ * dias que sobrevivesse ao "pare de me mandar mensagem" voltaria a falar com
+ * quem pediu silêncio — um mês depois, quando ninguém mais lembra por quê.
+ *
+ * `paused_manual` (0145) fica FORA de `LIVE_STATUSES` pelo mesmo motivo do
+ * dormente: a pausa que uma pessoa pôs não reage à mensagem comum — quem a
+ * retoma é quem pausou. Mas o STOP a alcança. Sem isso, a inscrição pausada
+ * sobrevivia ao opt-out: a mensagem não vazava (o `stopGate` relê `is_blocked`
+ * no turno), mas a régua não virava `opted_out`, a métrica não contava o
+ * opt-out, e a inscrição seguia ocupando a vaga única do contato
+ * (`idx_followup_enrollments_one_live`) — todo follow-up legítimo futuro dele
+ * morreria em 23505 sem explicação. A cascata de LGPD já a alcançava
+ * (`lib/lgpd/cascata.ts`); o STOP era o único que não.
+ */
+const STATUS_ALCANCADOS_PELO_OPT_OUT: readonly EnrollmentStatus[] = [
+  ...LIVE_STATUSES,
+  "dormente",
+  "coletando",
+  "paused_manual",
+];
 
 export interface LiveEnrollmentRef {
   id: string;
@@ -71,6 +108,9 @@ export interface LiveEnrollmentRef {
   handoff_policy: "pause" | "cancel" | "allow";
   /** jsonb bruto do pointer — parseado defensivamente aqui (safeParse, default false). */
   trigger_config: unknown;
+  /** Instante em que o nó estacionou. Sem isto o inbound de uma pergunta
+   *  anterior acorda a espera seguinte (ALWAYS → menu de novo). */
+  updated_at?: string;
 }
 
 /** Interface estreita de DB (mesma doutrina de `AdminClient`/`TurnBridgeAdminClient`
@@ -79,7 +119,26 @@ export interface LiveEnrollmentRef {
 export interface ReactivityAdminClient {
   loadConversationContactId(orgId: string, conversationId: string): Promise<string | null>;
   loadContactBlocked(orgId: string, contactId: string): Promise<boolean>;
-  loadLiveEnrollmentsForContact(orgId: string, contactId: string): Promise<LiveEnrollmentRef[]>;
+  /**
+   * Spec 21 (caminho 4): o inbound de pessoal cancela tudo, como o STOP.
+   *
+   * OPCIONAL de propósito: a interface tem falsos em `tests/unit` e em
+   * `tests/invariants` (congelado) que implementam só o que medem — exigir
+   * quebraria todos. A produção implementa (ver
+   * `createSupabaseReactivityClient`); ausente lê-se como "não é pessoal".
+   */
+  loadContactPersonal?(orgId: string, contactId: string): Promise<boolean>;
+  /**
+   * `statuses` existe só para o ramo de opt-out, que precisa alcançar o
+   * `dormente`. As demais reações usam o default e seguem sem enxergá-lo — em
+   * especial o handoff, que se pausasse um dormente o devolveria com a graça de
+   * 30 min e acordaria a espera de 28 dias quase um mês cedo.
+   */
+  loadLiveEnrollmentsForContact(
+    orgId: string,
+    contactId: string,
+    statuses?: readonly EnrollmentStatus[],
+  ): Promise<LiveEnrollmentRef[]>;
   insertEnrollmentEvent(event: {
     organization_id: string;
     enrollment_id: string;
@@ -190,7 +249,25 @@ async function reactToInbound(
   if (!contactId) return { matched: false, reacted: 0 };
 
   const isBlocked = await db.loadContactBlocked(row.organization_id, contactId);
-  const live = await db.loadLiveEnrollmentsForContact(row.organization_id, contactId);
+  // Contato pessoal (spec 21, caminho 4): trata igual ao bloqueio — cancela
+  // TUDO que está vivo, sem exceção de status. O motivo próprio (`pessoal`,
+  // nunca `stop_keyword`) é o que distingue na auditoria; o `outcome`
+  // reaproveita `opted_out` porque o CHECK da coluna é fechado (mesma decisão
+  // da rota de marcar, etapa 4).
+  const isPersonal = (await db.loadContactPersonal?.(row.organization_id, contactId)) ?? false;
+  // Carrega JÁ com o dormente: o ramo de opt-out abaixo precisa alcançá-lo, e
+  // uma segunda consulta só para o caso bloqueado pagaria uma ida ao banco em
+  // toda mensagem recebida da instalação para servir a minoria.
+  const live = await db.loadLiveEnrollmentsForContact(
+    row.organization_id,
+    contactId,
+    STATUS_ALCANCADOS_PELO_OPT_OUT,
+  );
+
+  if (isPersonal) {
+    const reacted = await cancelAll(db, row.organization_id, row.id, live, "opted_out", "pessoal", "reactivity_personal", clock);
+    return { matched: true, reacted };
+  }
 
   if (isBlocked) {
     // STOP/opt-out (a regex já rodou em lib/waha/ingest.ts e setou is_blocked
@@ -200,6 +277,10 @@ async function reactToInbound(
     return { matched: true, reacted };
   }
 
+  // Daqui para baixo o dormente sai de cena: os dois filtros abaixo pegam
+  // `waiting_reply` e `active`, e ele não é nenhum dos dois. É assim que a
+  // espera imune sobrevive — não por um `if` de imunidade, mas por não estar
+  // no conjunto que reage.
   const waitingReply = live.filter((e) => e.status === "waiting_reply");
   const esperaAtiva = live.filter((e) => e.status === "active");
   let reacted = 0;
@@ -221,9 +302,26 @@ async function reactToInbound(
 
     if (await acordarPorInbound(db, clock, row, e)) reacted++;
   }
-  // Nó `wait` fica `active` com timer — sem isto a resposta do lead não corta
-  // a espera de 5min (o motor só acordava `waiting_reply`).
+  // Uma espera por tempo fixo fica `active` com timer. Quando o fluxo declara
+  // `cancel_on_reply`, a resposta deve encerrar também esta ocupação — não
+  // acordar o próximo nó e disparar a próxima mensagem imediatamente. Sem a
+  // verificação abaixo, a opção funcionava apenas para nós `waiting_reply`.
   for (const e of esperaAtiva) {
+    if (parseCancelOnReply(e.trigger_config)) {
+      const key = `reactivity:${row.id}:${e.id}:reactivity_replied`;
+      const applied = await applyStep(
+        db,
+        row.organization_id,
+        e,
+        key,
+        "reactivity_replied",
+        { reason: "cancel_on_reply" },
+        cancelPatch(clock, "replied", "cancel_on_reply"),
+      );
+      if (applied) reacted++;
+      continue;
+    }
+
     if (await acordarPorInbound(db, clock, row, e)) reacted++;
   }
   return { matched: true, reacted };
@@ -231,10 +329,17 @@ async function reactToInbound(
 
 async function acordarPorInbound(
   db: ReactivityAdminClient,
-  clock: () => Date,
+  _clock: () => Date,
   row: EventRow,
   e: LiveEnrollmentRef,
 ): Promise<boolean> {
+  // A mensagem que acabou de avançar o nó (e estacionou uma espera NOVA)
+  // não acorda essa espera. Sem `created_at`/`sent_at` falha aberto: o
+  // kick sintético ainda precisa acordar a espera que já existia.
+  const enviadaEm = strOrNull(row.payload.sent_at) ?? row.created_at ?? null;
+  if (enviadaEm && e.updated_at && !inboundEhDestaPergunta(enviadaEm, e.updated_at)) {
+    return false;
+  }
   const wakeKey = `${e.current_node_id}:${e.steps_taken}:wake`;
   const agora = await db.agoraNoBanco();
   return applyStep(
@@ -244,7 +349,10 @@ async function acordarPorInbound(
     wakeKey,
     "inbound_woke",
     {},
-    { next_eval_at: agora, updated_at: clock().toISOString() },
+    // Não toca `updated_at`: o piso do inbound da pergunta é o instante em que
+    // o nó estacionou. Regravar agora faria a mensagem que acordou a espera
+    // parecer anterior à pergunta (`enviadaEm >= updated_at` falha).
+    { next_eval_at: agora },
   );
 }
 
@@ -392,14 +500,24 @@ export function createSupabaseReactivityClient(admin: SupabaseClient): Reactivit
       if (error) throw new Error(error.message);
       return data?.is_blocked ?? false;
     },
-    async loadLiveEnrollmentsForContact(orgId, contactId) {
+    async loadContactPersonal(orgId, contactId) {
+      const { data, error } = await admin
+        .from("contacts")
+        .select("is_personal")
+        .eq("id", contactId)
+        .eq("organization_id", orgId)
+        .maybeSingle();
+      if (error) throw new Error(error.message);
+      return (data as { is_personal?: boolean } | null)?.is_personal ?? false;
+    },
+    async loadLiveEnrollmentsForContact(orgId, contactId, statuses = LIVE_STATUSES) {
       const ids = await idsDoContatoEGemeos(admin, orgId, contactId);
       const { data: enrollments, error } = await admin
         .from("followup_enrollments")
-        .select("id, status, current_node_id, steps_taken, pointer_id")
+        .select("id, status, current_node_id, steps_taken, pointer_id, updated_at")
         .eq("organization_id", orgId)
         .in("contact_id", ids)
-        .in("status", LIVE_STATUSES);
+        .in("status", statuses);
       if (error) throw new Error(error.message);
       if (!enrollments?.length) return [];
 
@@ -422,6 +540,7 @@ export function createSupabaseReactivityClient(admin: SupabaseClient): Reactivit
           pointer_id: e.pointer_id,
           handoff_policy: (p?.handoff_policy as LiveEnrollmentRef["handoff_policy"]) ?? "pause",
           trigger_config: p?.trigger_config ?? null,
+          updated_at: typeof e.updated_at === "string" ? e.updated_at : undefined,
         };
       });
     },

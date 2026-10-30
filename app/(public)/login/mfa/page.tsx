@@ -2,10 +2,12 @@ import { redirect } from "next/navigation";
 
 import { createClient } from "@/lib/supabase/server";
 import { MfaForm } from "@/components/auth/MfaForm";
-import { normalizarIdioma } from "@/lib/i18n/idiomas";
+import { idiomaDoVisitante } from "@/lib/i18n/idiomaAnonimo";
 import { traduzir } from "@/lib/i18n/dicionario";
+import { tituloDaTelaPublica } from "@/lib/i18n/titulo-da-tela-publica";
 
-export const metadata = { title: "Verificação em duas etapas" };
+// A aba no idioma do visitante, como o corpo (`lib/i18n/titulo-da-tela-publica.ts`).
+export const generateMetadata = () => tituloDaTelaPublica((t) => t("Verificação em duas etapas"));
 
 export default async function MfaChallengePage({
   searchParams,
@@ -23,7 +25,7 @@ export default async function MfaChallengePage({
   const hasVerified = !!factorsData?.totp?.some((f) => f.status === "verified");
   if (!hasVerified) redirect("/app");
 
-  const idioma = normalizarIdioma(
+  const idioma = await idiomaDoVisitante(
     (user.user_metadata?.locale as string | undefined) ?? null,
   );
   const t = (texto: string) => traduzir(texto, idioma);
