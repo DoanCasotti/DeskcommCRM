@@ -18,7 +18,6 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useAuditQuery, type AuditFilters } from "@/hooks/audit/useAuditQuery";
-import { rotuloDoMembro } from "@/lib/users/rotulo-do-atendente";
 
 function fmtDate(iso: string, idioma: string): string {
   try {
@@ -140,7 +139,7 @@ export function AuditClient() {
                     {r.acting_as_platform_admin
                       ? "platform_admin"
                       : r.actor_user_id
-                        ? rotuloDoMembro({ user_id: r.actor_user_id }, t)
+                        ? r.actor_user_id.slice(0, 8)
                         : r.actor_api_token_id
                           ? `token:${r.actor_api_token_id.slice(0, 8)}`
                           : "system"}

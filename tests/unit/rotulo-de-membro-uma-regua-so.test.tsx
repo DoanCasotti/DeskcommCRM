@@ -212,7 +212,7 @@ describe("a cerca: nenhuma tela volta a montar o rótulo por conta própria", ()
       "app/app/tasks/planos/_client.tsx",
       "app/app/webhooks/_components/ActionConfigForm.tsx",
       "app/app/settings/tenant/agenda/page.tsx",
-      "app/app/audit/_client.tsx",
+      // auditoria mostra o identificador até resolver o nome; o hash não se liga à pessoa
     ];
     const semHelper = PONTOS.filter((arquivo) => {
       const fonte = fs.readFileSync(path.join(RAIZ, arquivo), "utf8");
