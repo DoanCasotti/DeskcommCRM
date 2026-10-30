@@ -393,7 +393,8 @@ Onboarding (`app/onboarding/setup-ai/_form.tsx`) **não** muda: voz é configura
   `lint:channels` **não** reclama de "elevenlabs": o padrão proibido
   (`scripts/lint-channels.pattern.ts`) cobre provedor de **canal** (`waha`, `meta_cloud`,
   `zernio`), e serviço de IA é nomeado livremente em `lib/ai/` — como `openai` e `anthropic` já
-  são. Conferido, não suposto.
+  são. **Mas** citar o provider de canal em comentário dentro de `lib/ai/` reprova (a catraca lê
+  o arquivo inteiro): `sintetizar.ts` citava o `sendVoice` do provider e caiu no gate em 2026-10-30.
 - Migration da Fase 6 versionada **+ linha no `supabase/migrations/MANIFEST.md` + apêndice
   idempotente no `supabase/baseline.sql`**. Sem o apêndice a mudança **não chega aos
   self-hosters** (`CLAUDE.md:440`).

@@ -25,7 +25,7 @@ export interface SintetizarVozInput {
 
 export interface SintetizarVozResultado {
   audio: Buffer;
-  /** `audio/mpeg` no formato padrão (`mp3_44100_128`) — o que o WAHA `sendVoice` converte para OGG/OPUS. */
+  /** `audio/mpeg` no formato padrão (`mp3_44100_128`) — o que o adapter do canal converte para OGG/OPUS ao mandar nota de voz. */
   mimeType: string;
   /** Caracteres de `texto` — a unidade de cobrança (`custoDeVozCents` em pricing.ts). */
   caracteres: number;
