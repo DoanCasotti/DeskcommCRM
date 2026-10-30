@@ -22,6 +22,7 @@ const visto = vi.hoisted(() => ({
 }));
 
 const arquivado = vi.hoisted(() => ({ valor: true }));
+const carregando = vi.hoisted(() => ({ valor: false }));
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ replace: vi.fn(), push: vi.fn() }),
@@ -30,7 +31,7 @@ vi.mock("next/navigation", () => ({
 }));
 vi.mock("@/hooks/kanban/useBoard", () => ({
   useBoard: () => ({
-    data: {
+    data: carregando.valor ? undefined : {
       pipeline: {
         id: "p-1",
         name: "Comercial 2025",
@@ -41,7 +42,7 @@ vi.mock("@/hooks/kanban/useBoard", () => ({
       stages: [],
       leads: [],
     },
-    isLoading: false,
+    isLoading: carregando.valor,
     error: null,
     pulses: [],
     realtimeStatus: "SUBSCRIBED",
@@ -90,6 +91,7 @@ function montarPagina() {
 
 beforeEach(() => {
   arquivado.valor = true;
+  carregando.valor = false;
   visto.somenteLeitura = null;
   visto.podeRenomearEtapa = null;
 });
@@ -121,6 +123,15 @@ describe("a página de um funil arquivado (#1298, item 1)", () => {
 
     expect(visto.somenteLeitura).toBe(true);
     expect(visto.podeRenomearEtapa).toBe(false);
+  });
+
+  it("enquanto o quadro carrega, o funil do servidor já fecha o Novo Lead e as abas", async () => {
+    carregando.valor = true;
+    await montarPagina();
+
+    expect(screen.getByTestId("funil-arquivado-aviso")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Novo Lead/ })).toBeNull();
+    expect(screen.queryByTestId("visao-lista")).toBeNull();
   });
 
   it("no funil VIVO nada disso vale: o botão e as abas continuam, e o quadro escreve", async () => {

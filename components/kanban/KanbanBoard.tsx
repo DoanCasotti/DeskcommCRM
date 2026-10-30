@@ -180,9 +180,12 @@ export function KanbanBoard({
   const isError = useExternal ? false : queryResult.isError;
   const error = useExternal ? null : queryResult.error;
 
-  const leadDoDossie = dossieId
-    ? (data?.leads.find((l) => l.id === dossieId) ?? null)
-    : null;
+  // Funil arquivado (#1298): o deep link `?lead=` também não abre o dossiê —
+  // ele tem ações de escrita, e o quadro em leitura não as oferece.
+  const leadDoDossie =
+    dossieId && !somenteLeitura
+      ? (data?.leads.find((l) => l.id === dossieId) ?? null)
+      : null;
 
   const grouped = useMemo(() => {
     if (!data) return null;

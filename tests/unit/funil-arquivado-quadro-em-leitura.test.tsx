@@ -115,7 +115,7 @@ const QUADRO = {
  * O quadro real, com os dados vindo por PROP (`stages`/`leads` desligam a
  * consulta interna): é o mesmo caminho da página, sem rede.
  */
-async function montarQuadro(somenteLeitura: boolean) {
+async function montarQuadro(somenteLeitura: boolean, leadInicial?: string) {
   dossies.abertos = 0;
   const { KanbanBoard } = await import("@/components/kanban/KanbanBoard");
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -127,6 +127,7 @@ async function montarQuadro(somenteLeitura: boolean) {
         stages={QUADRO.stages as unknown as Stage[]}
         leads={QUADRO.leads as never}
         somenteLeitura={somenteLeitura}
+        leadInicial={leadInicial}
       />
     </QueryClientProvider>,
   );
@@ -148,6 +149,16 @@ describe("o quadro de um funil arquivado (#1298, item 1)", () => {
 
     await user.click(screen.getByRole("button", { name: "Negócio antigo" }));
     expect(dossies.abertos).toBe(0);
+  });
+
+  it("o deep link `?lead=` também não abre o dossiê no funil arquivado", async () => {
+    await montarQuadro(true, "l-1");
+    expect(dossies.abertos).toBe(0);
+  });
+
+  it("no funil vivo o deep link `?lead=` abre o dossiê", async () => {
+    await montarQuadro(false, "l-1");
+    expect(dossies.abertos).toBeGreaterThan(0);
   });
 
   it("no funil vivo o card continua com menu, caixa e dossiê", async () => {

@@ -215,7 +215,9 @@ export function PipelinePageClient({
    * mesma oferece — criar negócio, arrastar card, menu de ações, seleção em
    * lote, renomear etapa e dossiê.
    */
-  const arquivado = data?.pipeline.is_archived === true;
+  // O funil da leitura do servidor já diz se está arquivado: sem ele, o
+  // "Novo Lead" e a `?visao=lista` apareceriam até o quadro carregar.
+  const arquivado = (data?.pipeline ?? funilInicial).is_archived === true;
   /**
    * Funil arquivado só tem o quadro em leitura: nem `?visao=lista` escapa. A
    * Lista e o Calendário oferecem escrita de negócio, e um parâmetro colado na
