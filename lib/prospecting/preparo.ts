@@ -92,7 +92,11 @@ const SQL_CANDIDATOS_PARA_PREVIA =
   "where organization_id=$1 and campaign_id=$2 " +
   "and selected is not false and status in ('new','queued') " +
   "and data->'previa' is null " +
-  "and ((data->'site' is not null and not coalesce((data->'site'->>'provisorio')::boolean, false)) " +
+  "and ((data->'site' is not null and not coalesce((data->'site'->>'provisorio')::boolean, false) " +
+  // `nao-medido` é definitivo e não citável (#3723): sem gancho de site não há
+  // em que ancorar a prévia — gerar uma aqui seria gastar IA para escrever
+  // sobre defeito que não medimos.
+  "and coalesce(data->'site'->>'classe', '') <> 'nao-medido') " +
   "or (data->'site' is null and nullif(trim(data->>'website'), '') is null)) " +
   "order by created_at, id limit $3";
 
