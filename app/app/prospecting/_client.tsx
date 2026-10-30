@@ -32,7 +32,10 @@ import { opcoesDoPreparo } from "@/lib/prospecting/opcoes-do-preparo";
 import { previaPorGerar, previaValida } from "@/lib/prospecting/previa";
 
 /** Uma linha que a importação recusou — o número é o da planilha (1 = cabeçalho). */
-type RecusadaDaLinha = { linha: number; motivo: string; telefone?: string | null };
+type RecusadaDaLinha = { linha: number; motivo: string; telefone?: string | null; detalhe?: string };
+
+/** `planilha` é o nome que a 1.95.0 gravou nas campanhas importadas antes do #3724. */
+const ehImportada = (origem: string | undefined) => origem === "importacao" || origem === "planilha";
 
 type Campaign = {
   id: string;
@@ -1146,7 +1149,7 @@ export function ProspectingClient() {
                 >
                   <span className="block text-sm font-medium">{c.name}</span>
                   <span className="mt-1 block text-xs text-muted-foreground">
-                    {c.search?.origem === "importacao" && <>{t("Planilha")} · </>}
+                    {ehImportada(c.search?.origem) && <>{t("Planilha")} · </>}
                     {t(labels[c.status] ?? c.status)} · {c.result_count} {t("empresas")}
                   </span>
                 </button>
@@ -1172,7 +1175,7 @@ export function ProspectingClient() {
                   <div>
                     <h2 className="text-xl font-semibold">{campaign.name}</h2>
                     <p className="mt-1 text-sm text-muted-foreground">
-                      {campaign.search?.origem === "importacao"
+                      {ehImportada(campaign.search?.origem)
                         ? t("Planilha")
                         : t(labels[campaign.search_status] ?? campaign.search_status)}
                       {campaign.cost_usd !== null

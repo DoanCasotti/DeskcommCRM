@@ -60,7 +60,8 @@ export interface LinhaExcluida {
 /** Uma linha que entra, com a linha de origem preservada para a prévia falar a mesma língua. */
 export interface CandidatoNaPlanilha {
   linha: number;
-  prospect: Prospect;
+  /** Da planilha só sai candidato COM telefone: a linha sem ele já foi recusada na leitura. */
+  prospect: Prospect & { phone: string };
 }
 
 /** O mínimo que a prévia precisa da planilha lida — o que `lerPlanilhaDeProspeccao` devolve. */

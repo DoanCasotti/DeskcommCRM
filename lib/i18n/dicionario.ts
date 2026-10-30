@@ -924,13 +924,11 @@ export const DICIONARIO: Traducoes = {
   // #3724 — a prévia da importação: os motivos vêm do SERVIDOR como frase pronta
   // (`TEXTO_DO_MOTIVO`), então cada um precisa da sua chave aqui; é o que `t(r.motivo)` lê.
   "Sem telefone.": { es: "Sin teléfono." },
-  "Telefone inválido.": { es: "Teléfono inválido." },
   "Telefone repetido na planilha.": { es: "Teléfono repetido en la planilla." },
   "Já é contato do CRM.": { es: "Ya es un contacto del CRM." },
   "Excluído a pedido do titular (LGPD).": { es: "Excluido a pedido del titular (LGPD)." },
   "Conferir a lista antes de importar": { es: "Revisar la lista antes de importar" },
   "entram": { es: "entran" },
-  "ficam de fora": { es: "quedan fuera" },
   "Linhas que ficam de fora": { es: "Líneas que quedan fuera" },
   "Não foi possível conferir a planilha.": { es: "No fue posible revisar la planilla." },
   "Nada foi importado ainda: a conferência não cria campanha.": {

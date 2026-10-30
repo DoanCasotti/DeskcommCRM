@@ -9,7 +9,7 @@ import {
   type LinhaExcluida,
 } from "./importacao-previa";
 
-function prospect(phone: string, name = "Empresa Exemplo"): Prospect {
+function prospect(phone: string, name = "Empresa Exemplo"): Prospect & { phone: string } {
   return {
     key: `planilha:${phone}`,
     name,
