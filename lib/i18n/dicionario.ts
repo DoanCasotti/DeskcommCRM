@@ -4052,7 +4052,6 @@ export const DICIONARIO: Traducoes = {
   },
   "Vale até": { es: "Válido hasta" },
   "vale até": { es: "válido hasta" },
-  "sem prazo": { es: "sin plazo" },
   "Validade atualizada.": { es: "Validez actualizada." },
   "Informe um status ou uma data de validade válidos.": {
     es: "Informa un estado o una fecha de validez válidos.",
