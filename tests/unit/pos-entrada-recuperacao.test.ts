@@ -19,6 +19,8 @@ const sp = vi.hoisted(() => ({
   desativados: vi.fn(async () => [] as string[]),
   numeroInterno: vi.fn(async () => false),
   warn: vi.fn(),
+  /** O que a conversa já tem em `last_message_at` (null = sem carimbo ou sem linha). */
+  ultimaDaConversa: null as string | null,
   /** O registro do que o admin tocou: tabelas lidas/escritas e RPCs chamadas. */
   tabelas: [] as string[],
   rpcs: [] as string[],
@@ -55,11 +57,11 @@ const ORG = "org-1";
 const SESSAO = "sess-1";
 const ENVIADA = "2026-10-25T10:00:00.000Z";
 
-/** Qualquer `.from()`/`.rpc()` cai aqui: encadeável, sem dado, e registrado. */
-function cadeia(): unknown {
+/** Qualquer `.from()`/`.rpc()` cai aqui: encadeável, sem dado (ou com o dado dado), e registrado. */
+function cadeia(dado: unknown = null): unknown {
   const p: unknown = new Proxy(function () {}, {
     get(_t, prop) {
-      if (prop === "then") return (ok: (v: unknown) => unknown) => Promise.resolve({ data: null, error: null }).then(ok);
+      if (prop === "then") return (ok: (v: unknown) => unknown) => Promise.resolve({ data: dado, error: null }).then(ok);
       return () => p;
     },
     apply() {
@@ -72,6 +74,7 @@ function cadeia(): unknown {
 const admin = {
   from(tabela: string) {
     sp.tabelas.push(tabela);
+    if (tabela === "conversations" && sp.ultimaDaConversa) return cadeia({ last_message_at: sp.ultimaDaConversa });
     return cadeia();
   },
   rpc(fn: string) {
@@ -99,6 +102,7 @@ function entrada(extra: Partial<EntradaDaRecuperacao> = {}): EntradaDaRecuperaca
 
 beforeEach(() => {
   vi.clearAllMocks();
+  sp.ultimaDaConversa = null;
   sp.tabelas.length = 0;
   sp.rpcs.length = 0;
   sp.desativados.mockResolvedValue([]);
@@ -120,8 +124,11 @@ describe("aplicarEfeitosDaRecuperacao (Spec 32 §3)", () => {
         created_at: ENVIADA,
         payload: expect.objectContaining({ contact_id: "ct-1", sent_at: ENVIADA, direction: "inbound" }),
       }),
+      // A mensagem é de antes da volta: pode parar o fluxo que cancela na resposta, não acordar a espera.
+      { semAcordar: true },
     );
-    expect(sp.textoNosFollowups).toHaveBeenCalledWith(expect.anything(), { organizationId: ORG, contactId: "ct-1", texto: "oi" });
+    // Aplicar o texto como resposta manda o próximo passo AGORA, a quem pode já ter sido atendido.
+    expect(sp.textoNosFollowups).not.toHaveBeenCalled();
     expect(sp.respostaCampanha).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ organizationId: ORG, contactId: "ct-1", recebidoEm: new Date(ENVIADA) }),
@@ -130,6 +137,21 @@ describe("aplicarEfeitosDaRecuperacao (Spec 32 §3)", () => {
       expect.anything(),
       expect.objectContaining({ conversationId: "cv-1", direction: "inbound", preview: "oi", at: ENVIADA }),
     );
+  });
+
+  it("conversa que já tem uma mensagem MAIS NOVA (chegou ao vivo depois da volta): o carimbo não volta no tempo", async () => {
+    sp.ultimaDaConversa = "2026-10-26T09:00:00.000Z";
+    await aplicarEfeitosDaRecuperacao(admin as never, entrada());
+
+    expect(sp.marcarConversa).not.toHaveBeenCalled();
+    // Sabotagem: tirar a leitura de `last_message_at` faz a conversa voltar para a hora da mensagem velha.
+  });
+
+  it("conversa cuja última mensagem é MAIS VELHA que a recuperada: o carimbo anda para a frente", async () => {
+    sp.ultimaDaConversa = "2026-10-24T09:00:00.000Z";
+    await aplicarEfeitosDaRecuperacao(admin as never, entrada());
+
+    expect(sp.marcarConversa).toHaveBeenCalledTimes(1);
   });
 
   it("nunca despacha o agente, nunca abre demanda, nunca grava no event_log", async () => {

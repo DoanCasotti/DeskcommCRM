@@ -62,7 +62,6 @@ import { lerPessoalDoContato } from "@/lib/contacts/contato-pessoal";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { EventRow } from "@/lib/event-log/dispatcher";
 import { applyReactivityEvent, createSupabaseReactivityClient } from "@/lib/followup/reactivity";
-import { aplicarTextoNosFollowups, textoDoPayloadInbound } from "@/lib/followup/aplicar-inbound";
 import { aplicarRespostaNaCampanha } from "@/lib/campanhas/resposta";
 import { marcarConversaComMensagem } from "@/lib/channels/marcar-conversa";
 
@@ -274,12 +273,15 @@ export async function aplicarEfeitosDaRecuperacao(
           attempts: 0,
           created_at: entrada.enviadaEm,
         };
-        await applyReactivityEvent(createSupabaseReactivityClient(admin as unknown as SupabaseClient), () => new Date(), evento);
-        await aplicarTextoNosFollowups(admin as unknown as SupabaseClient, {
-          organizationId: entrada.organizationId,
-          contactId: entrada.contactId,
-          texto: textoDoPayloadInbound(evento.payload) || null,
-        });
+        // A mensagem é de antes da volta: ela pode PARAR o fluxo que pede cancelamento na resposta,
+        // mas nunca acordar a espera nem aplicar o texto como resposta (isso manda o próximo passo
+        // agora, a quem pode já ter sido atendido pelo celular).
+        await applyReactivityEvent(
+          createSupabaseReactivityClient(admin as unknown as SupabaseClient),
+          () => new Date(),
+          evento,
+          { semAcordar: true },
+        );
       },
       entrada,
     );
@@ -295,15 +297,28 @@ export async function aplicarEfeitosDaRecuperacao(
     );
     await passoDaRecuperacao(
       "conversa",
-      () =>
-        marcarConversaComMensagem(admin as unknown as SupabaseClient, {
+      async () => {
+        // O carimbo da conversa só anda para a FRENTE: o que chegou ao vivo depois da volta já
+        // marcou uma hora mais nova, e a RPC grava o que recebe, sem `greatest`. Sem esta
+        // leitura a conversa voltava para a hora da mensagem velha, e a prévia mostrava o texto
+        // antigo no lugar do mais recente.
+        const { data } = await admin
+          .from("conversations")
+          .select("last_message_at")
+          .eq("organization_id", entrada.organizationId)
+          .eq("id", entrada.conversationId)
+          .maybeSingle();
+        const ultima = (data as { last_message_at?: string | null } | null)?.last_message_at;
+        if (ultima && Date.parse(ultima) >= Date.parse(entrada.enviadaEm)) return;
+        await marcarConversaComMensagem(admin as unknown as SupabaseClient, {
           organizationId: entrada.organizationId,
           conversationId: entrada.conversationId,
           direction: "inbound",
           preview: entrada.previa,
           at: entrada.enviadaEm,
           canal: "waha",
-        }),
+        });
+      },
       entrada,
     );
   } catch (err) {
