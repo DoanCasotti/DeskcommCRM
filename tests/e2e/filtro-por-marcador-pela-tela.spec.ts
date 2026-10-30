@@ -540,13 +540,16 @@ test.describe("filtro por marcador, pela tela", () => {
     // o segundo clique partia do filtro velho e "trocar" virava "somar" (o
     // quadro vazio com "Tag: obra-… +1" do CI de 30/10: RSC de 118 ms, clique
     // 43 ms depois). Atrasar o RSC torna a janela certa, e não sorte do CI.
-    await page.route(
-      (url) => url.pathname === `/app/pipelines/${funil}` && url.searchParams.has("_rsc"),
-      async (rota) => {
-        await new Promise((r) => setTimeout(r, 1_500));
-        await rota.continue();
-      },
-    );
+    const rscDoFunil = (url: URL) =>
+      url.pathname === `/app/pipelines/${funil}` && url.searchParams.has("_rsc");
+    await page.route(rscDoFunil, async (rota) => {
+      await new Promise((r) => setTimeout(r, 1_500));
+      // A navegação que o clique seguinte descartou teve o fetch cancelado
+      // pelo próprio Next: a rota dela chega aqui já encerrada. Só esse caso.
+      await rota.continue().catch((erro: unknown) => {
+        if (!String(erro).includes("Route is already handled")) throw erro;
+      });
+    });
     await page.getByRole("button", { name: `Tag: ${tagDoContato}`, exact: true }).click();
     await page.getByRole("menuitemcheckbox", { name: tagDoContato, exact: true }).click();
     await page.getByRole("menuitemcheckbox", { name: soNaConversa, exact: true }).click();
@@ -555,12 +558,14 @@ test.describe("filtro por marcador, pela tela", () => {
       timeout: 30_000,
     });
     await expect(page.getByRole("group", { name: `Lead: ${cardNeutro}` })).toHaveCount(0);
-    // A URL chegou ao último pedido e o filtro continua o mesmo: o atraso
-    // termina aqui, sem rota pendente para o fim do teste.
-    await page.unrouteAll({ behavior: "wait" });
+    // E DEPOIS que a URL chega: sem o conserto, é aqui que o "trocar" vira
+    // "somar" — o quadro acima ainda mostrava o filtro velho. A URL só muda com
+    // o RSC respondido, então nenhuma rota atrasada fica em voo depois daqui.
+    await expect(page).toHaveURL(new RegExp(`\\?tag=${soNaConversa}$`), { timeout: 30_000 });
+    await page.unroute(rscDoFunil);
     await expect(page.getByRole("button", { name: `Tag: ${soNaConversa}`, exact: true })).toBeVisible();
-    await expect(page).toHaveURL(new RegExp(`[?&]tag=${soNaConversa}(&|$)`));
     await expect(page.getByRole("group", { name: `Lead: ${cardMarcado}` })).toBeVisible();
+    await expect(page.getByRole("group", { name: `Lead: ${cardNeutro}` })).toHaveCount(0);
     await captura(page, "filtro-tela-06-quadro-filtrado-pela-conversa");
   });
 });
