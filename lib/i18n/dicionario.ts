@@ -10221,8 +10221,13 @@ export const DICIONARIO: Traducoes = {
   // A gaveta do arquivo (#979) — a porta de volta do funil arquivado.
   "Funis arquivados": { es: "Embudos archivados" },
   "Tirar do arquivo": { es: "Desarchivar" },
-  "Funil arquivado não aparece na lista nem recebe negócio novo. Traga de volta para usar outra vez, ou exclua de vez para liberar o nome.": {
-    es: "El embudo archivado no aparece en la lista ni recibe negocios nuevos. Desarchívalo para usarlo otra vez, o elimínalo definitivamente para liberar el nombre.",
+  "Funil arquivado não aparece na lista nem recebe negócio novo. Abrir é leitura: nada muda até você tirar do arquivo. Traga de volta para usar outra vez, ou exclua de vez para liberar o nome.": {
+    es: "El embudo archivado no aparece en la lista ni recibe negocios nuevos. Abrirlo es solo lectura: nada cambia hasta que lo desarchives. Desarchívalo para usarlo otra vez, o elimínalo definitivamente para liberar el nombre.",
+  },
+  // #1298 — abrir o funil arquivado sem passar pelo arquivo.
+  "sem tirar do arquivo": { es: "sin desarchivar" },
+  "Este funil está arquivado: o quadro abre em leitura, e nada aqui grava até você tirá-lo do arquivo em Funis.": {
+    es: "Este embudo está archivado: el tablero se abre en modo lectura y nada aquí se guarda hasta que lo desarchives en Embudos.",
   },
   "Isso não tem volta: o funil e as etapas dele somem. Se ele já recebeu negócio, a exclusão é recusada e ele continua arquivado.": {
     es: "Esta acción no se puede deshacer: el embudo y sus etapas desaparecen. Si ya recibió negocios, no se puede eliminar y sigue archivado.",
