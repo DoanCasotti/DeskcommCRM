@@ -73,6 +73,7 @@ export function PainelDeMarcacao({
   agora,
   responsavel,
   tipo = "Consulta",
+  tipoId,
   duracaoMin = 30,
   permiteEscolherDuracao = true,
   onDuracaoMudar,
@@ -97,6 +98,8 @@ export function PainelDeMarcacao({
   agora: Date;
   responsavel: Pessoa;
   tipo?: string;
+  /** Identidade do tipo para a decisão de abertura (o nome não é único). */
+  tipoId?: string;
   /**
    * A DURAÇÃO PADRÃO deste atendimento — a do serviço, e ela CONTINUA sendo o
    * padrão (issue #3709). Deixou de ser a única opção.
@@ -463,10 +466,20 @@ export function PainelDeMarcacao({
    */
   // Ajuste de estado DURANTE o render, não num efeito: o mês morto nem chega a
   // ser pintado (https://react.dev/learn/you-might-not-need-an-effect).
-  const [aberturaDecididaPara, setAberturaDecididaPara] = React.useState<string | null>(null);
+  // A chave é o ID do tipo: o nome não é único (só o slug é), e dois tipos de
+  // mesmo nome não podem dividir a decisão. Na troca, a decisão só reabre se o
+  // mês em tela ainda é o de abertura — quem já foi para o mês seguinte e volta
+  // à mão para hoje (um encaixe) não pode ser jogado de volta.
+  const chaveDoTipo = tipoId ?? tipo;
+  const [aberturaDecidida, setAberturaDecidida] = React.useState(false);
+  const [tipoDaDecisao, setTipoDaDecisao] = React.useState(chaveDoTipo);
+  if (tipoDaDecisao !== chaveDoTipo) {
+    setTipoDaDecisao(chaveDoTipo);
+    setAberturaDecidida(!isSameMonth(mes, ancora));
+  }
   const aberturaCarregada = mesCarregado != null && dadosDoMesEmTela && isSameMonth(mes, ancora);
-  if (aberturaDecididaPara !== tipo && aberturaCarregada && !instanteInicial) {
-    setAberturaDecididaPara(tipo);
+  if (tipoDaDecisao === chaveDoTipo && !aberturaDecidida && aberturaCarregada && !instanteInicial) {
+    setAberturaDecidida(true);
     if (publicouHorarios && !erroAoCarregar && !semanas.flat().some(temHorario)) {
       setMes(startOfMonth(addDays(startOfMonth(mes), 32)));
     }
