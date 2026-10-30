@@ -29,9 +29,10 @@ import { join } from "node:path";
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
+import { MessageBubble } from "@/components/inbox/MessageBubble";
 import { NoteCard } from "@/components/inbox/NoteCard";
 import { traduzir } from "@/lib/i18n/dicionario";
-import type { Note } from "@/lib/types/messaging";
+import type { Message, Note } from "@/lib/types/messaging";
 
 const RAIZ = join(process.cwd(), "supabase");
 const COM_DIAS = "Anexo da nota apagado pela política de retenção ({n} dias)";
@@ -52,6 +53,40 @@ function nota(over: Partial<Note> = {}): Note {
     media_retention_days: null,
     ...over,
   } as Note;
+}
+
+/** A bolha da mensagem, só com o que ela lê para o aviso de mídia expirada. */
+function mensagem(over: Partial<Message> = {}): Message {
+  return {
+    id: "m1",
+    organization_id: "o1",
+    conversation_id: "c1",
+    channel_session_id: "s1",
+    contact_id: "ct1",
+    external_id: null,
+    type: "image",
+    direction: "inbound",
+    status: "delivered",
+    ack: null,
+    error_code: null,
+    error_message: null,
+    body: null,
+    media_url: null,
+    media_mime: "image/jpeg",
+    media_size_bytes: 1024,
+    media_storage_path: null,
+    sent_via: null,
+    sent_by_user_id: null,
+    sent_at: "2026-01-10T12:00:00.000Z",
+    delivered_at: null,
+    read_at: null,
+    metadata: null,
+    edited_at: null,
+    revoked_at: null,
+    reply_to_message_id: null,
+    created_at: "2026-01-10T12:00:00.000Z",
+    ...over,
+  } as Message;
 }
 
 /** O corpo da ÚLTIMA definição de `fn_enfileirar_midia_vencida` num texto SQL. */
@@ -84,6 +119,46 @@ describe("nota interna com anexo apagado pela política de retenção", () => {
     render(<NoteCard note={nota()} />);
     expect(screen.queryByText(GENERICO)).toBeNull();
     expect(screen.queryByText(/política de retenção/)).toBeNull();
+    // Nem o cartão genérico: sem a marca, não há o que avisar.
+    expect(screen.queryByText("Mídia indisponível")).toBeNull();
+  });
+
+  it("o aviso da nota é o MESMO cartão da mensagem — um padrão, dois lugares", () => {
+    render(
+      <>
+        <NoteCard
+          note={nota({ media_expired_at: "2026-04-10T12:00:00.000Z", media_retention_days: 90 })}
+        />
+        <MessageBubble
+          message={mensagem({ metadata: { media_status: "expired", media_retention_days: 365 } })}
+        />
+      </>,
+    );
+    // Dois avisos na mesma tela, um só componente (`MediaUnavailable`): é a
+    // asserção que reprova se alguém reintroduzir um cartão próprio na nota.
+    expect(screen.getAllByText("Mídia indisponível")).toHaveLength(2);
+    // O texto que diz POR QUE é o único que muda: a nota fala do anexo dela, a
+    // mensagem da mídia da conversa — e cada um cita os SEUS dias.
+    expect(
+      screen.getByText("Anexo da nota apagado pela política de retenção (90 dias)"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Mídia apagada pela política de retenção (365 dias)"),
+    ).toBeInTheDocument();
+  });
+
+  it("a mensagem que já tinha o aviso continua igual", () => {
+    render(
+      <MessageBubble
+        message={mensagem({ metadata: { media_status: "expired", media_retention_days: 365 } })}
+      />,
+    );
+    expect(screen.getByText("Mídia indisponível")).toBeInTheDocument();
+    expect(
+      screen.getByText("Mídia apagada pela política de retenção (365 dias)"),
+    ).toBeInTheDocument();
+    // Mídia expirada não ganha imagem nem player: o cartão ocupa o lugar dela.
+    expect(screen.queryByRole("img")).toBeNull();
   });
 
   it("os três idiomas: pt-BR é a chave, es está no dicionário e en no catálogo", () => {
@@ -127,7 +202,8 @@ describe("nota interna com anexo apagado pela política de retenção", () => {
 
     const corpo = ultimaDefinicao(baseline);
     expect(corpo, "o baseline não define fn_enfileirar_midia_vencida").not.toBeNull();
-    const trecho = /update public\.conversation_notes[\s\S]{0,600}?returning 1/.exec(corpo!)?.[0] ?? "";
+    const trecho =
+      /update public\.conversation_notes[\s\S]{0,600}?returning 1/.exec(corpo!)?.[0] ?? "";
     expect(trecho).toContain("media_expired_at = now()");
     expect(trecho).toContain("media_retention_days = v.retencao_dias");
   });
