@@ -18553,6 +18553,31 @@ export const DICIONARIO: Traducoes = {
   "Grupo que não pertence a esta organização.": {
     es: "Grupo que no pertenece a esta organización.",
   },
+  // Frases de `lib/erros/para-operador.ts` (#3747): o que a tela diz quando o
+  // banco recusa. O texto do Postgres não passa daqui — ele nomeia constraint,
+  // relação e coluna, e é assunto do log, não do toast.
+  "Sua conta não tem permissão para salvar esta configuração.": {
+    es: "Tu cuenta no tiene permiso para guardar esta configuración.",
+  },
+  "Já existe um registro com esses dados.": { es: "Ya existe un registro con esos datos." },
+  "O registro referenciado não existe mais. Atualize a página.": {
+    es: "El registro referenciado ya no existe. Actualiza la página.",
+  },
+  "Falta um campo obrigatório. Preencha e salve de novo.": {
+    es: "Falta un campo obligatorio. Complétalo y guarda de nuevo.",
+  },
+  "Um dos valores enviados não é aceito pelo servidor.": {
+    es: "Uno de los valores enviados no es aceptado por el servidor.",
+  },
+  "A gravação demorou mais que o esperado e nada foi salvo. Tente de novo.": {
+    es: "La grabación tardó más de lo esperado y no se guardó nada. Inténtalo de nuevo.",
+  },
+  "A cor da marca precisa ser um hexadecimal de seis dígitos, como #1a2b3c.": {
+    es: "El color de la marca debe ser un hexadecimal de seis dígitos, como #1a2b3c.",
+  },
+  "O caminho do logo não é aceito. Envie a imagem de novo.": {
+    es: "La ruta del logo no es aceptada. Vuelve a subir la imagen.",
+  },
 };
 
 /**
