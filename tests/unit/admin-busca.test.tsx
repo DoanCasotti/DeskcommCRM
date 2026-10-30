@@ -21,10 +21,24 @@ import userEvent from "@testing-library/user-event";
 
 import { AdminCommandPalette } from "@/components/admin/AdminCommandPalette";
 import { BuscaDoAdmin } from "@/components/admin/BuscaDoAdmin";
+import { AdminShell } from "@/components/admin/AdminShell";
 import { destinosDoAdmin } from "@/lib/admin/navegacao";
+import { ThemeProvider } from "@/lib/theme";
 
 const push = vi.fn();
-vi.mock("next/navigation", () => ({ useRouter: () => ({ push }) }));
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push }),
+  usePathname: () => "/admin/inbox",
+}));
+
+// O `ThemeProvider` lê `matchMedia`, que o jsdom não implementa — mesmo stub de
+// `tests/unit/admin-shell-tooltip.test.tsx`.
+window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+  matches: false,
+  media: query,
+  addEventListener: vi.fn(),
+  removeEventListener: vi.fn(),
+})) as unknown as typeof window.matchMedia;
 
 afterEach(() => {
   cleanup();
@@ -111,5 +125,27 @@ describe("busca do painel do administrador", () => {
     expect(
       screen.getByRole("button", { name: /Buscar telas da instalação/i }),
     ).toBeTruthy();
+  });
+});
+
+describe("a casca do painel monta a busca", () => {
+  /**
+   * O elo que os casos acima NÃO guardam: eles montam a paleta direto, então
+   * apagar `<BuscaDoAdmin />` de `AdminShell.tsx` os deixaria todos verdes — e a
+   * busca sumiria da tela sem ninguém acusar. É a mesma classe de defeito que a
+   * casca já documentou sobre si mesma ("quem monta a casca é o layout").
+   *
+   * Sabotagem que confirma a guarda: trocar o `<BuscaDoAdmin />` do header por
+   * um `<span />` deixa este caso vermelho e os outros oito verdes.
+   */
+  it("o botão de busca existe na barra do topo do painel", () => {
+    render(
+      <ThemeProvider>
+        <AdminShell userEmail="dono@exemplo.com">
+          <p>conteúdo</p>
+        </AdminShell>
+      </ThemeProvider>,
+    );
+    expect(screen.getByRole("button", { name: /Buscar telas da instalação/i })).toBeTruthy();
   });
 });
