@@ -67,9 +67,13 @@ export function SidebarContent({
    * "Ajuda" é o ÚLTIMO item do rodapé fixo (issue #3567), e chega por `href` em
    * vez de uma segunda lista escrita aqui: a entrada vive no `NAV_CATALOG` com
    * `sidebar: true`, então atravessa o mesmo filtro de papel, de módulo e de
-   * área personalizada que todo o resto do menu. Escrever `<Link>Ajuda</Link>`
-   * à mão faria o link sobreviver a uma empresa que tirou a tela das áreas
+   * área personalizada que todo o resto do menu. Um `Link` de Ajuda escrito à
+   * mão aqui faria o link sobreviver a uma empresa que tirou a tela das áreas
    * dela — e a pessoa cairia num 403 saindo do socorro.
+   *
+   * O comentário NÃO pode citar a tag com os sinais: a cerca
+   * `menu-prefetch-so-por-intencao` lê o TEXTO do arquivo, comentário incluído,
+   * e uma tag de exemplo aqui é indistinguível de um link de verdade para ela.
    */
   const ajuda = grupoDoRodape?.items.find((d) => d.href === "/app/ajuda");
 
@@ -304,8 +308,20 @@ export function SidebarContent({
         mais densidade raspada. A conta é fechada e vale conferir antes de abrir
         o PR: cada linha custa 32px (28px de altura + 4px de `space-y-1`), e
         trocar N destinos do menu por um único link de hub devolve (N-1)×32px.
+        ✅ O RODAPÉ TAMBÉM PESA — e ele não tem hub. O link da Ajuda (#3567) entrou
+        na coluna fixa embaixo: uma linha de 32px (28px de item + `mb-1`) que sai
+        direto da altura desta nav. Medido em 1280×900, o conteúdo daqui NÃO mudou
+        — 744px —, mas a caixa visível caiu de 763 para 731 e o `navegacao.spec.ts`
+        reprovou por 13px. Os 16px devolvidos vieram da MOLDURA, não de item:
+        4px no topo/rodapé desta nav (`p-2` → `px-2 py-1`), 4px no rodapé fixo e
+        2px entre os dois links fixos (`mb-1` → `mb-0.5`). Os `py-1`/`text-sm` de
+        cada destino continuam os mesmos: a regra do hub vale para destino novo,
+        e nenhum destino novo apareceu aqui.
       */}
-      <nav className="flex-1 space-y-2 overflow-y-auto p-2" aria-label={t("Navegação principal")}>
+      <nav
+        className="flex-1 space-y-2 overflow-y-auto px-2 py-1"
+        aria-label={t("Navegação principal")}
+      >
         {grupos.map(({ group, items }) => {
           const tituloId = `nav-grupo-${group.id}`;
           // Recolhido o sidebar inteiro (rail de 64px), o grupo sempre mostra
@@ -403,7 +419,7 @@ export function SidebarContent({
           );
         })}
       </nav>
-      <div className="border-t p-2">
+      <div className="border-t px-2 py-1">
         {rodape && (
           <Link
             href={rodape.href}
@@ -412,7 +428,7 @@ export function SidebarContent({
             aria-current={pathname.startsWith(rodape.href) ? "page" : undefined}
             onClick={onNavigate}
             className={cn(
-              "mb-1 flex items-center gap-3 rounded-md px-3 py-1 text-sm transition-colors",
+              "mb-0.5 flex items-center gap-3 rounded-md px-3 py-1 text-sm transition-colors",
               pathname.startsWith(rodape.href)
                 ? "bg-accent text-accent-foreground"
                 : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
@@ -430,11 +446,12 @@ export function SidebarContent({
           // dois assuntos diferentes.
           <Link
             href={ajuda.href}
+            {...intencao(ajuda.href)}
             title={collapsed ? t(ajuda.label) : undefined}
             aria-current={pathname.startsWith(ajuda.href) ? "page" : undefined}
             onClick={onNavigate}
             className={cn(
-              "mb-1 flex items-center gap-3 rounded-md px-3 py-1 text-sm transition-colors",
+              "mb-0.5 flex items-center gap-3 rounded-md px-3 py-1 text-sm transition-colors",
               pathname.startsWith(ajuda.href)
                 ? "bg-accent text-accent-foreground"
                 : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
