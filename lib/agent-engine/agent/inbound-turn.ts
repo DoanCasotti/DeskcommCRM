@@ -2063,6 +2063,10 @@ async function executarTurnoDoAgente(
       ? await resolverVozDoTurno({
           pool,
           tenantId,
+          cfg: deps.llmCfg,
+          leadId,
+          jobId: liveJob().id,
+          agentId: agentConfig.agentId,
           vozEnabled: agentConfig.vozEnabled,
           vozQuando: agentConfig.vozQuando,
           inboundType:

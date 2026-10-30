@@ -188,7 +188,30 @@ interface LinhaDoOrcamento {
  * agente porque uma query falhou. Mas a causa vai para o log, nomeada — a frase
  * tranquilizadora sozinha é o que faz um defeito viver meses.
  */
-async function aplicarOrcamento(d: {
+/**
+ * O que `registrarFalha` de fato lê de `input` no caminho de recusa — nunca
+ * `messages`/`tools`/`system`. Exportado para o gate poder ser chamado por um
+ * eixo que não é turno de CHAT (síntese de voz — `lib/agent-engine/agent/
+ * voz-do-turno.ts`): exigir `RunModelCallInput` inteiro ali obrigaria a
+ * inventar um array de mensagens vazio só para satisfazer o tipo, e um valor
+ * inventado numa chamada de orçamento é o tipo de atalho que esconde o
+ * próximo bug. `RunModelCallInput` continua satisfazendo este tipo — é
+ * estritamente MAIS campos — então o call site de chat abaixo não muda.
+ */
+export type OrcamentoCallInput = Pick<
+  RunModelCallInput,
+  'tenantId' | 'leadId' | 'jobId' | 'variantId' | 'agentId'
+>;
+
+/**
+ * O GATE, exportado: síntese de voz passa pelo MESMO orçamento mensal que
+ * todo modelo de chat — sem isto, a organização via o aviso/bloqueio parar o
+ * agente de ESCREVER e a voz continuava chamando o ElevenLabs sem parar e
+ * sem avisar, contradizendo a própria promessa do recurso ("entra no mesmo
+ * orçamento"). Achado na revisão de código, antes de qualquer tela usar voz
+ * em produção.
+ */
+export async function aplicarOrcamento(d: {
   db: pg.Pool;
   organizationId: string;
   /** Só para o atalho de custo. A decisão usa o snapshot de `SQL_ORCAMENTO`. */
@@ -199,7 +222,7 @@ async function aplicarOrcamento(d: {
   provider: string;
   model: string;
   origem: string;
-  input: RunModelCallInput;
+  input: OrcamentoCallInput;
   log?: Logger;
 }): Promise<void> {
   const comum = { organization_id: d.organizationId, purpose: d.purpose };
@@ -638,7 +661,7 @@ export function redigirMensagemDoProvedor(bruto: string): string {
 async function registrarFalha(
   db: pg.Pool,
   d: {
-    input: RunModelCallInput;
+    input: OrcamentoCallInput;
     purpose: string;
     provider: string;
     model: string;

@@ -100,11 +100,19 @@ export async function PATCH(req: NextRequest): Promise<Response> {
     .maybeSingle();
 
   const settingsAtuais = ((orgAtual?.settings ?? {}) as Record<string, unknown>) || {};
+  // Achado na revisão de código: isto fazia `model_id` desaparecer em
+  // QUALQUER save — a única tela que chama este PATCH (`CartaoDeVoz`) manda
+  // só `voice_id`, nunca `model_id`, então o PATCH sobrescrevia o objeto
+  // `voz` inteiro e apagava um modelo que ninguém pediu para trocar. Regra
+  // agora: `model_id` AUSENTE do corpo preserva o que já estava salvo;
+  // `model_id: null` explícito é o único jeito de limpá-lo.
+  const vozAtual = (settingsAtuais.voz ?? {}) as VozSettings;
+  const modelIdFinal = corpo.model_id !== undefined ? corpo.model_id : vozAtual.model_id ?? null;
   const settings = {
     ...settingsAtuais,
     voz: {
       voice_id: corpo.voice_id,
-      ...(corpo.model_id ? { model_id: corpo.model_id } : {}),
+      ...(modelIdFinal ? { model_id: modelIdFinal } : {}),
     },
   };
 

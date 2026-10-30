@@ -58,6 +58,23 @@ describe("textoFalavel — moeda", () => {
   it("centavos sem reais inteiros não some o 'reais'", () => {
     expect(textoFalavel("R$0,50 de diferença.")).toBe("zero reais e cinquenta centavos de diferença.");
   });
+
+  // Achado na revisão de código: o regex antigo truncava em 3 dígitos quando
+  // não havia ponto de milhar, e o resto do número sobrava como texto cru —
+  // o agente falaria um preço ERRADO pro cliente.
+  it("quatro dígitos SEM ponto de milhar não trunca em 3 (R$1500, não R$150+0 solto)", () => {
+    expect(textoFalavel("Custa R$1500 hoje.")).toBe("Custa mil e quinhentos reais hoje.");
+  });
+
+  it("cinco dígitos sem ponto, com centavos", () => {
+    expect(textoFalavel("Total: R$12345,67")).toBe(
+      "Total: doze mil trezentos e quarenta e cinco reais e sessenta e sete centavos",
+    );
+  });
+
+  it("mesmo valor, COM ponto de milhar, dá o mesmo resultado (regressão de equivalência)", () => {
+    expect(textoFalavel("Custa R$1.500 hoje.")).toBe(textoFalavel("Custa R$1500 hoje."));
+  });
 });
 
 describe("textoFalavel — markdown e emoji", () => {

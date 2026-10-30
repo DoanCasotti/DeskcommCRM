@@ -17,6 +17,7 @@ import { fail, ok } from "@/lib/api/wrappers";
 import { requireRole } from "@/lib/auth/require-role";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { byteaToBuffer, decryptKey } from "@/lib/crypto/aes_gcm";
+import { checkRateLimit } from "@/lib/ai/dispatcher/rate-limit";
 import { sintetizarVoz } from "@/lib/ai/voz/sintetizar";
 import { traduzir } from "@/lib/i18n/dicionario";
 
@@ -24,6 +25,15 @@ export const dynamic = "force-dynamic";
 
 const FRASE_PADRAO =
   "Olá! Esta é uma prévia de como o seu agente vai soar ao responder em áudio.";
+
+// Sem orçamento nem registro de custo por desenho (prévia é descartável — ver
+// o cabeçalho) — o rate limit é a ÚNICA coisa entre esta rota e um script
+// gastando crédito real do ElevenLabs em loop. Achado na revisão de código.
+// Generoso o bastante para "ouvir três ou quatro vozes decidindo", curto o
+// bastante para não virar torneira: a mesma ordem de grandeza do rate limit
+// de troca de logo (`app/api/v1/marca/logo/route.ts`).
+const TETO_POR_ORGANIZACAO = 10;
+const JANELA_SEGUNDOS = 60;
 
 const corpo = z.object({
   voice_id: z.string().trim().min(1).max(200),
@@ -44,6 +54,16 @@ export async function POST(req: NextRequest): Promise<Response> {
   const parsed = corpo.safeParse(await req.json().catch(() => null));
   if (!parsed.success) {
     return fail("invalid_body", t("corpo inválido"), 422, { requestId, details: parsed.error.issues });
+  }
+
+  const limite = await checkRateLimit(`voz-preview:${org.orgId}`, TETO_POR_ORGANIZACAO, JANELA_SEGUNDOS);
+  if (!limite.allowed) {
+    return fail(
+      "rate_limited",
+      t("Muitas prévias em sequência. Espere um minuto e tente de novo."),
+      429,
+      { requestId, headers: { "Retry-After": String(JANELA_SEGUNDOS) } },
+    );
   }
 
   const admin = createAdminClient();

@@ -15,6 +15,7 @@
 import type pg from 'pg';
 
 import { resolveOrgLlmConfig, type LlmEdgeConfig } from '../edge/llm/credentials';
+import { aplicarOrcamento, LlmBudgetExceededError, type OrcamentoCallInput } from '../edge/llm/run-model-call';
 import { logger } from '@/lib/logger';
 
 export type VozQuando = 'nunca' | 'espelhar' | 'sempre';
@@ -26,6 +27,18 @@ export interface ResolverVozDoTurnoInput {
   vozQuando: VozQuando;
   /** `messages.type` da mensagem inbound que disparou o turno — `null` quando não há (ex.: follow-up proativo). */
   inboundType: string | null;
+  /**
+   * Config do ambiente desta instalação — a MESMA `deps.llmCfg` que o turno
+   * já usa para o `runModelCall` de chat. Precisa vir do chamador, não `{}`
+   * local: é dela que o kill switch `AI_BUDGET_ENFORCEMENT` (`budgetEnforcement`)
+   * chega aqui — sem ele, o gate de orçamento da voz nunca saberia que o
+   * operador afrouxou o teto.
+   */
+  cfg: LlmEdgeConfig;
+  /** Para a linha de `llm_calls` ficar tão rica quanto a de um turno de chat recusado por orçamento. */
+  leadId?: string | null;
+  jobId?: string | null;
+  agentId?: string | null;
 }
 
 export interface VozResolvidaDoTurno {
@@ -70,16 +83,52 @@ export async function resolverVozDoTurno(
       return null;
     }
 
-    const cfg: LlmEdgeConfig = {};
-    const elevenlabs = await resolveOrgLlmConfig(input.pool, cfg, input.tenantId, {
+    const elevenlabs = await resolveOrgLlmConfig(input.pool, input.cfg, input.tenantId, {
       provider: 'elevenlabs',
     });
+
+    const modelId = voz.model_id ?? 'eleven_multilingual_v2';
+    const orcamentoInput: OrcamentoCallInput = {
+      tenantId: input.tenantId,
+      leadId: input.leadId ?? null,
+      jobId: input.jobId ?? null,
+      agentId: input.agentId ?? null,
+    };
+    // ═══ O MESMO TETO QUE O CHAT JÁ RESPEITA ═══
+    //
+    // Achado na revisão de código: sem isto, uma organização que esgota o
+    // orçamento vê o CHAT parar (LlmBudgetExceededError, aviso crítico na
+    // Central) enquanto a VOZ continuava chamando o ElevenLabs sem parar e
+    // sem avisar — contradizendo a própria promessa do recurso ("entra no
+    // mesmo orçamento mensal"). `aplicarOrcamento` já abre o aviso crítico
+    // (ou o de 80%) sozinha; aqui só falta decidir o que fazer com o erro.
+    await aplicarOrcamento({
+      db: input.pool,
+      organizationId: input.tenantId,
+      orcamentoDaConfig: elevenlabs.orcamento,
+      orcamentoIndisponivelPorque: elevenlabs.orcamentoIndisponivelPorque,
+      chave: input.cfg.budgetEnforcement ?? 'on',
+      purpose: 'sintese_de_voz',
+      provider: 'elevenlabs',
+      model: modelId,
+      origem: 'fixo_do_produto',
+      input: orcamentoInput,
+    });
+
     return {
       apiKey: elevenlabs.apiKey,
       voiceId: voz.voice_id,
-      ...(voz.model_id ? { modelId: voz.model_id } : {}),
+      modelId,
     };
   } catch (err) {
+    if (err instanceof LlmBudgetExceededError) {
+      // O aviso crítico já abriu na Central (dentro de `aplicarOrcamento`) —
+      // aqui só cai para texto, como qualquer outra razão de não falar.
+      logger.warn('[voz-do-turno] orçamento de IA esgotado — respondendo em texto', {
+        organization_id: input.tenantId,
+      });
+      return null;
+    }
     // `LlmNotConfiguredError` (sem credencial) e qualquer falha de rede caem
     // aqui igual — a resposta para o chamador é a MESMA: fale em texto agora.
     logger.warn('[voz-do-turno] não consegui resolver voz para este turno — respondendo em texto', {

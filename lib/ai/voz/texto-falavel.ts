@@ -30,8 +30,21 @@ const ITALICO_UNDERSCORE = /_([^_]+)_/g;
 const TACHADO = /~~([^~]+)~~/g;
 const CODIGO_INLINE = /`([^`]+)`/g;
 
-/** `R$ 1.234,56` ou `R$1,50` — formato brasileiro (ponto = milhar, vírgula = decimal). */
-const MOEDA_BRL = /R\$\s?(\d{1,3}(?:\.\d{3})*|\d+)(?:,(\d{2}))?/g;
+/**
+ * `R$ 1.234,56`, `R$1,50` ou `R$1500` (sem separador de milhar) — formato
+ * brasileiro (ponto = milhar, vírgula = decimal).
+ *
+ * ⚠️ Achado na revisão de código: a versão anterior era
+ * `(\d{1,3}(?:\.\d{3})*|\d+)` — a PRIMEIRA alternativa vence sempre que
+ * casa, e `\d{1,3}` sozinho casa "150" dentro de "1500" sem nunca tentar a
+ * segunda alternativa (`\d+`) para o resto. "R$1500" saía falado como "cento
+ * e cinquenta reais" com um "0" solto atrás — um preço ERRADO indo ao
+ * cliente. `\d+(?:\.\d{3})*` resolve as duas formas com UM padrão: sem
+ * ponto, `\d+` consome os dígitos todos (nada para parar nele); com ponto,
+ * ele consome só o primeiro grupo (1–3 dígitos, porque é aí que o ponto
+ * aparece) e o restante entra pelo grupo repetido.
+ */
+const MOEDA_BRL = /R\$\s?(\d+(?:\.\d{3})*)(?:,(\d{2}))?/g;
 
 const UNIDADES = ["zero", "um", "dois", "três", "quatro", "cinco", "seis", "sete", "oito", "nove"];
 const DEZ_A_DEZENOVE = [
