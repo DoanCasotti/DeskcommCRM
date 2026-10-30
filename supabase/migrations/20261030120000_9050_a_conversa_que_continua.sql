@@ -226,7 +226,12 @@ begin
              p_organization_id, p_conversation_id, p_to_user_id)
        and (o.assigned_to_user_id is null
             or o.assigned_to_user_id is not distinct from v_from)
-       and o.assigned_to_user_id is distinct from p_to_user_id;
+       and o.assigned_to_user_id is distinct from p_to_user_id
+       -- Doc 237, escolha 3-B: a conversa que a IA está atendendo fica com a
+       -- IA. Sem esta condição, conversa sem dono e com a IA ativa era adotada
+       -- e calada sem prazo (`bot_silenced_until = 'infinity'`), inclusive por
+       -- tabela numa troca de carteira, que pula essa conversa de propósito.
+       and public.comando_da_conversa(o) <> 'automatico';
   end if;
 
   update public.conversations

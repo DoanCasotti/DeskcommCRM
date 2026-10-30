@@ -71,6 +71,8 @@ const CONTATO_PARADO = "ffffffff-4444-4000-8000-000000000009";
 // #3732: o contato do retorno A→B→A e o da conversa que a terceira pessoa assumiu.
 const CONTATO_DO_RETORNO = "ffffffff-4444-4000-8000-000000000010";
 const CONTATO_ASSUMIDO_NO_MEIO = "ffffffff-4444-4000-8000-000000000011";
+// #3732 + doc 237 (3-B): a conversa no número novo que a IA está atendendo.
+const CONTATO_DA_IA_NO_RETORNO = "ffffffff-4444-4000-8000-000000000012";
 
 /** Chama a RPC como a rota chama: `service_role`. */
 function transfere(conversa: string, para: string | null, motivo = "transfer"): void {
@@ -190,7 +192,8 @@ describe("#3642 — a conversa segue o número do vendedor novo", () => {
         ('${CONTATO_DA_IA_ABERTA}', '${ORG}', 'Contato Da IA Aberta'),
         ('${CONTATO_PARADO}', '${ORG}', 'Contato Parado'),
         ('${CONTATO_DO_RETORNO}', '${ORG}', 'Contato Do Retorno'),
-        ('${CONTATO_ASSUMIDO_NO_MEIO}', '${ORG}', 'Contato Assumido No Meio')
+        ('${CONTATO_ASSUMIDO_NO_MEIO}', '${ORG}', 'Contato Assumido No Meio'),
+        ('${CONTATO_DA_IA_NO_RETORNO}', '${ORG}', 'Contato Da IA No Retorno')
       on conflict (id) do update
         set carteira_user_id = null, carteira_origem = null, carteira_definida_em = null;
     `);
@@ -329,6 +332,28 @@ describe("#3642 — a conversa segue o número do vendedor novo", () => {
     // Quem assumiu no meio continua com ela, e o número dela não muda.
     expect(donoDe(daTerceira)).toBe(VENDEDOR_C);
     expect(sessaoDe(daTerceira)).toBe(SESSAO_A);
+  });
+
+  it("#3732, doc 237 3-B: a conversa no número novo que a IA está atendendo NÃO é adotada", () => {
+    // Sem dono, aberta e com a IA ativa: `comando_da_conversa` diz 'automatico'.
+    // A adoção a atribuiria e gravaria `bot_silenced_until = 'infinity'` — a IA
+    // calada sem prazo, o que a 3-B proíbe também na troca de carteira.
+    const antiga = conversaNova(
+      "ffffffff-5555-4000-8000-000000000024", CONTATO_DA_IA_NO_RETORNO, SESSAO_A, VENDEDOR_A);
+    transfere(antiga, VENDEDOR_B);
+    const daIa = conversaNova(
+      "ffffffff-5555-4000-8000-000000000025", CONTATO_DA_IA_NO_RETORNO, SESSAO_A, null, "open");
+    expect(
+      lastLine(sql(`select public.comando_da_conversa(c) from public.conversations c where id = '${daIa}';`)),
+    ).toBe("automatico");
+
+    transfere(antiga, VENDEDOR_A);
+
+    expect(donoDe(antiga)).toBe(VENDEDOR_A);
+    expect(donoDe(daIa)).toBe("NULL");
+    expect(
+      lastLine(sql(`select coalesce(bot_silenced_until::text, 'NULL') from public.conversations where id = '${daIa}';`)),
+    ).toBe("NULL");
   });
 
   it("trocar a CARTEIRA leva as conversas abertas do dono anterior para o novo — e o número junto", () => {
