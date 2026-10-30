@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/tooltip";
 import type { PlatformAdminEntry } from "@/hooks/useAdminPlatformAdmins";
 import { useT } from "@/hooks/i18n/useT";
+import { rotuloDoMembro } from "@/lib/users/rotulo-do-atendente";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -156,8 +157,8 @@ export function PlatformAdminsTable({ data }: PlatformAdminsTableProps) {
                   <div className="flex flex-col gap-0.5">
                     <span className="text-sm font-medium">
                       {row.user_email ?? (
-                        <span className="font-mono text-xs text-muted-foreground">
-                          {row.user_id.slice(0, 8)}
+                        <span className="text-xs text-muted-foreground">
+                          {rotuloDoMembro({ full_name: row.user_name, user_id: row.user_id })}
                         </span>
                       )}
                     </span>

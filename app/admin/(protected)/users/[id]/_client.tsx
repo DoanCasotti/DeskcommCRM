@@ -21,6 +21,7 @@ import {
 import { CaretLeft } from "@/lib/ui/icons";
 import { useAdminUser } from "@/hooks/useAdminUser";
 import { useT } from "@/hooks/i18n/useT";
+import { rotuloDoMembro } from "@/lib/users/rotulo-do-atendente";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -127,7 +128,7 @@ export function UserDetailClient({ id }: UserDetailClientProps) {
       {/* Header */}
       <div className="space-y-1">
         <h1 className="text-2xl font-semibold tracking-tight">
-          {user.full_name ?? user.email ?? t("Usuário sem nome")}
+          {rotuloDoMembro({ full_name: user.full_name, email: user.email, user_id: user.id }, t)}
         </h1>
         {user.full_name && (
           <p className="font-mono text-sm text-muted-foreground">{user.email}</p>

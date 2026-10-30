@@ -31,6 +31,7 @@ import {
 } from "@/hooks/followup/useFollowupFlows";
 import type { PlanoDeTarefas } from "@/lib/tarefas/plano";
 import { CaretDown, CaretUp, Pause, Play, X } from "@/lib/ui/icons";
+import { rotuloDoMembro } from "@/lib/users/rotulo-do-atendente";
 
 /**
  * #2041 — uma pessoa fixa (a forma de sempre, sem `modo`) ou um rodízio, em que
@@ -427,7 +428,7 @@ function SendEmailForm({
             <SelectContent>
               {(membros ?? []).map((m) => (
                 <SelectItem key={m.user_id} value={m.user_id}>
-                  {m.full_name ?? m.user_id.slice(0, 8)}
+                  {rotuloDoMembro(m, t)}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -656,7 +657,7 @@ function AssignOwnerForm({ config, onChange }: FormProps<ConfigDoAtribuir>) {
   const nomeDe = (userId: string) => {
     if (carregandoMembros) return null;
     const membro = members?.find((m) => m.user_id === userId);
-    return membro?.full_name ?? userId.slice(0, 8);
+    return membro ? rotuloDoMembro(membro, t) : rotuloDoMembro({ user_id: userId }, t);
   };
 
   if (config.modo !== "rodizio") {
@@ -677,7 +678,7 @@ function AssignOwnerForm({ config, onChange }: FormProps<ConfigDoAtribuir>) {
             <SelectContent>
               {(members ?? []).map((m) => (
                 <SelectItem key={m.user_id} value={m.user_id}>
-                  {m.full_name ?? m.user_id.slice(0, 8)}
+                  {rotuloDoMembro(m, t)}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -791,7 +792,7 @@ function AssignOwnerForm({ config, onChange }: FormProps<ConfigDoAtribuir>) {
             <SelectContent>
               {foraDaFila.map((m) => (
                 <SelectItem key={m.user_id} value={m.user_id}>
-                  {m.full_name ?? m.user_id.slice(0, 8)}
+                  {rotuloDoMembro(m, t)}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -890,7 +891,7 @@ function CreateTaskForm({
             <SelectItem value="dono_do_lead">{t("Dono do negócio")}</SelectItem>
             {(members ?? []).map((m) => (
               <SelectItem key={m.user_id} value={m.user_id}>
-                {m.full_name ?? m.user_id.slice(0, 8)}
+                {rotuloDoMembro(m, t)}
               </SelectItem>
             ))}
           </SelectContent>
