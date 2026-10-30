@@ -502,10 +502,10 @@ export function RuleEditor({ open, onOpenChange, rule }: Props) {
                   gatilhoDaTela: triggerEvent,
                   configDaTela: {
                     // #3726 — o N de antecedência é a ÚNICA configuração deste
-                    // gatilho. Campo vazio vira NaN (recusado pelo schema) em
-                    // vez de gravar 0 calado; `null` de um `NaN` serializado
-                    // cai no mesmo lugar, porque `Number.isInteger(null)` é
-                    // falso para o leitor da varredura.
+                    // gatilho. Campo vazio vira NaN, que o safeParse desta tela
+                    // recusa antes de qualquer envio, em vez de gravar 0 calado.
+                    // Pela API é outra conta: `null` NÃO é recusado — o
+                    // `configDoAniversario` o lê como 0 (no dia).
                     dias_antecedencia:
                       antecedenciaDoAniversario.trim() === ""
                         ? Number.NaN
