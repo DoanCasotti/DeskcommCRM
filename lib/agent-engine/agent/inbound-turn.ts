@@ -532,9 +532,17 @@ export async function uploadDeVoz(input: {
 }): Promise<string> {
   const path = `${input.tenantId}/${input.conversationId}/voz-agente-${input.jobId}-${input.seq}.mp3`;
   const admin = createAdminClient();
+  // `upsert: true`, e não `false`: este caminho só é chamado quando
+  // `resolverCaminhoDeVoz` JÁ decidiu que precisa sintetizar de novo — ou é a
+  // primeira vez (path nunca existiu), ou é um retry depois de `rotate()`
+  // (tentativa lógica NOVA, mesmo job_id+seq, texto possivelmente diferente).
+  // Com `upsert: false`, um envio que sintetizou e subiu o áudio mas falhou
+  // no transporte (WAHA fora) trava para sempre: o retry rotaciona o ledger,
+  // sintetiza de novo, e o Storage recusa o upload porque o path antigo
+  // ainda existe — a nota de voz daquela mensagem nunca mais sai.
   const { error } = await admin.storage
     .from('whatsapp-media')
-    .upload(path, input.audio, { contentType: input.mimeType, upsert: false });
+    .upload(path, input.audio, { contentType: input.mimeType, upsert: true });
   if (error) throw new Error(`voz_upload_failed: ${error.message}`);
   return path;
 }

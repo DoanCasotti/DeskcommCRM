@@ -139,9 +139,10 @@ describe("sendTurnMessage — voz (Fase 6a)", () => {
     expect(ctx.aiVoiceDerivedText).toBe("Texto original 🎉");
 
     // sintetizouAgora:true — a chamada ao ElevenLabs de fato aconteceu agora,
-    // então o custo precisa entrar no orçamento.
+    // então o custo precisa entrar no orçamento. `jobId` incluso: achado na
+    // revisão — sem ele o rollup de custo POR EXECUÇÃO nunca via esta linha.
     expect(registrarCustoDeVozMock).toHaveBeenCalledWith(
-      expect.objectContaining({ organizationId: "org1", caracteres: 20 }),
+      expect.objectContaining({ organizationId: "org1", jobId: "job1", caracteres: 20 }),
     );
   });
 
@@ -187,15 +188,28 @@ describe("sendTurnMessage — voz (Fase 6a)", () => {
     expect(sendMessageHandlerMock).not.toHaveBeenCalled();
   });
 
-  it("erro de síntese que NÃO é terminal (ex.: ElevenLabs fora do ar) propaga, não é engolido", async () => {
+  it("erro de síntese que NÃO é terminal (ex.: ElevenLabs fora do ar) NÃO derruba o turno — cai pra texto", async () => {
+    // Achado na revisão de código, antes da Fase 7: isto ERA `rejects.toThrow`
+    // — uma falha do ElevenLabs/Storage matava o turno inteiro, e o cliente
+    // não recebia resposta nenhuma. Voz é um EXTRA sobre um caminho que já
+    // funciona (doutrina de voz-do-turno.ts); o teste agora prova isso aqui
+    // também, não só na resolução de credencial.
     resolverCaminhoDeVozMock.mockRejectedValue(new Error("synthesis_503"));
+    sendMessageHandlerMock.mockResolvedValue({ id: "msg1", status: "sent" });
     const db = dbComJob();
-    await expect(
-      sendTurnMessage(db, cfg, {
-        ...baseInput,
-        voz: { textoOriginal: "x", apiKey: "sk", voiceId: "v1", upload: vi.fn() },
-      }),
-    ).rejects.toThrow("synthesis_503");
-    expect(sendMessageHandlerMock).not.toHaveBeenCalled();
+
+    await sendTurnMessage(db, cfg, {
+      ...baseInput,
+      voz: { textoOriginal: "x", apiKey: "sk", voiceId: "v1", upload: vi.fn() },
+    });
+
+    expect(sendMessageHandlerMock).toHaveBeenCalledTimes(1);
+    const [, , payload] = sendMessageHandlerMock.mock.calls[0]!;
+    // Sem `vozResolvida`, o caminho é EXATAMENTE o de texto normal — o corpo
+    // que sai é `input.body` (o texto falado, já limpo), não media_storage_path.
+    expect(payload.type).toBe("text");
+    expect(payload.body).toBe("texto falado já limpo");
+    expect(payload.media_storage_path).toBeUndefined();
+    expect(registrarCustoDeVozMock).not.toHaveBeenCalled();
   });
 });

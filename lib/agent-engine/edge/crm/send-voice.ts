@@ -127,6 +127,15 @@ export async function resolverCaminhoDeVoz(
 export function registrarCustoDeVoz(params: {
   supabase: SupabaseClient;
   organizationId: string;
+  /**
+   * Achado na revisão de código, antes da Fase 7: faltava — e sem ele a
+   * linha nasce com `job_id` NULL. O orçamento da organização (que soma por
+   * `organization_id`) continua vendo o gasto, mas o rollup POR EXECUÇÃO
+   * (`WHERE organization_id=$1 AND job_id=$2`, usado pela tela de execuções)
+   * nunca encontra essa linha — o custo da voz fica invisível execução a
+   * execução, mesmo contando certo no total da organização.
+   */
+  jobId: string;
   caracteres: number;
   modelId: string;
 }): void {
@@ -135,6 +144,7 @@ export function registrarCustoDeVoz(params: {
       try {
         const { error } = await params.supabase.from("llm_calls").insert({
           organization_id: params.organizationId,
+          job_id: params.jobId,
           purpose: "sintese_de_voz",
           provider: "elevenlabs",
           model: params.modelId,

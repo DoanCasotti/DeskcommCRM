@@ -28,6 +28,7 @@ import { parseServiceBoundary } from '@/lib/atendimento/fronteira';
  */
 import { sendWithLedger, pgSendLedger, type SendOutcome } from './send-ledger';
 import { registrarCustoDeVoz, resolverCaminhoDeVoz, VozLedgerTerminalError } from './send-voice';
+import { logger } from '@/lib/logger';
 export type { SendOutcome, SendLedgerStatus } from './send-ledger';
 
 import { ApiError } from '@/lib/api/types';
@@ -183,6 +184,7 @@ export async function sendTurnMessage(
         registrarCustoDeVoz({
           supabase: cfg.supabase,
           organizationId: input.tenantId,
+          jobId: input.jobId,
           caracteres: r.caracteres,
           modelId: input.voz.modelId ?? 'eleven_multilingual_v2',
         });
@@ -195,7 +197,21 @@ export async function sendTurnMessage(
           ? { kind: 'already_sent', idempotencyKey: err.key, crmMessageId: err.crmMessageId }
           : { kind: 'blocked', idempotencyKey: err.key };
       }
-      throw err;
+      // ⚠️ ACHADO NA REVISÃO, ANTES DA FASE 7: isto já foi `throw err` — e
+      // derrubava o TURNO INTEIRO (o cliente não recebia resposta nenhuma)
+      // quando a falha era do ElevenLabs/Storage (rede, 503, bucket fora),
+      // não do ledger. Contradizia a própria doutrina deste módulo ("voz é
+      // um EXTRA sobre um caminho que já funciona" — ver o cabeçalho de
+      // `voz-do-turno.ts`), que só valia na resolução de CREDENCIAL, antes
+      // de chegar aqui. `vozResolvida` fica `undefined` e o fluxo abaixo
+      // segue como se `input.voz` nunca tivesse existido — `input.body` (o
+      // texto FALADO, já limpo) sai como mensagem de TEXTO normal. O
+      // cliente recebe uma resposta; só não é a voz que seria.
+      logger.warn('[send-message] síntese de voz falhou — respondendo em texto', {
+        organization_id: input.tenantId,
+        job_id: input.jobId,
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 
