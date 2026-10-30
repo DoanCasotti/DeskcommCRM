@@ -116,50 +116,50 @@ function escapeRegex(word: string): string {
 }
 
 /**
- * Uma FRASE é pergunta de consentimento ("quer que eu encaminhe para a equipe?")
- * — pedir autorização não é operação executada. As guardas de ação/prazo/retorno
- * continuam valendo DENTRO da frase: quem pergunta e já anuncia prazo ou retorno
- * ("posso pedir para a equipe responder em 10 minutos?") não é isento.
+ * Pergunta de consentimento ("quer que eu encaminhe para a equipe?") ainda não é
+ * operação executada. A isenção vale para a mensagem INTEIRA, nunca frase a
+ * frase: basta uma frase com operação alegada, prazo ou retorno anunciado
+ * ("O responsável retorna em 10 minutos") para a análise voltar ao texto todo.
+ *
+ * Única folga (issue #3725): UMA abertura antes das perguntas, se ela inteira for
+ * reconhecimento sem conteúdo ("Entendi!", "Sem problema, entendi!"). É lista
+ * FECHADA de propósito — falha fechada, como o §10.2 manda: qualquer outra
+ * abertura ("Já encaminhei.", "Vou anotar aqui.") devolve a análise à mensagem
+ * inteira. Três rodadas de lista de sinais de promessa (verbos, posição,
+ * marcadores de ação) acharam, cada uma, uma família nova que escapava.
+ * Ficam de fora "pode deixar" e "fica tranquilo": são garantia, não reconhecimento.
  */
-function ehPerguntaDeConsentimento(frase: string): boolean {
-  return (
-    frase.endsWith("?") &&
-    /^(?:(?:voce|vc)\s+)?(?:quer|gostaria|prefere|deseja|autoriza|posso|podemos)\b/.test(frase) &&
-    // Mesmas FAMÍLIAS de verbo dos 8 padrões: se o verbo que casaria a promessa não
-    // estiver aqui, a pergunta legítima ("quer que eu CONFIRME com o Fulano?") cai nos
-    // padrões e vira falso positivo — o desalinhamento era uma das fontes do #3725.
-    /\b(?:encaminh|transfer|pass|fal|consult|verific|cham|confirm|chec|ped|solicit|alinh|valid|acion|repass|direcion|escal)\w*/.test(
-      frase,
-    ) &&
-    !/\b(?:ja|vou|vamos|vai|vao|ira|irao|transferi|encaminhei|registrei|acabei)\b/.test(frase) &&
-    !/\b(?:hoje|amanha|agora|logo|ate|minutos?|horas?|semana|dias?|\d+\s*h|\d{1,2}:\d{2})\b/.test(frase) &&
-    !/\b(?:te|lhe)\s+(?:lig|retorn|respond|contat|procur|cham|d[ae])\w*|\bretorn\w*|\bentr\w*\s+em\s+contato/.test(frase)
-  );
+const RECONHECIMENTOS_SEM_CONTEUDO = new Set([
+  "entendi",
+  "entendido",
+  "certo",
+  "claro",
+  "ok",
+  "combinado",
+  "anotado",
+  "perfeito",
+  "beleza",
+  "tudo bem",
+  "tudo certo",
+  "sem problema",
+  "sem problemas",
+]);
+
+function ehReconhecimentoSemConteudo(frase: string): boolean {
+  const partes = frase.split(",").map((p) => p.replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim());
+  return partes.every((p) => RECONHECIMENTOS_SEM_CONTEUDO.has(p));
 }
 
-/**
- * Tira do texto as FRASES que só pedem consentimento; o que sobra é o que pode
- * ser promessa, e é isso que os padrões analisam (issue #3725).
- *
- * A isenção era da mensagem INTEIRA (`soPedeConsentimento`): exigia que TODAS as
- * frases fossem pergunta de consentimento e que cada uma ABRISSE com
- * quer/posso/gostaria. Uma saudação antes da pergunta — "Entendi! Quer que eu
- * encaminhe para a equipe?" — derrubava a isenção, e a oferta virava "a IA
- * prometeu humano": o gate vetava, o modelo reescrevia mantendo a oferta, o 2º
- * veto abria caso automático e o cliente recebia a frase fixa do fail-safe.
- * Medido no cenário do #3725: o cliente respondeu só "Não" a uma pergunta de
- * agenda e a próxima fala do agente era exatamente essa oferta.
- *
- * O que NÃO muda — e é o que mantém a invariante sagrada: cada frase que sobra é
- * analisada pelos 8 padrões como antes, e as guardas da pergunta continuam
- * valendo (ação no passado/futuro, prazo, retorno anunciado). "Já encaminhei para
- * a equipe. Quer que eu abra um caso?" segue detectado pela 1ª frase.
- */
-function semPerguntasDeConsentimento(text: string): string {
-  return text
-    .split(/(?<=[.!?\n])/)
-    .filter((frase) => frase.trim() !== "" && !ehPerguntaDeConsentimento(frase.trim()))
-    .join("");
+function soPedeConsentimento(text: string): boolean {
+  const todas = text.split(/(?<=[.!?\n])/).map((f) => f.trim()).filter(Boolean);
+  const frases = todas.length > 1 && ehReconhecimentoSemConteudo(todas[0] ?? "") ? todas.slice(1) : todas;
+  return frases.length > 0 && frases.every((f) =>
+    f.endsWith("?") &&
+    /^(?:(?:voce|vc)\s+)?(?:quer|gostaria|prefere|deseja|autoriza|posso|podemos)\b/.test(f) &&
+    /\b(?:encaminh|transfer|pass|fal|consult|verific|cham)\w*/.test(f) &&
+    !/\b(?:ja|vou|vamos|vai|vao|ira|irao|transferi|encaminhei|registrei|acabei)\b/.test(f) &&
+    !/\b(?:hoje|amanha|agora|logo|ate|minutos?|horas?|semana|dias?|\d+\s*h|\d{1,2}:\d{2})\b/.test(f) &&
+    !/\b(?:te|lhe)\s+(?:lig|retorn|respond|contat|procur|cham|d[ae])\w*|\bretorn\w*|\bentr\w*\s+em\s+contato/.test(f));
 }
 
 /**
@@ -181,10 +181,8 @@ function semPerguntasDeConsentimento(text: string): string {
  */
 export function detectHumanPromise(body: string, extraHumanNames?: readonly string[]): boolean {
   if (body.trim() === "") return false;
-  // As perguntas de consentimento saem FRASE a FRASE (issue #3725); o resto é
-  // analisado exatamente como antes. Sem nada além de perguntas = sem promessa.
-  const text = semPerguntasDeConsentimento(normalize(body));
-  if (text.trim() === "") return false;
+  const text = normalize(body);
+  if (soPedeConsentimento(text)) return false;
   if (extraHumanNames === undefined || extraHumanNames.length === 0) {
     return PATTERNS.some((re) => re.test(text));
   }

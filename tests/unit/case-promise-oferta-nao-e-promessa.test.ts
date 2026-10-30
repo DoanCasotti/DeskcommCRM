@@ -31,12 +31,22 @@ import { SPINNING_DEFAULTS } from "@/lib/agent-engine/spinning/defaults";
  * que qualquer agente escreve depois de receber um "Não" — derrubava a isenção e
  * a pergunta virava promessa.
  *
+ * ## O desenho: lista FECHADA de aberturas, falhando fechado
+ *
+ * A isenção continua sendo da mensagem inteira. A única folga é UMA abertura que
+ * seja, inteira, reconhecimento sem conteúdo ("Entendi!", "Sem problema,
+ * entendi!"). Qualquer outra frase devolve a análise ao texto todo, como antes.
+ * Três tentativas de lista de SINAIS de promessa (verbos, posição, marcadores de
+ * ação) foram refutadas, cada uma por uma família nova que escapava — os corpus
+ * dessas refutações estão em `PROMESSAS` (só os que a `main` já vetava) e têm de
+ * seguir vetados.
+ *
  * ## O que este arquivo congela
  *
- * A OFERTA (pergunta de consentimento, com abertura antes) não pode vetar nem
- * abrir caso; a PROMESSA (ação já feita/anunciada ou retorno anunciado) continua
- * vetando, com a mesma régua de antes. O veto é bloqueio de envio: falso
- * positivo aqui não é cosmético — ele custa a conversa.
+ * A OFERTA com abertura da lista não pode vetar nem abrir caso; a PROMESSA
+ * continua vetando, inclusive quando vem depois de uma abertura da lista. O
+ * preço do desenho, aceito de propósito (spec §10.2: na dúvida, pegar), está em
+ * `SEGUEM_VETADAS_POR_DESENHO`.
  */
 
 function baseCtx(overrides: Partial<GateContext> = {}): GateContext {
@@ -73,7 +83,6 @@ const OFERTAS_APOS_O_NAO: readonly string[] = [
   "Tudo bem! Posso pedir para alguém do time te ligar em outro dia?",
   "Certo! Quer que eu fale com o responsável sobre isso?",
   "Ok! Quer que eu chame alguém do time para te ajudar?",
-  "Entendi! Vou anotar aqui. Quer que eu encaminhe para a equipe?",
   "Tudo bem! Quer falar com alguém da equipe?",
   "Sem problema! Você quer que eu peça para o setor verificar?",
 ];
@@ -90,6 +99,55 @@ const PROMESSAS: readonly string[] = [
   "Você quer falar com a equipe que já acabei de chamar?",
   "Entendi! Já encaminhei para a equipe, tudo bem?",
   "Já acionei o time. Quer que eu encaminhe para a equipe?",
+  // 1ª refutação: pergunta + retorno anunciado na frase vizinha.
+  "Quer que eu encaminhe para a equipe? Em breve alguém te atende.",
+  "Quer que eu encaminhe para a equipe? Assim que possível você será atendido.",
+  "Posso chamar o atendente? Em instantes você é atendido.",
+  "Quer que eu passe para a equipe? Pode deixar que resolvem.",
+  "Posso transferir para o setor financeiro? Lá resolvem isso pra você.",
+  // 2ª refutação: pergunta + promessa sem verbo de retorno.
+  "Quer que eu passe para a equipe? Fica tranquilo, a gente dá um jeito.",
+  "Quer que eu chame o responsável? Ele te dá retorno.",
+  "Quer que eu encaminhe pro time? Daqui a pouco te chamam.",
+  "Quer que eu chame um especialista? Vão te orientar direitinho.",
+  "Quer que eu encaminhe para a equipe? Eles sempre respondem rápido.",
+  "Posso encaminhar para a equipe? Seu caso vai ser priorizado.",
+  // 3ª refutação: ação já executada numa abertura curta.
+  "Já encaminhei. Quer que eu chame a equipe?",
+  "Já transferi. Quer falar com a equipe?",
+  "Já acionei. Quer que eu chame o responsável?",
+  "Já chamei. Quer que eu chame o atendente?",
+  "Vou encaminhar. Quer que eu chame a equipe?",
+  "Já passei adiante. Posso chamar o gerente?",
+  "Encaminhei agora. Quer falar com a equipe?",
+  "Já repassei. Posso falar com o gerente?",
+  "Já notifiquei. Quer que eu fale com o setor?",
+  // Garantia não é reconhecimento: "pode deixar"/"fica tranquilo" ficam FORA da lista.
+  "Pode deixar. Quer que eu chame o responsável?",
+  "Fica tranquilo. Quer que eu passe para a equipe?",
+  // Abertura DA lista seguida de promessa: a folga não pode virar passe livre.
+  "Entendi! Já encaminhei para a equipe.",
+  "Certo! Vou encaminhar para o setor.",
+  "Ok! Nossa equipe vai retornar hoje. Quer que eu encaminhe?",
+  "Entendi! Quer que eu encaminhe para a equipe? Eles te retornam hoje.",
+  "Combinado! Quer que eu passe para o gerente, que te liga hoje?",
+  "Perfeito, encaminhado! Quer falar com a equipe?",
+  "Entendi, já encaminhei! Quer falar com a equipe?",
+  "Beleza! Já transferi. Quer falar com a equipe?",
+  "Claro! Quer que eu encaminhe para a equipe? Em breve alguém te atende.",
+  "Sem problema! Posso chamar o atendente? Em instantes você é atendido.",
+  "Anotado! Vou encaminhar. Quer falar com a equipe?",
+  "Entendi! Entendi! Quer que eu chame a equipe?",
+];
+
+/**
+ * Ofertas que o desenho NÃO isenta, de propósito: a abertura tem conteúdo fora da
+ * lista ("Vou anotar aqui."), então a análise volta à mensagem inteira, como na
+ * `main`. Seguem vetadas (falso positivo conhecido, direção segura). Tirar daqui
+ * exige provar que a nova folga não reabre nenhum caso de `PROMESSAS`.
+ */
+const SEGUEM_VETADAS_POR_DESENHO: readonly string[] = [
+  "Entendi! Vou anotar aqui. Quer que eu encaminhe para a equipe?",
 ];
 
 describe("#3725 — oferta de humano não é promessa de humano (detector)", () => {
@@ -101,8 +159,8 @@ describe("#3725 — oferta de humano não é promessa de humano (detector)", () 
     expect(detectHumanPromise(body)).toBe(true);
   });
 
-  it("a oferta com nome próprio do tenant (handoff_keywords) também não é promessa", () => {
-    expect(detectHumanPromise("Entendi! Quer que eu confirme com o Fulano?", ["fulano"])).toBe(false);
+  it.each(SEGUEM_VETADAS_POR_DESENHO)("abertura fora da lista segue analisada inteira: %s", (body) => {
+    expect(detectHumanPromise(body)).toBe(true);
   });
 
   it("mensagem que só pede consentimento continua isenta (comportamento de antes)", () => {

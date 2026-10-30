@@ -136,14 +136,13 @@ describe("consentimento para transferência não é operação executada", () =>
   ])("não exige caso antes de aceitar: %s", (body) => {
     expect(detectHumanPromise(body)).toBe(false);
   });
-  // #3725 — a isenção era da mensagem INTEIRA (`frases.every`): uma abertura antes da
-  // pergunta ("Entendi!", a reação ao "Não" do cliente) derrubava a isenção, a OFERTA
-  // virava promessa, e o 2º veto abria caso automático. Continua valendo só a pergunta:
+  // #3725 — uma abertura antes da pergunta ("Entendi!", a reação ao "Não" do cliente)
+  // derrubava a isenção. Agora UMA abertura de reconhecimento sem conteúdo, de lista
+  // FECHADA, é tolerada; qualquer outra frase devolve a análise à mensagem inteira:
   it.each([
     "Entendi! Quer que eu encaminhe para a equipe verificar?",
     "Certo! Quer que eu fale com o responsável sobre isso?",
     "Ok! Quer que eu chame alguém do time para te ajudar?",
-    "Entendi! Vou anotar aqui. Quer que eu encaminhe para a equipe?",
   ])("abertura + pergunta de consentimento segue sem exigir caso: %s", (body) => {
     expect(detectHumanPromise(body)).toBe(false);
   });
@@ -158,5 +157,8 @@ describe("consentimento para transferência não é operação executada", () =>
   it("o que sobra fora a pergunta continua sendo analisado (#3725)", () => {
     expect(detectHumanPromise("Já acionei o time. Quer que eu encaminhe para a equipe?")).toBe(true);
     expect(detectHumanPromise("Entendi! Já encaminhei para a equipe, tudo bem?")).toBe(true);
+    // Abertura fora da lista ("Vou anotar aqui.") não é isenta: falha fechada.
+    expect(detectHumanPromise("Entendi! Vou anotar aqui. Quer que eu encaminhe para a equipe?")).toBe(true);
+    expect(detectHumanPromise("Pode deixar. Quer que eu chame o responsável?")).toBe(true);
   });
 });
