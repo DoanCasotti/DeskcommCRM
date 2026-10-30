@@ -50,6 +50,12 @@ interface KanbanBoardProps {
    * então o cabeçalho fica só leitura para eles.
    */
   podeRenomearEtapa?: boolean;
+  /**
+   * Quadro de funil ARQUIVADO (#1298): abre para OLHAR, e nada aqui grava —
+   * sem arrastar card, sem menu de ações, sem seleção em lote e sem dossiê.
+   * É a razão de o funil arquivado ser abrível sem desarquivar.
+   */
+  somenteLeitura?: boolean;
 }
 
 function groupLeadsByStage(stages: Stage[], leads: Lead[]): Map<string, Lead[]> {
@@ -94,6 +100,7 @@ export function KanbanBoard({
   onSelectionChange,
   leadInicial,
   podeRenomearEtapa = false,
+  somenteLeitura = false,
 }: KanbanBoardProps) {
   const t = useT();
   const useExternal = stagesProp !== undefined && leadsProp !== undefined;
@@ -247,6 +254,8 @@ export function KanbanBoard({
 
   const handleDragEnd = useCallback(
     (result: DropResult) => {
+      // Funil arquivado é leitura: soltar um card não move nada (#1298).
+      if (somenteLeitura) return;
       if (!data || !grouped) return;
       const { source, destination, draggableId } = result;
       if (!destination) return;
@@ -303,7 +312,7 @@ export function KanbanBoard({
         expectedUpdatedAt: lead.updated_at,
       });
     },
-    [data, grouped, moverPara, qc, pipelineId],
+    [data, grouped, moverPara, qc, pipelineId, somenteLeitura],
   );
 
   if (isLoading) {
@@ -384,6 +393,7 @@ export function KanbanBoard({
               onMoverPara={aoMoverPelaLista}
               podeRenomear={podeRenomearEtapa}
               onRenomear={(nome) => renameStage.mutate({ stageId: stage.id, name: nome })}
+              somenteLeitura={somenteLeitura}
             />
           ))}
         </div>
