@@ -79,6 +79,41 @@ function listaDeEtiquetas(texto: string): string[] {
 }
 
 /**
+ * Campo de etiquetas separadas por vírgula. O TEXTO digitado mora aqui, e a
+ * lista sai para o pai a cada tecla: se o campo exibisse a lista já limpa, a
+ * vírgula e o espaço do fim sumiriam no meio da digitação e "cliente ativo,
+ * contrato" viraria "clienteativocontrato".
+ */
+function CampoDeEtiquetas({
+  id,
+  valor,
+  onChange,
+  placeholder,
+  disabled,
+}: {
+  id: string;
+  valor: readonly string[];
+  onChange: (lista: string[]) => void;
+  placeholder: string;
+  disabled?: boolean;
+}) {
+  const [texto, setTexto] = React.useState(() => valor.join(", "));
+  return (
+    <Input
+      id={id}
+      value={texto}
+      onChange={(e) => {
+        setTexto(e.target.value);
+        onChange(listaDeEtiquetas(e.target.value));
+      }}
+      placeholder={placeholder}
+      disabled={disabled}
+      spellCheck={false}
+    />
+  );
+}
+
+/**
  * Lista de funis com caixa de seleção — o "só estes" / "não estes" do público
  * (#3722). Sem `t()` aqui de propósito: os rótulos chegam já traduzidos de quem
  * chama, e o nome do funil é DADO do operador (não se traduz).
@@ -273,24 +308,22 @@ export function TriggerEditor({ value, onChange, disabled, organizationTimezone,
 
         <div className="space-y-1">
           <Label htmlFor="include_tags">{t("Atender só quem tem estas etiquetas")}</Label>
-          <Input
+          <CampoDeEtiquetas
             id="include_tags"
-            value={(value.filters.include_tags ?? []).join(", ")}
-            onChange={(e) => patchFilters({ include_tags: listaDeEtiquetas(e.target.value) })}
+            valor={value.filters.include_tags ?? []}
+            onChange={(lista) => patchFilters({ include_tags: lista })}
             placeholder={t("Ex.: cliente ativo, contrato")}
             disabled={disabled}
-            spellCheck={false}
           />
         </div>
         <div className="space-y-1">
           <Label htmlFor="exclude_tags">{t("Não atender quem tem estas etiquetas")}</Label>
-          <Input
+          <CampoDeEtiquetas
             id="exclude_tags"
-            value={(value.filters.exclude_tags ?? []).join(", ")}
-            onChange={(e) => patchFilters({ exclude_tags: listaDeEtiquetas(e.target.value) })}
+            valor={value.filters.exclude_tags ?? []}
+            onChange={(lista) => patchFilters({ exclude_tags: lista })}
             placeholder={t("Ex.: cliente ativo, contrato")}
             disabled={disabled}
-            spellCheck={false}
           />
         </div>
 
