@@ -25,6 +25,7 @@ import {
   montarEstrategia,
   pontuarCandidato,
 } from "@/lib/prospecting/estrategia-site";
+import { previaPorGerar } from "@/lib/prospecting/previa";
 import { prospectEnrichmentSchema } from "@/lib/prospecting/schema";
 
 const AGORA = "2026-10-30T12:00:00.000Z";
@@ -264,6 +265,15 @@ describe("#3723 · vereditos JÁ GRAVADOS deixam de mentir na leitura (sem migra
     expect(lido.problemas).toEqual(["medicao-instavel"]);
     expect(citavelNoArgumento(lido)).toBe(false);
     expect(montarDadosDeAbordagem(DADOS, lido)["Auditoria"]).toBeUndefined();
+  });
+
+  it("não medido definitivo ganha prévia como os outros vereditos (o texto só não cita o site)", () => {
+    expect(
+      previaPorGerar(
+        { data: { ...DADOS, site: GRAVADO_CASO_C }, status: "new", selected: true },
+        AGORA,
+      ),
+    ).toBe(true);
   });
 
   it("caso B: veredito gravado com http-403 vira nao-medido", () => {
