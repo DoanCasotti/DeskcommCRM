@@ -53,6 +53,12 @@ interface KanbanBoardProps {
   podeRenomearEtapa?: boolean;
   /** Densidade compacta dos cards (issue #3461, item 2), escolhida na página. */
   denso?: boolean;
+  /**
+   * Quadro de funil ARQUIVADO (#1298): abre para OLHAR, e nada aqui grava —
+   * sem arrastar card, sem menu de ações, sem seleção em lote e sem dossiê.
+   * É a razão de o funil arquivado ser abrível sem desarquivar.
+   */
+  somenteLeitura?: boolean;
 }
 
 function groupLeadsByStage(stages: Stage[], leads: Lead[]): Map<string, Lead[]> {
@@ -101,6 +107,7 @@ export function KanbanBoard({
   leadInicial,
   podeRenomearEtapa = false,
   denso = false,
+  somenteLeitura = false,
 }: KanbanBoardProps) {
   const t = useT();
   const useExternal = stagesProp !== undefined && leadsProp !== undefined;
@@ -180,9 +187,12 @@ export function KanbanBoard({
   const isError = useExternal ? false : queryResult.isError;
   const error = useExternal ? null : queryResult.error;
 
-  const leadDoDossie = dossieId
-    ? (data?.leads.find((l) => l.id === dossieId) ?? null)
-    : null;
+  // Funil arquivado (#1298): o deep link `?lead=` também não abre o dossiê —
+  // ele tem ações de escrita, e o quadro em leitura não as oferece.
+  const leadDoDossie =
+    dossieId && !somenteLeitura
+      ? (data?.leads.find((l) => l.id === dossieId) ?? null)
+      : null;
 
   const grouped = useMemo(() => {
     if (!data) return null;
@@ -254,6 +264,8 @@ export function KanbanBoard({
 
   const handleDragEnd = useCallback(
     (result: DropResult) => {
+      // Funil arquivado é leitura: soltar um card não move nada (#1298).
+      if (somenteLeitura) return;
       if (!data || !grouped) return;
       const { source, destination, draggableId } = result;
       if (!destination) return;
@@ -310,7 +322,7 @@ export function KanbanBoard({
         expectedUpdatedAt: lead.updated_at,
       });
     },
-    [data, grouped, moverPara, qc, pipelineId],
+    [data, grouped, moverPara, qc, pipelineId, somenteLeitura],
   );
 
   if (isLoading) {
@@ -392,6 +404,7 @@ export function KanbanBoard({
               podeRenomear={podeRenomearEtapa}
               onRenomear={(nome) => renameStage.mutate({ stageId: stage.id, name: nome })}
               denso={denso}
+              somenteLeitura={somenteLeitura}
             />
           ))}
         </div>
