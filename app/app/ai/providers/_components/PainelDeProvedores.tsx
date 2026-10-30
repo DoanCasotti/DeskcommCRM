@@ -594,8 +594,18 @@ function CartaoDoPonto({
 }) {
   const t = useT();
   const oJevAqui = jevNoPonto(jev, ponto.id);
-  const [provider, setProvider] = useState(ponto.efetivo.provider);
-  const [modelId, setModelId] = useState(ponto.efetivo.modelId ?? "");
+  // Ponto com menu fechado: o seletor só exibe um valor que seja uma das
+  // opções. O efetivo nem sempre é — sem chave OpenAI, a escada de transcrição
+  // anuncia `openai` com modelo nulo, e `openai|` não casa com item nenhum: o
+  // seletor abria vazio e o Salvar desabilitado. Sem casar, abre na primeira
+  // opção, a padrão do ponto. Só o estado inicial; nada é gravado sem Salvar.
+  const opcaoInicial = ponto.fixo?.opcoes?.length
+    ? (ponto.fixo.opcoes.find(
+        (o) => o.provider === ponto.efetivo.provider && o.modelId === ponto.efetivo.modelId,
+      ) ?? ponto.fixo.opcoes[0])
+    : undefined;
+  const [provider, setProvider] = useState(opcaoInicial?.provider ?? ponto.efetivo.provider);
+  const [modelId, setModelId] = useState(opcaoInicial?.modelId ?? ponto.efetivo.modelId ?? "");
   const [credentialId, setCredentialId] = useState(ponto.efetivo.credentialId ?? "");
   const [baseUrl, setBaseUrl] = useState(ponto.efetivo.baseUrl ?? "");
   const [salvando, setSalvando] = useState(false);

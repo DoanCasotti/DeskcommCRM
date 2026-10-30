@@ -162,7 +162,9 @@ export interface PontoDeIa {
    * `opcoes`, quando presente, é o menu FECHADO de serviços entre os quais o
    * painel deixa escolher — fechado porque o ponto não fala a API de chat. Com
    * `escada`, o menu só escolhe o degrau 0 dela (ver `escada-de-transcricao.ts`);
-   * a escolha grava em `ai_purpose_bindings` como qualquer outra.
+   * a escolha grava em `ai_purpose_bindings` como qualquer outra. A PRIMEIRA
+   * opção é a padrão: é nela que o painel abre quando o efetivo não casa com
+   * nenhuma (`CartaoDoPonto`).
    */
   fixo?: {
     razao: string;
