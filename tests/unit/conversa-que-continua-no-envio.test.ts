@@ -23,7 +23,7 @@
  *    a guarda do número não muda de comportamento por causa do aviso.
  *
  * O banco é dublado: a regra de "qual conversa continua" mora na
- * `fn_conversa_que_continua` (migration 9050) e é medida em
+ * `fn_conversa_que_continua` (migration 9054) e é medida em
  * `tests/invariants/o-numero-segue-o-vendedor.test.ts`. Aqui o que se mede é o
  * contrato da ROTA: o detalhe chega no 409, junto com a frase.
  */

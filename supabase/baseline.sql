@@ -62146,7 +62146,7 @@ revoke execute on function public.fn_numero_da_transferencia(uuid, uuid, uuid)
 grant execute on function public.fn_numero_da_transferencia(uuid, uuid, uuid)
   to service_role;
 
--- ---- a conversa que continua (migration 9050, #3732) ----
+-- ---- a conversa que continua (migration 9054, #3732) ----
 create or replace function public.fn_conversa_que_continua(
   p_organization_id uuid,
   p_conversation_id uuid,

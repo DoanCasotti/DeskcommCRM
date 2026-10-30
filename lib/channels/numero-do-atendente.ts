@@ -224,7 +224,7 @@ export const MENSAGEM_DO_NUMERO: Record<CodigoDoNumero, string> = {
  *
  * Esta é a conversa que continua: a do MESMO contato no número de quem está
  * enviando — exatamente o que impede a conversa antiga de seguir o vendedor
- * (`fn_conversa_que_continua`, migration 9050). Quem decide é o banco, a mesma
+ * (`fn_conversa_que_continua`, migration 9054). Quem decide é o banco, a mesma
  * peça que a adoção usa: duas cópias da regra divergiriam.
  */
 export interface ConversaQueContinua {

@@ -292,10 +292,10 @@ describe("#3642 — a conversa segue o número do vendedor novo", () => {
   /**
    * #3732 — o caso A→B→A que o @hudson-souza-mkt mediu no #3658.
    *
-   * Medido no baseline da 9050 (psql, org de teste): a conversa antiga C1 volta
+   * Medido no baseline da 9054 (psql, org de teste): a conversa antiga C1 volta
    * para A no número de B e o envio de A dá 409 — "transfira para você", o que
    * já foi feito —, enquanto a conversa C2, no número de A, fica com outra
-   * pessoa. Depois da 9050, C2 passa para A (é onde ele responde) e C1 continua
+   * pessoa. Depois da 9054, C2 passa para A (é onde ele responde) e C1 continua
    * presa no número de B: ela está no nome dele e o aviso do envio aponta a C2.
    */
   it("A→B→A: a conversa que ficou no número de A passa para A (e a antiga, presa, é do A)", () => {

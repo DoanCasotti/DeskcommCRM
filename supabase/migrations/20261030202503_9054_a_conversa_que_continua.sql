@@ -1,6 +1,6 @@
 -- manifest: A conversa que não pôde seguir o vendedor (o contato já tem conversa no número do dono novo) passa para o dono novo quando estava sem dono ou com o dono anterior — e a recusa do envio aponta a conversa que continua, com nome e id (#3732).
 --
--- 9050 — a conversa que continua (#3732, continuação do #3642).
+-- 9054 — a conversa que continua (#3732, continuação do #3642).
 --
 -- ─── O defeito (medido) ─────────────────────────────────────────────────────
 --
@@ -48,7 +48,7 @@
 -- depois de `fn_numero_da_transferencia`, e `fn_conversation_assign` é editada
 -- no lugar na última definição do apêndice — o mesmo desenho das 0426/0513.
 
--- ---- a conversa que continua (migration 9050, #3732) ----
+-- ---- a conversa que continua (migration 9054, #3732) ----
 -- Qual conversa do MESMO contato está no número que o dono novo tomaria — o que
 -- impede a conversa de seguir o vendedor. Nula = nada no caminho (a conversa vai
 -- para o número novo, ou não há número novo).
