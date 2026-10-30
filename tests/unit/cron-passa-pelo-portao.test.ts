@@ -105,14 +105,27 @@ const colapsar = (texto: string): string => texto.replace(/\s+/g, " ").trim();
 /** Nome que o `const`/`let` liga, com o padrão de desestruturação como ele é. */
 function textoDoVinculo(nome: ts.BindingName, arq: ts.SourceFile): string {
   if (ts.isIdentifier(nome)) return nome.text;
-  const itens = nome.elements.filter((e) => !ts.isOmittedExpression(e));
   // A CHAVE da desestruturação (`{ count: totalElegiveis }` -> `count`), não o
   // apelido local: renomear o apelido não é passo novo e não deve reprovar.
-  const partes = itens.map((e) => (e.propertyName ? e.propertyName.getText(arq) : textoDoVinculo(e.name, arq)));
-  return ts.isObjectBindingPattern(nome) ? `{${partes.join(", ")}}` : `[${partes.join(", ")}]`;
+  // Os dois padrões são tratados separadamente de propósito: em
+  // `ObjectBindingPattern` os elementos são `BindingElement` (têm
+  // `propertyName`), e em `ArrayBindingPattern` são `ArrayBindingElement`, que
+  // inclui `OmittedExpression` — e `filter` só estreita dentro de um array de
+  // tipo único. Misturar os dois num `nome.elements` faz o compilador recusar
+  // `propertyName` e `name`.
+  if (ts.isObjectBindingPattern(nome)) {
+    const partes = nome.elements.map((e) =>
+      e.propertyName ? e.propertyName.getText(arq) : textoDoVinculo(e.name, arq),
+    );
+    return `{${partes.join(", ")}}`;
+  }
+  const partes = nome.elements
+    .filter((e): e is ts.BindingElement => !ts.isOmittedExpression(e))
+    .map((e) => textoDoVinculo(e.name, arq));
+  return `[${partes.join(", ")}]`;
 }
 
-function textoDoAlvo(expr: ts.Expression, arq: ts.SourceFile): string {
+function textoDoAlvo(expr: ts.Expression | ts.VariableDeclarationList, arq: ts.SourceFile): string {
   if (ts.isIdentifier(expr)) return expr.text;
   if (ts.isPropertyAccessExpression(expr)) return `${textoDoAlvo(expr.expression, arq)}.${expr.name.text}`;
   if (ts.isAwaitExpression(expr)) return `await ${textoDoAlvo(expr.expression, arq)}`;
