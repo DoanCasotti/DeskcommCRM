@@ -78,7 +78,6 @@ export const DICIONARIO: Traducoes = {
     {
       es: "Esta conversación continúa en otra conversación del mismo contacto, en el número de otro atendente. Abre la conversación para responder.",
     },
-  "Abrir a conversa": { es: "Abrir la conversación" },
   "A conversa continua no número em que está: o destino não tem número conectado do mesmo canal, ou o contato já tem conversa no número dele.":
     {
       es: "La conversación sigue en el número en el que está: el destino no tiene un número conectado del mismo canal, o el contacto ya tiene una conversación en su número.",
