@@ -711,7 +711,13 @@ export async function createLeadHandler(
     .from("crm_leads")
     .select("position_in_stage")
     .eq("stage_id", input.stage_id)
-    .order("position_in_stage")
+    // O segundo argumento EXPLÍCITO (e não o default do supabase-js): os fakes
+    // `FakeQuery` das suítes de invariante leem `opts.ascending` sem guarda, e
+    // um `.order(col)` de um argumento só os derruba com `Cannot read
+    // properties of undefined (reading 'ascending')` — um vermelho que aparece
+    // em arquivo FORA do diff e some da vista de quem revisa. `true` é o mesmo
+    // que o default fazia: o primeiro card da coluna é o de MENOR posição.
+    .order("position_in_stage", { ascending: true })
     .limit(1)
     .maybeSingle();
 
