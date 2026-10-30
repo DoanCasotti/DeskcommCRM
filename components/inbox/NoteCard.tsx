@@ -55,7 +55,7 @@ export function NoteMedia({ note }: { note: Note }) {
         : t("Anexo da nota apagado pela política de retenção.");
     return (
       <div className="mt-1.5">
-        <MediaUnavailable kind={aviso} />
+        <MediaUnavailable detalhe={aviso} />
       </div>
     );
   }

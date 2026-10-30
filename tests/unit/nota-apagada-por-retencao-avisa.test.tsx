@@ -89,6 +89,17 @@ function mensagem(over: Partial<Message> = {}): Message {
   } as Message;
 }
 
+/**
+ * O texto está na TELA, não só no leitor de tela. `getByText` acha nó dentro
+ * de `.sr-only` em jsdom, e foi assim que a primeira versão deste arquivo ficou
+ * verde com o aviso invisível: o cartão mostrava só "Mídia indisponível".
+ */
+function visivel(texto: string): HTMLElement {
+  const no = screen.getByText(texto);
+  expect(no.closest(".sr-only"), `"${texto}" só existe para leitor de tela`).toBeNull();
+  return no;
+}
+
 /** O corpo da ÚLTIMA definição de `fn_enfileirar_midia_vencida` num texto SQL. */
 function ultimaDefinicao(sql: string): string | null {
   const marca = "create or replace function public.fn_enfileirar_midia_vencida";
@@ -103,16 +114,14 @@ describe("nota interna com anexo apagado pela política de retenção", () => {
         note={nota({ media_expired_at: "2026-04-10T12:00:00.000Z", media_retention_days: 90 })}
       />,
     );
-    expect(
-      screen.getByText("Anexo da nota apagado pela política de retenção (90 dias)"),
-    ).toBeInTheDocument();
+    visivel("Anexo da nota apagado pela política de retenção (90 dias)");
+    // O motivo SUBSTITUI o genérico: "indisponível" sem o porquê era o defeito.
+    expect(screen.queryByText("Mídia indisponível")).toBeNull();
   });
 
   it("sem os dias gravados, o aviso genérico — nunca texto de erro", () => {
     render(<NoteCard note={nota({ media_expired_at: "2026-04-10T12:00:00.000Z" })} />);
-    expect(
-      screen.getByText("Anexo da nota apagado pela política de retenção."),
-    ).toBeInTheDocument();
+    visivel("Anexo da nota apagado pela política de retenção.");
   });
 
   it("nota que NUNCA teve anexo não ganha aviso nenhum", () => {
@@ -134,29 +143,23 @@ describe("nota interna com anexo apagado pela política de retenção", () => {
         />
       </>,
     );
-    // Dois avisos na mesma tela, um só componente (`MediaUnavailable`): é a
-    // asserção que reprova se alguém reintroduzir um cartão próprio na nota.
-    expect(screen.getAllByText("Mídia indisponível")).toHaveLength(2);
     // O texto que diz POR QUE é o único que muda: a nota fala do anexo dela, a
-    // mensagem da mídia da conversa — e cada um cita os SEUS dias.
-    expect(
-      screen.getByText("Anexo da nota apagado pela política de retenção (90 dias)"),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText("Mídia apagada pela política de retenção (365 dias)"),
-    ).toBeInTheDocument();
+    // mensagem da mídia da conversa — e cada um cita os SEUS dias, à vista.
+    const daNota = visivel("Anexo da nota apagado pela política de retenção (90 dias)");
+    const daMensagem = visivel("Mídia apagada pela política de retenção (365 dias)");
+    // Um só componente (`MediaUnavailable`): o cartão em volta dos dois avisos
+    // é o mesmo. Reprova se alguém reintroduzir um cartão próprio na nota.
+    expect(daNota.parentElement?.className).toBe(daMensagem.parentElement?.className);
   });
 
-  it("a mensagem que já tinha o aviso continua igual", () => {
+  it("a mensagem com mídia apagada mostra o motivo escrito, não só 'indisponível'", () => {
     render(
       <MessageBubble
         message={mensagem({ metadata: { media_status: "expired", media_retention_days: 365 } })}
       />,
     );
-    expect(screen.getByText("Mídia indisponível")).toBeInTheDocument();
-    expect(
-      screen.getByText("Mídia apagada pela política de retenção (365 dias)"),
-    ).toBeInTheDocument();
+    visivel("Mídia apagada pela política de retenção (365 dias)");
+    expect(screen.queryByText("Mídia indisponível")).toBeNull();
     // Mídia expirada não ganha imagem nem player: o cartão ocupa o lugar dela.
     expect(screen.queryByRole("img")).toBeNull();
   });
