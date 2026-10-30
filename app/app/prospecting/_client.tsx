@@ -1082,8 +1082,10 @@ export function ProspectingClient() {
                   {t("Baixar modelo")}
                 </button>
               </p>
-              {/* Não depende da chave do provedor: a planilha não faz busca paga. */}
-              <div className="flex flex-col gap-2 sm:flex-row">
+              {/* Não depende da chave do provedor: a planilha não faz busca paga.
+                  Lado a lado só entre sm e lg: a partir de lg o formulário mora na
+                  coluna de 320px e os dois botões juntos passam da borda do cartão. */}
+              <div className="flex flex-col gap-2 sm:flex-row lg:flex-col">
                 <Button
                   type="button"
                   variant="outline"
