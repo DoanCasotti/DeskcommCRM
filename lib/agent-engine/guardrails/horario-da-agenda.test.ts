@@ -3,8 +3,8 @@ import { describe, expect, it } from 'vitest';
 import {
   afirmaQueMarcou,
   avaliarHorarios,
+  colherDaFerramenta,
   horariosCitados,
-  instantesDoResultado,
   marcouComSucesso,
   type HorariosDaAgenda,
 } from './horario-da-agenda';
@@ -114,21 +114,66 @@ describe('avaliarHorarios', () => {
 });
 
 describe('leitura do resultado das tools', () => {
-  it('colhe `horarios[].inicio` e `compromisso.starts_at`', () => {
+  it('colhe `horarios[].inicio` de topo, em qualquer embalagem', () => {
     expect(
-      instantesDoResultado({ horarios: [{ inicio: '2026-11-03T14:00:00.000Z', quando: 'ter 03/11 11:00' }] }),
+      colherDaFerramenta({ horarios: [{ inicio: '2026-11-03T14:00:00.000Z', quando: 'ter 03/11 11:00' }] }).livres,
     ).toEqual(['2026-11-03T14:00:00.000Z']);
-    expect(instantesDoResultado(JSON.stringify({ compromisso: { starts_at: '2026-11-03T14:00:00Z' } }))).toEqual([
-      '2026-11-03T14:00:00Z',
-    ]);
     expect(
-      instantesDoResultado({ content: [{ type: 'text', text: '{"horarios":[{"inicio":"2026-11-04T12:30:00Z"}]}' }] }),
+      colherDaFerramenta({ content: [{ type: 'text', text: '{"horarios":[{"inicio":"2026-11-04T12:30:00Z"}]}' }] })
+        .livres,
     ).toEqual(['2026-11-04T12:30:00Z']);
+    const marcou = colherDaFerramenta(
+      JSON.stringify({ marcado: true, compromisso: { starts_at: '2026-11-03T14:00:00Z' } }),
+    );
+    expect(marcou).toMatchObject({ marcou: true, marcados: ['2026-11-03T14:00:00Z'], livres: [] });
   });
 
   it('marcação recusada não conta como marcada', () => {
     expect(marcouComSucesso({ marcado: true, compromisso: { id: 'x' } })).toBe(true);
     expect(marcouComSucesso({ marcado: false, motivo: 'slot_taken' })).toBe(false);
     expect(marcouComSucesso('erro')).toBe(false);
+  });
+
+  // O formato de `crm_find_and_book_appointment` com o horário pedido OCUPADO
+  // (`lib/mcp/tools/agendamento.ts`, `motivo: 'horario_indisponivel'`): nada marcado, a
+  // lista do dia, e a ordem de oferecer uma das opções. Oferecê-la não é horário sem fonte.
+  it('find_and_book ocupado: oferecer um item da `horarios` devolvida passa', () => {
+    const resultado = {
+      horarios: [
+        { inicio: '2026-11-03T13:00:00.000Z', fim: '2026-11-03T13:15:00.000Z', quando: 'ter 03/11 10:00' },
+      ],
+      total_de_horarios: 1,
+      ha_mais: false,
+      fuso_da_regra: FUSO,
+      marcado: false,
+      motivo: 'horario_indisponivel',
+      mensagem: '11:00 não está livre em 2026-11-03, e NADA foi marcado. Ofereça ao cliente uma das opções de `horarios`.',
+    };
+    const c = colherDaFerramenta(resultado);
+    expect(c.marcou).toBe(false);
+    expect(c.marcados).toEqual([]);
+    expect(avaliarHorarios('Tenho 03/11 às 10h, pode ser?', AGORA, base({ livres: c.livres }))).toEqual({
+      pass: true,
+    });
+  });
+
+  // `servico.horarios[]` é a disponibilidade CRUA do serviço, com itens ocupados.
+  it('servico.horarios com disponivel:false não aprova o horário ocupado', () => {
+    const resultado = {
+      horarios: [{ inicio: '2026-11-03T13:00:00.000Z', quando: 'ter 03/11 10:00' }],
+      fuso_da_regra: FUSO,
+      servico: {
+        modo: 'individual',
+        horarios: [
+          { inicio: '2026-11-03T13:00:00.000Z', disponivel: true },
+          { inicio: '2026-11-03T14:15:00.000Z', disponivel: false, motivo: 'lotado' },
+        ],
+      },
+    };
+    const c = colherDaFerramenta(resultado);
+    expect(c.livres).toEqual(['2026-11-03T13:00:00.000Z']);
+    const v = avaliarHorarios('Tenho 03/11 às 11h15', AGORA, base({ livres: c.livres }));
+    expect(v.pass).toBe(false);
+    if (!v.pass) expect(v.code).toBe('horario_sem_fonte');
   });
 });

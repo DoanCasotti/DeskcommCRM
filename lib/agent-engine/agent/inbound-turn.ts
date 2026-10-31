@@ -212,7 +212,7 @@ import {
 // a ponte das tools MCP (`lib/ai/runtime/tools.ts`), que recebe este mesmo coletor.
 import { criarEfeitoDasEscrituras } from '@/lib/ai/runtime/efeito-das-escritas';
 import { ferramentasDeRegistroDoAgente } from '../guardrails/registro-sem-efeito';
-import { instantesDoResultado, marcouComSucesso } from '../guardrails/horario-da-agenda';
+import { colherDaFerramenta } from '../guardrails/horario-da-agenda';
 import { isStatusSendable } from '../../channels/meta/template-binding';
 import { capabilitiesOf } from '@/lib/channels/capabilities';
 import { renderTemplateBody } from '@/lib/channels/meta/render-template';
@@ -5246,21 +5246,14 @@ async function executarTurnoDoAgente(
                 execute: (async (...args: Parameters<typeof executeOriginal>) => {
                   agendaToolCalledThisTurn = true;
                   const resultado = await executeOriginal(...args);
-                  // Colheita para o `horarioDaAgendaGate`. Nunca derruba a tool: o pior
-                  // caso de uma colheita falha é o gate vetar e o modelo buscar de novo.
-                  try {
-                    const fuso = (resultado as { fuso_da_regra?: unknown } | null)?.fuso_da_regra;
-                    if (typeof fuso === 'string' && fuso) fusoDaAgenda = fuso;
-                    const instantes = instantesDoResultado(resultado);
-                    if (name === 'crm_find_free_slots') {
-                      for (const i of instantes) horariosLivresDoTurno.add(i);
-                    } else if (marcouComSucesso(resultado)) {
-                      marcouNesteTurno = true;
-                      for (const i of instantes) marcadosNesteTurno.add(i);
-                    }
-                  } catch {
-                    // embalagem inesperada: nada colhido
-                  }
+                  // Colheita para o `horarioDaAgendaGate`, de QUALQUER tool de agenda: a
+                  // conjunta com o horário ocupado devolve `horarios[]` e manda oferecer um
+                  // deles. Pura e sem exceção — embalagem inesperada colhe nada.
+                  const colheita = colherDaFerramenta(resultado);
+                  if (colheita.fuso !== null) fusoDaAgenda = colheita.fuso;
+                  for (const i of colheita.livres) horariosLivresDoTurno.add(i);
+                  if (colheita.marcou) marcouNesteTurno = true;
+                  for (const i of colheita.marcados) marcadosNesteTurno.add(i);
                   return resultado;
                 }) as typeof mcpTool.execute,
               };
@@ -5331,6 +5324,9 @@ async function executarTurnoDoAgente(
           registro: registroDoTurno(),
         }
       : null;
+    // A callback de contexto da prévia é SÍNCRONA: sem esperar aqui, a consulta que o contato
+    // JÁ tem ainda não foi lida quando o gate de horário confere, e lembrá-la vira veto falso.
+    if (preview) await leituraDosCompromissos;
     const previewTools =
       preview && previewContext
         ? applyPreviewPolicy(

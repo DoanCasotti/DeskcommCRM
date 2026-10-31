@@ -25,7 +25,7 @@ export interface HorariosDaAgenda {
   ativo: boolean;
   /** Fuso em que o texto do cliente fala (o `fuso_da_regra` da agenda). */
   fuso: string;
-  /** Instantes ISO que `crm_find_free_slots` devolveu NESTE turno. */
+  /** Instantes ISO da `horarios[]` que as tools de agenda devolveram NESTE turno. */
   livres: readonly string[];
   /** Instantes ISO dos compromissos deste contato (já existentes + marcados neste turno). */
   doContato: readonly string[];
@@ -192,45 +192,75 @@ export function avaliarHorarios(corpo: string, agora: Date, h: HorariosDaAgenda 
     code: 'horario_sem_fonte',
     reason: escalar
       ? SAIDA_PELA_EQUIPE
-      : `Estes horários NÃO vieram de crm_find_free_slots neste turno: ${lista}. Eles podem estar ` +
+      : `Estes horários NÃO vieram da agenda neste turno (crm_find_free_slots ou a lista ` +
+        `\`horarios\` da tentativa de marcação): ${lista}. Eles podem estar ` +
         'ocupados. Para cada dia que vai citar, chame crm_find_free_slots com `dia` (AAAA-MM-DD) e ' +
         'limite 50, e escreva SOMENTE os horários que vierem na resposta. Não complete a lista de cabeça.',
   };
 }
 
+/** O objeto de topo do resultado: objeto, JSON em string ou `content[].text` (MCP). */
+function topoDoResultado(resultado: unknown): Record<string, unknown> | null {
+  let r: unknown = resultado;
+  if (typeof r === 'string') {
+    try {
+      r = JSON.parse(r);
+    } catch {
+      return null;
+    }
+  }
+  if (r === null || typeof r !== 'object' || Array.isArray(r)) return null;
+  const conteudo = (r as { content?: unknown }).content;
+  if (Array.isArray(conteudo)) {
+    const texto = conteudo.find(
+      (c): c is { text: string } => typeof (c as { text?: unknown } | null)?.text === 'string',
+    );
+    return texto ? topoDoResultado(texto.text) : null;
+  }
+  return r as Record<string, unknown>;
+}
+
+function instanteValido(v: unknown): v is string {
+  return typeof v === 'string' && !Number.isNaN(Date.parse(v));
+}
+
+export interface ColheitaDaFerramenta {
+  /** `inicio` de cada item de `horarios[]` de TOPO — o que a agenda disse que está livre. */
+  livres: string[];
+  /** O instante gravado, só quando a marcação/remarcação gravou. */
+  marcados: string[];
+  marcou: boolean;
+  fuso: string | null;
+}
+
 /**
- * Instantes ISO dentro do resultado de uma tool de agenda (`horarios[].inicio`,
- * `compromisso.starts_at`, ...). Tolerante a formato: objeto, JSON em string ou
- * `content[].text` — o gate não pode quebrar o turno por uma mudança de embalagem.
+ * O que uma tool de agenda DEVOLVEU, sem olhar o nome dela: `crm_find_free_slots`, a
+ * conjunta `crm_find_and_book_appointment` (que, com o horário pedido ocupado, devolve
+ * `marcado:false` + `horarios[]` e manda oferecer um deles) e a recusa de marcação trazem
+ * a mesma `horarios[]` de topo (`payloadDeHorarios`).
+ *
+ * ⚠️ Só o TOPO. `servico.horarios[]` é a disponibilidade crua do serviço e traz itens com
+ * `disponivel:false` — colhê-los aprovaria horário ocupado.
  */
-export function instantesDoResultado(resultado: unknown): string[] {
-  const out: string[] = [];
-  const ver = (v: unknown, chave: string | null, prof: number): void => {
-    if (prof > 12 || v === null || v === undefined) return;
-    if (typeof v === 'string') {
-      if ((chave === 'inicio' || chave === 'starts_at' || chave === 'new_starts_at') && !Number.isNaN(Date.parse(v))) {
-        out.push(v);
-        return;
-      }
-      if (prof === 0 || chave === 'text') {
-        try {
-          ver(JSON.parse(v), null, prof + 1);
-        } catch {
-          // texto livre: nada a colher
-        }
-      }
-      return;
-    }
-    if (Array.isArray(v)) {
-      for (const x of v) ver(x, chave, prof + 1);
-      return;
-    }
-    if (typeof v === 'object') {
-      for (const [k, x] of Object.entries(v as Record<string, unknown>)) ver(x, k, prof + 1);
-    }
-  };
-  ver(resultado, null, 0);
-  return out;
+export function colherDaFerramenta(resultado: unknown): ColheitaDaFerramenta {
+  const topo = topoDoResultado(resultado);
+  if (topo === null) return { livres: [], marcados: [], marcou: false, fuso: null };
+  const horarios: unknown[] = Array.isArray(topo.horarios) ? topo.horarios : [];
+  const livres = horarios
+    .filter((h): h is Record<string, unknown> => typeof h === 'object' && h !== null)
+    .filter((h) => h.disponivel !== false)
+    .map((h) => h.inicio)
+    .filter(instanteValido);
+  const marcou = marcouComSucesso(topo);
+  const compromisso =
+    typeof topo.compromisso === 'object' && topo.compromisso !== null
+      ? (topo.compromisso as Record<string, unknown>)
+      : {};
+  const marcados = marcou
+    ? [compromisso.starts_at, topo.new_starts_at, topo.starts_at].filter(instanteValido)
+    : [];
+  const fuso = typeof topo.fuso_da_regra === 'string' && topo.fuso_da_regra ? topo.fuso_da_regra : null;
+  return { livres, marcados, marcou, fuso };
 }
 
 /** A tool de marcação/remarcação gravou? (`marcado`/`remarcado` true, ou devolveu o compromisso). */
