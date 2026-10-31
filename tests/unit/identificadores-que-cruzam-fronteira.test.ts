@@ -188,6 +188,10 @@ const SITES: { arquivo: string; fronteira: string; papel?: "gerador" | "validado
   // o handler. A chave é a de antes: `{org}/templates/{uuid}.{jpg|png}`, com a
   // extensão vinda da ASSINATURA dos bytes.
   { arquivo: "lib/channels/templates-midia.ts", fronteira: "storage.chave-de-objeto" },
+  // A nota de voz do agente (`uploadDeVoz`): `{org}/{conversa}/voz-agente-{jobId}-{seq}.mp3`
+  // — org e conversa do turno, jobId uuid da fila, seq inteiro do turno. Nada de
+  // texto do cliente nem do modelo entra na chave.
+  { arquivo: "lib/agent-engine/agent/inbound-turn.ts", fronteira: "storage.chave-de-objeto" },
   { arquivo: "app/api/v1/settings/sons/route.ts", fronteira: "storage.chave-de-objeto" },
   { arquivo: "app/api/v1/marca/logo/route.ts", fronteira: "storage.chave-de-objeto" },
   { arquivo: "app/api/v1/conversations/[id]/media/route.ts", fronteira: "storage.chave-de-objeto" },
