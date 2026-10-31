@@ -4211,6 +4211,17 @@ export const DICIONARIO: Traducoes = {
   "Aprendizado adicionado.": { es: "Aprendizaje agregado." },
   "Aprendizado arquivado.": { es: "Aprendizaje archivado." },
   "Aprendizado reativado.": { es: "Aprendizaje reactivado." },
+  // ─── app/app/ai/memory/_client.tsx (prazo do aprendizado, #2369) ───
+  "Vale até (opcional)": { es: "Válido hasta (opcional)" },
+  "Sem data, o aprendizado vale para sempre. Com data, ele sai sozinho da conversa dos agentes depois desse dia — é assim que a programação da semana ou o cardápio do dia deixam de valer.": {
+    es: "Sin fecha, el aprendizaje vale para siempre. Con fecha, deja de aparecer por sí solo en la conversación de los agentes después de ese día: así es como la programación de la semana o el menú del día dejan de valer.",
+  },
+  "Vale até": { es: "Válido hasta" },
+  "vale até": { es: "válido hasta" },
+  "Validade atualizada.": { es: "Validez actualizada." },
+  "Informe um status ou uma data de validade válidos.": {
+    es: "Informa un estado o una fecha de validez válidos.",
+  },
   Aprendizados: { es: "Aprendizajes" },
   Aprovada: { es: "Aprobada" },
   Aprovar: { es: "Aprobar" },
@@ -18286,6 +18297,15 @@ export const DICIONARIO: Traducoes = {
   "A fila do rodízio desta automação está vazia. Abra a automação e escolha quem entra no rodízio.": { es: "La fila de la rotación de esta automatización está vacía. Abre la automatización y elige quién entra en la rotación." },
   "A automação foi alterada e não tem mais o rodízio que disparou esta ação. Nada foi atribuído.": { es: "La automatización fue modificada y ya no tiene la rotación que disparó esta acción. No se asignó nada." },
   "O lead deste evento não foi encontrado nesta organização, então ninguém foi atribuído.": { es: "El lead de este evento no se encontró en esta organización, así que no se asignó a nadie." },
+  // #3514 — a passagem SDR → Closer na ação assign_owner (as duas caixas e as
+  // duas frases de falha parcial). Desligadas por padrão: o texto diz o que
+  // acontece SEM elas para quem só quer o negócio.
+  "Passar também o contato (carteira)": { es: "Pasar también el contacto (cartera)" },
+  "O cliente passa a ser deste atendente, no lugar do dono atual, e leva junto as conversas abertas que estavam com o dono anterior ou sem dono (as que a IA está atendendo ficam com a IA). Desligado, o cliente e as conversas ficam como estão.": { es: "El cliente pasa a ser de este asesor, en lugar del dueño actual, y se lleva las conversaciones abiertas que estaban con el dueño anterior o sin dueño (las que la IA está atendiendo se quedan con la IA). Desactivado, el cliente y las conversaciones quedan como están." },
+  "Passar também as conversas abertas do contato": { es: "Pasar también las conversaciones abiertas del contacto" },
+  "As conversas abertas que hoje estão com qualquer outra pessoa vão para este atendente, como no botão Transferir. Esta opção não toca conversa encerrada nem conversa sem dono.": { es: "Las conversaciones abiertas que hoy están con cualquier otra persona pasan a este asesor, como en el botón Transferir. Esta opción no toca la conversación cerrada ni la conversación sin dueño." },
+  "O negócio passou para a pessoa escolhida, mas a carteira do cliente não: ela e as conversas que iam junto continuam com o dono anterior. A ficha do contato mostra quem é o dono agora.": { es: "El negocio pasó a la persona elegida, pero la cartera del cliente no: ella y las conversaciones que iban con ella siguen con el dueño anterior. La ficha del contacto muestra quién es el dueño ahora." },
+  "O negócio passou para a pessoa escolhida, mas as conversas abertas do cliente que estavam com outra pessoa não foram transferidas: nenhuma mudou de dono. Transfira pela conversa, se precisar.": { es: "El negocio pasó a la persona elegida, pero las conversaciones abiertas del cliente que estaban con otra persona no se transfirieron: ninguna cambió de dueño. Transfiérelas desde la conversación, si hace falta." },
   "Vez de {nome}, posição {posicao} da fila do rodízio.": { es: "Turno de {nome}, posición {posicao} de la fila de la rotación." },
   // #3006 — "usar como exemplo para a IA": a conversa marcada vira material do
   // agente (opt-in de LGPD). O selo fica curto de propósito: ele divide a faixa
@@ -18824,6 +18844,75 @@ export const DICIONARIO: Traducoes = {
   },
   "Botões no card do negócio que abrem outro sistema com o dado do cliente já preenchido. Aceitam tel:, http:// e https://. Marcadores: {{telefone}}, {{nome}}, {{primeiro_nome}}, {{email}} e {{documento}}; campos personalizados entram como {{chave}}, {{lead.chave}} ou {{contact.chave}}.": {
     es: "Botones en la tarjeta del negocio que abren otro sistema con el dato del cliente ya rellenado. Aceptan tel:, http:// y https://. Marcadores: {{telefone}}, {{nome}}, {{primeiro_nome}}, {{email}} y {{documento}}; los campos personalizados entran como {{chave}}, {{lead.chave}} o {{contact.chave}}.",
+  },
+  // Ajuda dentro do produto (issue #3567, fatia F1). O bloco inteiro é da tela
+  // `/app/ajuda`, do rodapé do menu e do hub de Configurações — mesmas frases
+  // nos três lugares, uma entrada por frase.
+  "Ajuda": {
+    es: "Ayuda",
+  },
+  "O caminho para cada tarefa, e onde ir quando algo não sai como esperado.": {
+    es: "El camino para cada tarea, y adónde ir cuando algo no sale como se espera.",
+  },
+  "Para quem instala e mantém": {
+    es: "Para quien instala y mantiene",
+  },
+  "Abrir as conversas": {
+    es: "Abrir las conversaciones",
+  },
+  "As conversas de todos os canais num lugar só, e quem está esperando você.": {
+    es: "Las conversaciones de todos los canales en un solo lugar, y quién te está esperando.",
+  },
+  "Mover um negócio no funil": {
+    es: "Mover un negocio en el embudo",
+  },
+  "Em que etapa cada oportunidade está e o que falta para fechar.": {
+    es: "En qué etapa está cada oportunidad y qué falta para cerrar.",
+  },
+  "Cadastrar quem fala com você": {
+    es: "Registrar a quien habla contigo",
+  },
+  "O histórico da pessoa, as etiquetas e o consentimento dela.": {
+    es: "El historial de la persona, las etiquetas y su consentimiento.",
+  },
+  "Conectar um canal": {
+    es: "Conectar un canal",
+  },
+  "Por onde as mensagens entram: WhatsApp, Instagram e os demais canais.": {
+    es: "Por dónde entran los mensajes: WhatsApp, Instagram y los demás canales.",
+  },
+  "Criar ou ajustar um agente": {
+    es: "Crear o ajustar un agente",
+  },
+  "O que ele responde, quando passa para uma pessoa e com que informação decide.": {
+    es: "Qué responde, cuándo pasa a una persona y con qué información decide.",
+  },
+  "Ensinar o que ele deve saber": {
+    es: "Enseñarle lo que debe saber",
+  },
+  "Os documentos e páginas que alimentam as respostas dele.": {
+    es: "Los documentos y páginas que alimentan sus respuestas.",
+  },
+  "Ver onde ele não deu conta": {
+    es: "Ver dónde no dio abasto",
+  },
+  "As conversas em que a IA pediu ajuda — é daí que sai a correção.": {
+    es: "Las conversaciones en las que la IA pidió ayuda: de ahí sale la corrección.",
+  },
+  "Chamar a equipe": {
+    es: "Llamar al equipo",
+  },
+  "Renomear as etapas e criar campos": {
+    es: "Renombrar las etapas y crear campos",
+  },
+  "O vocabulário que a sua operação usa, no lugar do padrão.": {
+    es: "El vocabulario que usa tu operación, en lugar del estándar.",
+  },
+  "Atualizar esta instalação": {
+    es: "Actualizar esta instalación",
+  },
+  "A versão que roda aqui, a que já existe e o que muda ao atualizar.": {
+    es: "La versión que corre aquí, la que ya existe y qué cambia al actualizar.",
   },
 
   // ─── Grupos de respostas rápidas (#3245) ─────────────────────────────────
