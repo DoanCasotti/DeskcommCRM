@@ -76,20 +76,25 @@ interface Evento {
  */
 export function quedasDosEventos(
   eventos: Array<{ id: string; created_at: string; payload: Record<string, unknown> }>,
-): Array<{ eventoDeSaidaId: string; saidaEm: Date; voltaEm: Date }> {
-  const quedas: Array<{ eventoDeSaidaId: string; saidaEm: Date; voltaEm: Date }> = [];
-  let saida: { id: string; em: Date } | null = null;
+): Array<{ eventoDeSaidaId: string; saidaEm: Date; voltaEm: Date; numeroNaSaida: string | null }> {
+  const quedas: Array<{ eventoDeSaidaId: string; saidaEm: Date; voltaEm: Date; numeroNaSaida: string | null }> = [];
+  let saida: { id: string; em: Date; numero: string | null } | null = null;
   for (const ev of eventos) {
     if (saida === null) {
       if (ev.payload.from_status === "WORKING" && ev.payload.to_status !== "WORKING") {
-        saida = { id: ev.id, em: new Date(ev.created_at) };
+        // O número de ANTES da queda é o que o gatilho gravou na saída. O
+        // `channel_sessions.phone_number` de agora não serve: a tela de Conexões
+        // o regrava quando outro aparelho é pareado, e a conferência compararia
+        // o número novo com ele mesmo.
+        const numero = ev.payload.phone_number;
+        saida = { id: ev.id, em: new Date(ev.created_at), numero: typeof numero === "string" && numero ? numero : null };
       }
       continue;
     }
     if (ev.payload.to_status === "WORKING") {
       const volta = new Date(ev.created_at);
       if (volta.getTime() - saida.em.getTime() >= DURACAO_MINIMA_MS) {
-        quedas.push({ eventoDeSaidaId: saida.id, saidaEm: saida.em, voltaEm: volta });
+        quedas.push({ eventoDeSaidaId: saida.id, saidaEm: saida.em, voltaEm: volta, numeroNaSaida: saida.numero });
       }
       saida = null;
     }
@@ -173,14 +178,14 @@ async function abrirDaOrganizacao(admin: SupabaseClient, organizationId: string,
   // Conexão de outro provedor (redes sociais, voz) não dispara nada.
   const { data: sessoes, error } = await admin
     .from("channel_sessions")
-    .select("id, phone_number, metadata")
+    .select("id, metadata")
     .eq("organization_id", organizationId)
     .eq("provider", CHANNEL_PROVIDER_WAHA)
     .is("archived_at", null)
     .in("id", [...porConexao.keys()]);
   if (error) throw new Error(`channel_sessions: ${error.message}`);
   const porId = new Map(
-    ((sessoes ?? []) as Array<{ id: string; phone_number: string | null; metadata: unknown }>).map((s) => [s.id, s]),
+    ((sessoes ?? []) as Array<{ id: string; metadata: unknown }>).map((s) => [s.id, s]),
   );
 
   let criadas = 0;
@@ -217,7 +222,7 @@ async function abrirDaOrganizacao(admin: SupabaseClient, organizationId: string,
           escopo: "so_crm",
           origem: "queda",
           evento_de_saida_id: aberta.eventoDeSaidaId,
-          numero_esperado: sessao.phone_number ?? null,
+          numero_esperado: queda.numeroNaSaida,
           criada_por: null,
           cursor: {},
         } as never)

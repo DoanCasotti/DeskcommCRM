@@ -155,7 +155,7 @@ describe("quedasDosEventos (Spec 32, item 2)", () => {
       { id: "v", created_at: "2026-10-28T10:06:00.000Z", payload: { from_status: "STOPPED", to_status: "WORKING" } },
     ];
     expect(quedasDosEventos(ev)).toEqual([
-      { eventoDeSaidaId: "s", saidaEm: new Date("2026-10-28T10:00:00.000Z"), voltaEm: new Date("2026-10-28T10:06:00.000Z") },
+      { eventoDeSaidaId: "s", saidaEm: new Date("2026-10-28T10:00:00.000Z"), voltaEm: new Date("2026-10-28T10:06:00.000Z"), numeroNaSaida: null },
     ]);
     // Sabotagem: contar a partir de qualquer saída (sem olhar a volta) traz a queda de 4 min também.
   });
@@ -177,6 +177,16 @@ describe("quedasDosEventos (Spec 32, item 2)", () => {
 });
 
 describe("abrirRecuperacoesDasQuedas (Spec 32, item 2)", () => {
+  it("o número esperado é o da SAÍDA, não o que a conexão tem depois de re-pareada com outro aparelho", async () => {
+    // A tela de Conexões regrava `channel_sessions.phone_number` quando outro aparelho
+    // é pareado. Esperar esse número compararia o aparelho novo com ele mesmo, e a
+    // trava "o número mudou" nunca dispararia no caso para o qual ela existe.
+    h.tabelas.event_log = quedaPadrao();
+    h.tabelas.channel_sessions = [sessao(CONEXAO, { phone_number: "5511912345678" })];
+    await abrirRecuperacoesDasQuedas(admin() as never, AGORA);
+    expect(importacoes()[0]).toMatchObject({ numero_esperado: "5531998966398" });
+  });
+
   it("cria 1 importação aguardando com desde = saída − 10 min e ate = volta, e audita como sistema", async () => {
     h.tabelas.event_log = quedaPadrao();
     const r = await abrirRecuperacoesDasQuedas(admin() as never, AGORA);
@@ -190,7 +200,7 @@ describe("abrirRecuperacoesDasQuedas (Spec 32, item 2)", () => {
       escopo: "so_crm",
       origem: "queda",
       evento_de_saida_id: "ev-saida",
-      numero_esperado: "553198966398",
+      numero_esperado: "5531998966398",
       criada_por: null,
     });
     expect(imp!.desde).toBe(new Date(Date.parse(minutos(120)) - MARGEM_ANTES_MS).toISOString());
