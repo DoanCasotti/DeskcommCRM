@@ -82,6 +82,15 @@ describe("a regra: 107 turnos, UM aviso", () => {
     });
   });
 
+  it("⭐ o motivo chega no formato que o turno passa (`falha:<rótulo>`), não só o rótulo puro", () => {
+    // `run-model-call.ts` grava `${r.motivo}:${r.motivoDetalhe}`; o mapa era
+    // consultado pela string inteira e todo aviso real dizia "sem motivo".
+    const corpo = corpoDoAvisoDeAssinatura("falha:refresh_token_revoked");
+    expect(corpo).toContain("revogou o acesso da conta");
+    expect(corpo).not.toContain("sem motivo identificado");
+    expect(corpoDoAvisoDeAssinatura("falha")).toContain("sem motivo identificado");
+  });
+
   it("recusa que NÃO é de login não anuncia conta desconectada", () => {
     expect(avaliarAvisoDaAssinatura({ conectada: false, recusa: null }, null)).toEqual({
       acao: "nada",

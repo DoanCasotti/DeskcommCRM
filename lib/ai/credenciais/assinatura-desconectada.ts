@@ -76,9 +76,17 @@ const MOTIVO_LEGIVEL: Record<string, string> = {
   desconhecido: "a renovação do login falhou sem motivo identificado",
 };
 
-/** A frase do motivo; um motivo fora do vocabulário não vira jargão na tela. */
+/**
+ * A frase do motivo; um motivo fora do vocabulário não vira jargão na tela.
+ *
+ * O turno entrega `<motivo>:<rótulo>` (ex.: `falha:refresh_token_revoked`, de
+ * `run-model-call.ts`), não o rótulo puro — por isso o mapa é consultado pelo
+ * que vem depois do último `:`. Sem isso todo aviso real dizia "sem motivo
+ * identificado".
+ */
 export function motivoLegivelDaAssinatura(recusa: string): string {
-  return MOTIVO_LEGIVEL[recusa] ?? MOTIVO_LEGIVEL.desconhecido!;
+  const rotulo = recusa.slice(recusa.lastIndexOf(":") + 1);
+  return MOTIVO_LEGIVEL[rotulo] ?? MOTIVO_LEGIVEL.desconhecido!;
 }
 
 /**
