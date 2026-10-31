@@ -17085,6 +17085,8 @@ export const DICIONARIO: Traducoes = {
   "No arquivo de ambiente do servidor, ligue o canal do parceiro (bloco do parceiro no .env.example) e reinicie o app.": { es: "En el archivo de entorno del servidor, activa el canal del socio (bloque del socio en .env.example) y reinicia la app." },
   "Fazer e receber chamada de voz pelo número. Depois, cada empresa aceita o risco e liga.": { es: "Hacer y recibir llamadas de voz por el número. Después, cada empresa acepta el riesgo y la activa." },
   "No arquivo de ambiente, WACALLS_API_BASE_URL e WACALLS_API_TOKEN, e voz em COMPOSE_PROFILES.": { es: "En el archivo de entorno, WACALLS_API_BASE_URL y WACALLS_API_TOKEN, y voz en COMPOSE_PROFILES." },
+  "Telefonia da empresa": { es: "Telefonía de la empresa" },
+  "Com o servidor preparado para telefonia, a empresa salva o tronco SIP da operadora e passa a ver as ligações em Chamadas.": { es: "Con el servidor preparado para telefonía, la empresa guarda el tronco SIP de la operadora y pasa a ver las llamadas en Llamadas." },
   "Telefonia por SIP": { es: "Telefonía por SIP" },
   "Atender e ligar por telefone de verdade, com agente de voz.": { es: "Atender y llamar por teléfono de verdad, con agente de voz." },
   "No servidor, telefonia em COMPOSE_PROFILES e os arquivos do Asterisk. Este app não enxerga isso.": { es: "En el servidor, telefonia en COMPOSE_PROFILES y los archivos de Asterisk. Esta app no lo puede ver." },
