@@ -70446,7 +70446,7 @@ $recibos_9018$;
 -- guardado por `to_regclass` (a tabela pode não existir) e é feito de
 -- `if not exists` / `drop ... if exists`, porque o `update.sh` re-aplica este
 -- arquivo sem `ON_ERROR_STOP`. Corpo completo em
--- supabase/migrations/20261026120000_0770_parcela_de_honorarios_na_moeda_da_organizacao.sql.
+-- supabase/migrations/20261031122853_0770_parcela_de_honorarios_na_moeda_da_organizacao.sql.
 
 do $$
 begin
