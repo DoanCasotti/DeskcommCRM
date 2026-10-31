@@ -1682,6 +1682,8 @@ export const DICIONARIO: Traducoes = {
   "aberto excepcionalmente": { es: "abierto excepcionalmente" },
   "Abrir atendimento": { es: "Abrir atención" },
   "Abra o atendimento e diga o que fazer: concluir, pedir informação ao cliente ou passar para uma pessoa.": { es: "Abre la atención e indica qué hacer: concluirla, pedir información al cliente o pasarla a una persona." },
+  "Confira em Conexões se o número voltou e se o histórico do período fora do ar entrou como esperado.": { es: "Revise en Conexiones si el número volvió y si el historial del período sin conexión entró como se esperaba." },
+  "Abra a conversa e responda o cliente — ele escreveu enquanto o número estava fora do ar.": { es: "Abra la conversación y responda al cliente: escribió mientras el número estaba sin conexión." },
   // O caso aberto na Central, na hora (`lib/escalacao/caso-na-central.handler.ts`).
   "A IA pediu ajuda à equipe": { es: "La IA pidió ayuda al equipo" },
   "Abra o caso para responder. A IA continua atendendo o cliente enquanto isso.": {
@@ -13239,6 +13241,8 @@ export const DICIONARIO: Traducoes = {
   "Esta chave de idempotência já foi usada com outro conteúdo.": { es: "Esta clave de idempotencia ya se usó con otro contenido." },
   "Um canal está em modo de teste — a IA não responde ninguém nele": { es: "Un canal está en modo de prueba — la IA no responde a nadie en él" },
   "Um canal foi pausado — não recebe nem envia mensagens": { es: "Un canal fue pausado — no recibe ni envía mensajes" },
+  "A conexão voltou de uma queda — recuperação das conversas": { es: "La conexión volvió de una caída — recuperación de las conversaciones" },
+  "Um cliente escreveu enquanto o número estava fora e ainda não teve resposta": { es: "Un cliente escribió mientras el número estaba fuera y todavía no tuvo respuesta" },
   "Se este canal precisar voltar a operar, retome a pausa em Conexões — este aviso se resolve sozinho quando a pausa for desfeita.": { es: "Si este canal necesita volver a operar, reanuda la pausa en Conexiones — este aviso se resuelve solo cuando se deshace la pausa." },
   "A mesma requisição ainda está em curso. Tente de novo em instantes.": { es: "La misma solicitud todavía está en curso. Inténtalo de nuevo en unos instantes." },
   "Filtros inválidos.": { es: "Filtros inválidos." },
@@ -17382,6 +17386,12 @@ export const DICIONARIO: Traducoes = {
   "A importação parou por um erro.": { es: "La importación se detuvo por un error." },
   "Detalhe: {erro}": { es: "Detalle: {erro}" },
   "A importação mudou enquanto você olhava. A tela foi atualizada com o estado atual.": { es: "La importación cambió mientras la mirabas. La pantalla se actualizó con el estado actual." },
+  "Só contatos do CRM": { es: "Solo contactos del CRM" },
+  "Traz só as conversas de quem já tem ficha no CRM, sem criar fichas novas.": { es: "Trae solo las conversaciones de quienes ya tienen ficha en el CRM, sin crear fichas nuevas." },
+  "Recuperando as conversas da queda ({desde} a {ate})": { es: "Recuperando las conversaciones de la caída ({desde} a {ate})" },
+  "Importando agora.": { es: "Importando ahora." },
+  "Esperando sua vez na fila de importação.": { es: "Esperando su turno en la cola de importación." },
+  "A importação manual fica disponível quando a recuperação da queda terminar.": { es: "La importación manual estará disponible cuando termine la recuperación de la caída." },
 
   // ─── Cobrança do revendedor — Central (PR 3a) ───
   "Plano e cobrança da empresa precisam de atenção": { es: "El plan y la facturación de la empresa necesitan atención" },

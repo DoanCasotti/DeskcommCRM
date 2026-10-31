@@ -10445,6 +10445,15 @@ alter table public.agent_inbox_items
     -- lista pelas razões de sempre (bloco único por constraint, #159).
     'task_due',
     'task_overdue',
+    -- (Spec 32) A volta de uma queda do número recupera sozinha as conversas do
+    -- período, só de quem tem ficha. `recuperacao_da_queda` é o resumo para o
+    -- administrador (ref_kind='channel_session', um aberto por conexão);
+    -- `cliente_sem_resposta_na_queda` aponta a conversa cuja última mensagem
+    -- recuperada é do cliente sem resposta (ref_kind='conversation', um aberto
+    -- por conversa). Cada um com índice único parcial próprio, no apêndice da
+    -- migration 9033. Entram NESTA lista (bloco único por constraint, #159).
+    'recuperacao_da_queda',
+    'cliente_sem_resposta_na_queda',
     -- (migration 9027, issue #3371) A conta da assinatura do ChatGPT morreu em
     -- silêncio no cliente Obralivre: `401 · Provided authentication token is
     -- expired` em 107 turnos, ~26 h sem a IA responder. Entra NESTA lista pelas
@@ -70052,3 +70061,73 @@ begin
   end if;
 end;
 $recibos_9018$;
+
+-- ---- Recuperar as mensagens da queda do número (migration 9033, Spec 32) ----
+-- Espelho idempotente da 9033; o porquê está no cabeçalho dela. Não cria função,
+-- então pode ficar depois da VARREDURA anon. Os dois kinds novos entraram no
+-- bloco ÚNICO de agent_inbox_items_kind_check (não se recria aqui, #159).
+alter table public.importacoes_de_historico
+  add column if not exists escopo text not null default 'todos',
+  add column if not exists origem text not null default 'manual',
+  add column if not exists desde timestamptz,
+  add column if not exists ate timestamptz,
+  add column if not exists evento_de_saida_id uuid,
+  add column if not exists numero_esperado text;
+
+comment on column public.importacoes_de_historico.escopo is
+  'todos = cria ficha para todo chat (a importação de sempre); so_crm = só chats que casam com ficha viva, sem criar nem alterar ficha (Spec 32).';
+comment on column public.importacoes_de_historico.origem is
+  'manual = o administrador pediu pela tela; queda = aberta sozinha pela volta de uma queda do número (Spec 32).';
+comment on column public.importacoes_de_historico.ate is
+  'Fim da janela (exclusivo). Filtro local da rodada: o cliente do canal só filtra desde. Na queda, é o instante do evento de volta, nunca depois (senão a recuperação gravaria antes do webhook uma mensagem ao vivo, que ficaria sem resposta).';
+comment on column public.importacoes_de_historico.evento_de_saida_id is
+  'event_log.id do channel_session.status_changed de saída que abriu esta recuperação. Sem FK de propósito (event_log é log); o índice único garante uma importação por queda.';
+comment on column public.importacoes_de_historico.numero_esperado is
+  'O número da conexão quando a queda foi detectada. Antes de começar, o cron lê o número ao vivo e compara: se mudou, cancela (o acervo seria de outro aparelho).';
+
+-- A importação da queda usa desde/ate e não tem "dias".
+alter table public.importacoes_de_historico alter column dias drop not null;
+
+-- Os CHECKs de status e dias nasceram INLINE e sem nome; o Postgres os chamou
+-- importacoes_de_historico_status_check e importacoes_de_historico_dias_check.
+-- As linhas existentes cumprem os novos (dias válido, desde/ate vazios).
+alter table public.importacoes_de_historico
+  drop constraint if exists importacoes_de_historico_status_check;
+alter table public.importacoes_de_historico
+  add constraint importacoes_de_historico_status_check
+  check (status in ('previa', 'aguardando', 'rodando', 'concluida', 'erro', 'cancelada'));
+
+alter table public.importacoes_de_historico
+  drop constraint if exists importacoes_de_historico_dias_check;
+alter table public.importacoes_de_historico
+  add constraint importacoes_de_historico_dias_check
+  check (
+    (dias in (30, 90, 180, 365) and desde is null and ate is null)
+    or (dias is null and desde is not null and ate is not null and desde < ate)
+  );
+
+alter table public.importacoes_de_historico
+  drop constraint if exists importacoes_de_historico_escopo_check;
+alter table public.importacoes_de_historico
+  add constraint importacoes_de_historico_escopo_check check (escopo in ('todos', 'so_crm'));
+
+alter table public.importacoes_de_historico
+  drop constraint if exists importacoes_de_historico_origem_check;
+alter table public.importacoes_de_historico
+  add constraint importacoes_de_historico_origem_check check (origem in ('manual', 'queda'));
+
+-- Uma importação por queda: duas passadas do cron ao mesmo tempo não criam duas.
+create unique index if not exists importacoes_de_historico_evento_de_saida_idx
+  on public.importacoes_de_historico (evento_de_saida_id)
+  where evento_de_saida_id is not null;
+
+-- Um aviso aberto por conexão (o resumo é ATUALIZADO numa queda nova) e um por
+-- conversa. O `not exists` de insertInboxItem tem corrida; o índice não.
+create unique index if not exists agent_inbox_recuperacao_da_queda_aberto_unico
+  on public.agent_inbox_items (organization_id, kind, ref_id)
+  where status = 'open' and kind = 'recuperacao_da_queda';
+create unique index if not exists agent_inbox_cliente_sem_resposta_na_queda_aberto_unico
+  on public.agent_inbox_items (organization_id, kind, ref_id)
+  where status = 'open' and kind = 'cliente_sem_resposta_na_queda';
+
+notify pgrst, 'reload schema';
