@@ -186,6 +186,11 @@ export const POLITICAS_DE_AVISO = {
     refs: ["task"],
     orientacao: "A tarefa venceu sem conclusão. Abra e conclua, ou reagende o prazo se ele não for mais possível.",
   },
+  // (migration 9027, issue #3371) O aviso nasce SEM referência: o que o conserta
+  // não é uma linha do banco, é o login da conta — e o login mora na tela de
+  // Credenciais. O botão diz o que fazer ("Reconectar"), não "revisar", porque
+  // nada há para inspecionar: a conta precisa ser conectada de novo.
+  assinatura_desconectada: { refs: [], orientacao: "A conta que paga a assinatura recusou o login. Reconecte em IA › Credenciais; este aviso se resolve sozinho quando o login voltar.", geral: { papel: "admin", href: "/app/ai/credentials", rotulo: "Reconectar a assinatura" } },
   other: { refs: ["agenda_reminder_sender", "lead", "channel_session", "appointment", "ai_agent", "ai_provider_credential", "agent_case"], orientacao: "Confira a situação descrita neste aviso com a pessoa responsável." },
 } satisfies Record<InboxKind, Politica>;
 

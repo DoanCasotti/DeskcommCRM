@@ -119,6 +119,11 @@ export const KIND_LABEL = {
   // ainda dá tempo de concluir ou se já é o vencimento que aconteceu.
   task_due: "Uma tarefa está perto do vencimento",
   task_overdue: "Uma tarefa venceu sem conclusão",
+  // Diz o que o CLIENTE vive: a conta que respondia por assinatura do ChatGPT
+  // foi recusada e a IA parou. "Token expirado" é vocabulário de quem instalou;
+  // "parou de responder" é o que faz quem lê a Central agir — e a ação é uma
+  // só, reconectar em Credenciais.
+  assinatura_desconectada: "A conta do ChatGPT desconectou — a IA parou de responder",
   other: "Aviso do assistente",
 } as const satisfies Record<InboxKind, string>;
 
