@@ -36,6 +36,7 @@ import {
   proximaRenovacaoEm,
 } from "@/lib/ai/pontos/renovacao-da-assinatura";
 import { bufToBytea, byteaToBuffer, decryptKey, encryptKey } from "@/lib/crypto/aes_gcm";
+import { fecharAvisoDaAssinatura } from "@/lib/ai/credenciais/aviso-da-assinatura";
 
 import { FakeSupabase } from "./helpers/fake-ai-credentials";
 
@@ -47,6 +48,9 @@ vi.mock("@/lib/audit", () => ({ audit: vi.fn(async () => {}) }));
 vi.mock("@/lib/ai/provider-validators", () => ({ validateProviderKey: vi.fn() }));
 vi.mock("@/lib/logger", () => ({
   logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() },
+}));
+vi.mock("@/lib/ai/credenciais/aviso-da-assinatura", () => ({
+  fecharAvisoDaAssinatura: vi.fn(async () => "resolvido"),
 }));
 
 const ORG = "11111111-1111-4111-8111-111111111111";
@@ -214,5 +218,32 @@ describe("dois turnos seguidos fazem UM POST — a janela do token novo é respe
       agora: marco + 60_000,
     });
     expect(fetchDuble).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("a renovação que volta a dar certo fecha o aviso da Central", () => {
+  it("⭐ a renovação AUTOMÁTICA bem-sucedida fecha o aviso da empresa — sem clique", async () => {
+    const fake = new FakeSupabase();
+    fake.linha = linhaVencendoEm(UMA_HORA);
+    dublarTrocaDeToken();
+
+    await lerLoginCodexRenovandoSeProxima({ admin: fake as never, orgId: ORG });
+
+    // Um timeout passageiro abriu o aviso; a renovação seguinte deu certo. Sem
+    // isto ele ficava aberto, contra o próprio texto ("se fecha sozinho").
+    expect(vi.mocked(fecharAvisoDaAssinatura)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(fecharAvisoDaAssinatura).mock.calls[0]?.[1]).toBe(ORG);
+  });
+
+  it("renovação que falha NÃO fecha o aviso", async () => {
+    const fake = new FakeSupabase();
+    fake.linha = linhaVencendoEm(UMA_HORA);
+    globalThis.fetch = vi.fn(async () => {
+      throw new TypeError("fetch failed");
+    }) as never;
+
+    await lerLoginCodexRenovandoSeProxima({ admin: fake as never, orgId: ORG });
+
+    expect(vi.mocked(fecharAvisoDaAssinatura)).not.toHaveBeenCalled();
   });
 });

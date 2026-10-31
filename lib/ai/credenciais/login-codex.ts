@@ -39,6 +39,7 @@ import {
   renovarSeProxima,
 } from "@/lib/ai/pontos/renovacao-da-assinatura";
 import { logger } from "@/lib/logger";
+import { fecharAvisoDaAssinatura } from "@/lib/ai/credenciais/aviso-da-assinatura";
 import { renovarPorRefreshToken, type TokensDoCodex } from "@/lib/ai/pontos/pkce-da-assinatura";
 import type { createAdminClient } from "@/lib/supabase/admin";
 
@@ -350,6 +351,12 @@ export async function renovarComTravaDeBanco(p: {
     // indistinguível de "a OpenAI recusou o token".
     return { ok: false, motivo: "falha", motivoDetalhe: "credential_nao_gravada" };
   }
+
+  // O login voltou: o aviso único da Central fecha aqui (#3371, fatia 2). É o
+  // ponto por onde passam o botão de revalidar, a renovação automática e a do
+  // turno — sem isto, um timeout passageiro deixava o aviso aberto para sempre
+  // depois que a renovação seguinte deu certo. Best-effort: a rotação já gravou.
+  await fecharAvisoDaAssinatura(p.admin, p.orgId).catch(() => "falhou");
 
   return { ok: true, tokens: renovados };
 }
