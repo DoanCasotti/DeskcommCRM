@@ -278,8 +278,8 @@ jobs:
     # superado é pulado ANTES de pedir vaga; o que já está na vaga é cancelado
     # pelo grupo. Um cobre o outro, e é por isso que os dois ficam.
     concurrency:
-      group: ${{ github.workflow }}-e2e-parte${{ matrix.parte }}-${{ github.event.pull_request.number || github.ref }}${{ github.event_name == 'pull_request' && github.run_attempt != '1' && format('-reentrada-{0}', github.event.pull_request.head.sha) || '' }}
-      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+      group: ${{ github.workflow }}-e2e-parte${{ matrix.parte }}-${{ github.event.pull_request.number || github.ref }}${{ github.event_name == 'pull_request' && github.run_attempt != '1' && format('-reentrada-{0}', github.event.pull_request.head.sha) || '' }}${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.run_attempt != '1' && format('-reentrada-{0}', github.sha) || '' }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
     strategy:
       # Sem fail-fast: se a parte 1 quebrar, ainda quero saber se a 2 também.
       # Com ele ligado, o primeiro vermelho esconde o outro e o conserto vira
@@ -944,6 +944,7 @@ jobs:
         agenda-kit-visual.spec.ts
         agenda-conectar-google.spec.ts
         agenda-painel-cabe-na-tela.spec.ts
+        celular-cabe-na-tela.spec.ts
         agenda-ver-na-agenda.spec.ts
         agenda-escopo-da-organizacao.spec.ts
         aba-e-cookie-divergentes.spec.ts
@@ -1456,7 +1457,6 @@ jobs:
         agenda-google-meet.spec.ts
         agenda-presenca-recuperacao.spec.ts
         app-no-celular.spec.ts
-        celular-cabe-na-tela.spec.ts
         cobranca-desligada.spec.ts
         cobranca-link-pelo-dono.spec.ts
         cobranca-suspensao-e-limites.spec.ts

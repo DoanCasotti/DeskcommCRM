@@ -233,9 +233,8 @@ import {
   previaPedeCorrecaoDoTurnoMudo,
   tetoDePassosAtingido,
 } from './desfecho-da-previa';
-// #3281 — propor ≠ enviar: a prévia assistida continua até propor um texto
-// quando o turno calou por uma razão do ENVIO automático (regra de silêncio do
-// prompt, opt-out, janela, ritmo). A decisão é pura e mora no módulo.
+// #3281 — o clique humano pode ocupar a recuperação única do silêncio inicial.
+// Veto, falha e oferta existente não autorizam outra geração.
 import { INSTRUCAO_DO_PEDIDO_HUMANO, previaContinuaAtePropor } from './proposta-sob-pedido';
 import { criarTravaDeDuplicata } from './near-dup';
 import { vetoReason } from '@/lib/leads/veto-activity';
@@ -386,7 +385,11 @@ export const AGENT_TOOL_DEFS = {
           .string()
           .nullable()
           .optional()
-          .describe('próxima ação concreta combinada com o lead'),
+          .describe(
+            'próxima ação concreta combinada com o lead (o que e até quando; ex.: "enviar o ' +
+              'orçamento até sexta"). "Responder o cliente" não é próxima ação: é o que você já ' +
+              'faz a cada mensagem. Sem ação concreta, não envie este campo.',
+          ),
         reason: z.string().optional().describe('evidência curta do avanço (vai ao audit do CRM)'),
       })
       .passthrough(),
@@ -5474,20 +5477,35 @@ async function executarTurnoDoAgente(
     //
     // Só o rascunho ASSISTIDO: a prévia de TESTE (sandbox) mostra o que o agente
     // produziu e uma segunda chamada esconderia o defeito que ela existe para
-    // revelar. Só com texto solto: silêncio sem texto é decisão já tomada, e
-    // pedir de novo pagaria uma chamada de modelo para ouvir a mesma coisa.
+    // revelar. Texto solto conserva a instrução canônica; só o silêncio inicial
+    // sem oferta nem impedimento pode usar a mesma vaga para o pedido humano.
     let correcaoTruncou = false;
     // A correção também pode gastar o teto dela (3 passos) só em consultas: na
     // prévia isso é a mesma falha do teto da primeira chamada, não decisão.
     let tetoNaCorrecao = false;
-    // #3281 — sinais do passo do PEDIDO HUMANO (abaixo). Declarados aqui para o
-    // desfecho da prévia lê-los junto dos da correção: proposta truncada ou no
-    // teto é FALHA da geração, nunca decisão de calar.
-    let propostaTruncou = false;
-    let tetoNaProposta = false;
+    // #3281 — só o primeiro silêncio sem oferta nem impedimento recebe o
+    // pedido humano. Ele ocupa a MESMA recuperação abaixo: nunca há terceira
+    // chamada depois de uma correção que também decidiu ficar em silêncio.
+    const pedidoHumano =
+      preview?.kind === 'assisted' &&
+      previaContinuaAtePropor({
+        candidatos: preview.result.candidates.length,
+        propostas: preview.result.proposals.length,
+        impedimentos: preview.result.impediments.map((i) => i.code),
+        tentativasDeEnvio,
+        textoEscrito: turn.result.text,
+        inboundsSemResposta: inboundsNaoRespondidos(preview.context.context.messages).length,
+        finishReason: turn.result.finishReason,
+        saidaTruncada,
+        tetoDePassosAtingido: tetoDePassosAtingido({
+          passosUsados: turn.result.steps?.length ?? 0,
+          maxSteps,
+          finishReason: turn.result.finishReason,
+        }),
+      });
     const correcaoDoTurnoMudoPedida =
       preview?.kind === 'assisted'
-        ? previaPedeCorrecaoDoTurnoMudo({
+        ? pedidoHumano || previaPedeCorrecaoDoTurnoMudo({
             textoEscrito: turn.result.text,
             candidatos: preview.result.candidates.length,
             tentativasDeEnvio,
@@ -5508,7 +5526,10 @@ async function executarTurnoDoAgente(
         job_id: job?.id ?? null,
         previa: preview?.kind ?? null,
       });
-      const pedidoDeCorrecao: ModelMessage = { role: 'user', content: CORRECAO_DO_TURNO_MUDO };
+      const pedidoDeCorrecao: ModelMessage = {
+        role: 'user',
+        content: pedidoHumano ? INSTRUCAO_DO_PEDIDO_HUMANO : CORRECAO_DO_TURNO_MUDO,
+      };
       const correcao = await runModelCall(
         pool,
         deps.llmCfg,
@@ -5522,6 +5543,9 @@ async function executarTurnoDoAgente(
           messages: [...openingMessages, ...turn.result.responseMessages, pedidoDeCorrecao],
           tools,
           maxSteps: Math.min(maxSteps, 3),
+          ...(preview?.kind === 'assisted'
+            ? { pararQuando: () => preview.result.candidates.length > 0 }
+            : {}),
           ...(agentConfig !== null
             ? {
                 model: agentConfig.model,
@@ -5548,90 +5572,6 @@ async function executarTurnoDoAgente(
         throw new Error('envio marcado como failed pelo CRM — run re-tentado pela fila');
       }
       runLog.info('correção do turno mudo concluída', { messages_sent: outcomes.length });
-    }
-
-    // ── PROPOSTA SOB PEDIDO (#3281) — propor ≠ enviar ────────────────────────
-    // O turno automático calou (regra de silêncio do prompt, opt-out, janela,
-    // ritmo) e a prévia herdava o silêncio: o operador clicava em "Sugerir
-    // resposta" e recebia o MESMO vazio que o agente escolheu sozinho. No turno
-    // automático o silêncio é decisão do agente; no clique de uma pessoa a
-    // decisão já foi tomada por ela — ela quer um texto.
-    //
-    // UM passo a mais, com o PEDIDO HUMANO na conversa, SÓ no rascunho
-    // assistido e SÓ quando a parada foi do ENVIO (não da geração, não de
-    // guardrail de conteúdo) e havendo inbound sem resposta. A régua está em
-    // `previaContinuaAtePropor` — allowlist explícita, código desconhecido
-    // mantém a prévia vazia.
-    //
-    // O que este passo NÃO faz: não envia nada (o `send_message` da prévia para
-    // em candidato, e o envio real só existe no clique), não pula guardrail
-    // nenhum (a cadeia roda no `send_message` do modelo e DE NOVO na aprovação,
-    // `approved-reply.ts`) e não toca o turno automático, que segue calando.
-    const previaAssistida = preview?.kind === 'assisted' ? preview : null;
-    if (
-      previaAssistida !== null &&
-      previaContinuaAtePropor({
-        candidatos: previaAssistida.result.candidates.length,
-        impedimentos: previaAssistida.result.impediments.map((i) => i.code),
-        inboundsSemResposta: inboundsNaoRespondidos(previaAssistida.context.context.messages).length,
-        saidaTruncada: saidaTruncada || correcaoTruncou,
-        tetoDePassosAtingido:
-          tetoDePassosAtingido({
-            passosUsados: turn.result.steps?.length ?? 0,
-            maxSteps,
-            finishReason: turn.result.finishReason,
-          }) || tetoNaCorrecao,
-      })
-    ) {
-      runLog.info('prévia assistida: turno calou como o automático — pedindo UM texto a pedido humano', {
-        job_id: job?.id ?? null,
-        impedimentos: previaAssistida.result.impediments.map((i) => i.code).slice(0, 4),
-      });
-      const pedidoHumano: ModelMessage = { role: 'user', content: INSTRUCAO_DO_PEDIDO_HUMANO };
-      const proposta = await runModelCall(
-        pool,
-        deps.llmCfg,
-        {
-          tenantId,
-          leadId: leadId || null,
-          jobId: job?.id,
-          agentId: agentConfig?.agentId ?? null,
-          purpose: 'agent_preview',
-          system,
-          messages: [...openingMessages, ...mensagensDoTurno, pedidoHumano],
-          tools,
-          maxSteps: Math.min(maxSteps, 3),
-          // A régua do passo é a MESMA do rascunho: para na primeira resposta
-          // aceita. Sem candidato, o desfecho terminal (abaixo) diz por quê.
-          pararQuando: () => previaAssistida.result.candidates.length > 0,
-          ...(agentConfig !== null
-            ? {
-                model: agentConfig.model,
-                llmOverride: {
-                  provider: agentConfig.provider,
-                  credentialId: agentConfig.credentialId,
-                },
-              }
-            : {}),
-        },
-        { registry: deps.registry, log: runLog },
-      );
-      // Sinal de FALHA do passo, mesma régua da correção: truncado ou no teto é
-      // defeito da geração, e o desfecho tem de dizer isso — nunca "decidiu".
-      propostaTruncou = proposta.result.finishReason === 'length';
-      tetoNaProposta = tetoDePassosAtingido({
-        passosUsados: proposta.result.steps?.length ?? 0,
-        maxSteps: Math.min(maxSteps, 3),
-        finishReason: proposta.result.finishReason,
-      });
-      mensagensDoTurno = [...mensagensDoTurno, pedidoHumano, ...proposta.result.responseMessages];
-      if (runError !== null) throw runError;
-      if (outcomes.some((o) => o.kind === 'failed')) {
-        throw new Error('envio marcado como failed pelo CRM — run re-tentado pela fila');
-      }
-      runLog.info('prévia assistida: passo do pedido humano concluído', {
-        candidatos: previaAssistida.result.candidates.length,
-      });
     }
 
     // FALHA TERMINAL VISÍVEL — só com sinal de FALHA, nunca por silêncio
@@ -5822,17 +5762,13 @@ async function executarTurnoDoAgente(
         impedimentos: p.result.impediments.length,
         // A correção que termina truncada ou no teto dela é FALHA, não decisão
         // — a produção trata o mesmo sinal como `correction_truncated_failed`.
-        // #3281: idem para o passo do pedido humano — proposta truncada/no teto
-        // é defeito da geração, nunca "o agente decidiu não responder".
-        saidaTruncada: saidaTruncada || correcaoTruncou || propostaTruncou,
+        saidaTruncada: saidaTruncada || correcaoTruncou,
         tetoDePassosAtingido:
           tetoDePassosAtingido({
             passosUsados: turn.result.steps?.length ?? 0,
             maxSteps,
             finishReason: turn.result.finishReason,
-          }) ||
-          tetoNaCorrecao ||
-          tetoNaProposta,
+          }) || tetoNaCorrecao,
       });
       if (desfecho !== null) p.result.impediments.push(desfecho);
     };

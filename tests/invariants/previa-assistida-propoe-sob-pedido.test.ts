@@ -1,11 +1,15 @@
 import { randomUUID } from "node:crypto";
 
+import type { FinishReason } from "ai";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { generateReplyDraft } from "@/lib/agent-engine/agent/reply-drafts";
 import { loadAgentVersionConfig } from "@/lib/agent-engine/agent/agent-config";
-import { createInboundTurnHandler } from "@/lib/agent-engine/agent/inbound-turn";
+import { createInboundTurnHandler, type InboundTurnDeps } from "@/lib/agent-engine/agent/inbound-turn";
+import { crmEdgeConfigFromEnv } from "@/lib/agent-engine/edge/crm/mcp-client";
+import { llmEdgeConfigFromEnv, LlmBudgetExceededError } from "@/lib/agent-engine/edge/llm/run-model-call";
+import { CORRECAO_DO_TURNO_MUDO } from "@/lib/agent-engine/agent/turno-mudo";
 import { createFakeRegistry } from "@/lib/agent-engine/edge/llm/providers";
 import { createLogger } from "@/lib/agent-engine/obs/logger";
 import { loadEnv } from "@/lib/agent-engine/env";
@@ -35,10 +39,9 @@ import { replyFixture } from "../support/autonomia-fixture";
  * 3. CONTROLE "nada a responder": conversa já respondida → prévia continua
  *    vazia, com `no_candidate`.
  *
- * ⚠️ O par da doutrina (`docs/doctrine/prova-em-par.md`): a ponta 1 é o
- * caminho do rascunho (`generateReplyDraft` até a linha de `ai_reply_drafts`),
- * a ponta 2 é o handler de `inbound_turn` de verdade. As duas usam o MESMO
- * dublê e o MESMO texto — quem decide é o motor, não o modelo.
+ * Estes são controles de backend/SQL com modelo roteirizado, não a prova de
+ * UI nem o par completo de `docs/doctrine/prova-em-par.md`. O botão, a revisão
+ * e a aprovação têm jornada própria no harness de autonomia assistida.
  */
 
 const container = process.env.TEST_DB_CONTAINER;
@@ -54,6 +57,7 @@ const pool = new pg.Pool({
   connectionString: `postgresql://postgres:postgres@127.0.0.1:${PORT}/postgres`,
   max: 4,
 });
+const orgsCriadas: string[] = [];
 
 /**
  * A marca da instrução do pedido humano — o que o dublê escuta.
@@ -75,9 +79,9 @@ const USO = {
   inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
   outputTokens: { total: 1, text: 1, reasoning: 0 },
 };
-const calado = () => ({
+const calado = (finishReason: FinishReason = "stop") => ({
   content: [{ type: "text" as const, text: "" }],
-  finishReason: { unified: "stop" as const, raw: undefined },
+  finishReason: { unified: finishReason, raw: undefined },
   usage: USO,
   warnings: [],
 });
@@ -105,31 +109,45 @@ const enviar = (body: string) => ({
  * O agente do cenário: com a regra de silêncio do prompt, ele CALA enquanto
  * ninguém disser que uma pessoa pediu o texto. É o dublê da issue.
  */
-function modelo(prompts: string[]) {
-  return createFakeRegistry((async (options: { prompt: unknown; tools?: unknown[] }) => {
+interface CenarioDoModelo {
+  textoSolto?: boolean;
+  antesDoSilencio?: () => Promise<void>;
+  chamadasComFerramentas?: string[];
+  finishReason?: FinishReason;
+}
+
+function modelo(prompts: string[], cenario: CenarioDoModelo) {
+  return createFakeRegistry(async (options) => {
     const prompt = JSON.stringify(options.prompt);
     prompts.push(prompt);
     if (!options.tools?.length) return texto(FECHAMENTO);
-    return prompt.includes(MARCA_DO_PEDIDO) ? enviar(TEXTO_PROPOSTO) : calado();
-  }) as never);
+    cenario.chamadasComFerramentas?.push(prompt);
+    if (prompt.includes(MARCA_DO_PEDIDO)) return enviar(TEXTO_PROPOSTO);
+    if (cenario.antesDoSilencio) await cenario.antesDoSilencio();
+    const correcao = JSON.stringify(CORRECAO_DO_TURNO_MUDO).slice(1, -1);
+    return cenario.textoSolto && !prompt.includes(correcao)
+      ? texto(TEXTO_PROPOSTO) : calado(cenario.finishReason);
+  });
 }
 
-function deps(prompts: string[]) {
-  const knobs = turnKnobsFromEnv(
-    loadEnv({
+function deps(prompts: string[], cenario: CenarioDoModelo = {}): InboundTurnDeps {
+  const ambiente = loadEnv({
       NODE_ENV: "test",
       SUPABASE_DB_URL: "postgresql://postgres:postgres@localhost/postgres",
       NEXT_PUBLIC_SUPABASE_URL: "http://127.0.0.1:1",
       SUPABASE_SERVICE_ROLE_KEY: "test-key",
-    }),
-  );
+    });
+  const knobs = turnKnobsFromEnv(ambiente);
   delete knobs.stageClassifier;
   delete knobs.jailbreak;
   delete knobs.promiseSemantic;
   delete knobs.compaction;
   return {
-    crmCfg: { supabase: {} as never },
-    llmCfg: { anthropicApiKey: "***" } as never,
+    crmCfg: crmEdgeConfigFromEnv({
+      SUPABASE_URL: "http://127.0.0.1:1",
+      SUPABASE_SERVICE_ROLE_KEY: "test-key",
+    }),
+    llmCfg: { ...llmEdgeConfigFromEnv(ambiente), anthropicApiKey: "test-key" },
     knobs,
     log: createLogger(),
     // Relógio REAL: as mensagens do cenário nascem com `now()`. Fixar o relógio
@@ -137,7 +155,7 @@ function deps(prompts: string[]) {
     // mascararia o que este teste mede.
     clock: () => new Date(),
     embed: async () => ({ embedding: Array(1536).fill(0.1), promptTokens: 0, model: "stub" }),
-    registry: modelo(prompts),
+    registry: modelo(prompts, cenario),
   };
 }
 
@@ -179,6 +197,7 @@ async function ultimoRascunho(org: string, conversation: string) {
  */
 async function fixtureAutomática() {
   const f = await replyFixture(pool);
+  orgsCriadas.push(f.org);
   await pool.query(`update ai_agents set operation_mode='automatic' where id=$1`, [f.agent]);
   return f;
 }
@@ -187,6 +206,7 @@ async function fixtureAutomática() {
 async function turnoAutomatico(
   f: { org: string; contact: string; conversation: string; channel: string },
   prompts: string[],
+  chamadasComFerramentas: string[],
 ) {
   const enviados: string[] = [];
   const msg = randomUUID();
@@ -208,10 +228,18 @@ async function turnoAutomatico(
     },
     maxAttempts: 1,
   });
-  const [claimed] = await queue.claimJobs(pool, { workerId: "pedido", maxConcurrency: 1 });
+  // Só a aquisição é controlada pela fixture. Não tomar um job de outra
+  // organização da suíte; enqueue, handler, regras e conclusão continuam reais.
+  const { rows: claimedRows } = await pool.query<queue.JobRow>(
+    `update job_queue j set status='running',locked_by='pedido',locked_at=clock_timestamp(),
+       attempts=attempts+1 where organization_id=$1 and id=$2 and status='pending'
+     returning j.*,j.locked_at::text claim_acquired_at`,
+    [f.org, job.id],
+  );
+  const claimed = claimedRows[0];
   expect(claimed?.id).toBe(job.id);
   const handler = createInboundTurnHandler({
-    ...deps(prompts),
+    ...deps(prompts, { chamadasComFerramentas }),
     channel: () =>
       ({
         channel: "captura",
@@ -223,14 +251,15 @@ async function turnoAutomatico(
             messageId: `m${enviados.length}`,
           };
         },
-        sessionHealth: async () => ({ healthy: true, status: "WORKING" }),
-        capabilities: () => ({ freeform: true, media: true, audio: true }),
-        costPerMessage: () => ({ currency: "BRL", cents: 0 }),
-      }) as never,
+        sessionHealth: async () => ({ healthy: true, status: "WORKING", since: null }),
+        capabilities: () => ({ freeformAnytime: true, serviceWindowHours: null }),
+        costPerMessage: () => ({ perMessageUsdCents: 0, model: "flat" }),
+      }),
     sleep: async () => {},
-  } as never);
-  await handler(claimed!, pool, { workerId: "pedido" });
-  await queue.completeJob(pool, claimed!.id, "pedido");
+  });
+  if (!claimed) throw new Error("O job próprio do cenário não foi adquirido.");
+  await handler(claimed, pool, { workerId: "pedido" });
+  await queue.completeJob(pool, claimed.id, "pedido");
   return enviados;
 }
 
@@ -247,17 +276,26 @@ beforeAll(async () => {
   );
 });
 
-afterAll(() => pool.end());
+afterAll(async () => {
+  try {
+    if (orgsCriadas.length) await pool.query(
+      "delete from organizations where id=any($1::uuid[])", [orgsCriadas],
+    );
+  } finally {
+    await pool.end();
+  }
+});
 
 describe("Sugerir resposta propõe quando o agente automático calaria (#3281)", () => {
   it("⛔ a rajada de uma PESSOA vira proposta de texto no rascunho, e o automático segue calado", async () => {
     const f = await fixtureAutomática();
     await rajadaDaPessoa(f);
-    const agent = (await loadAgentVersionConfig(pool, f.org, f.agent, f.version))!;
+    const agent = await loadAgentVersionConfig(pool, f.org, f.agent, f.version);
+    if (!agent) throw new Error("O agente publicado do cenário não foi carregado.");
 
     // ── ponta 1: o rascunho do operador ────────────────────────────────────
     const promptsRascunho: string[] = [];
-    await generateReplyDraft(pool, deps(promptsRascunho) as never, {
+    await generateReplyDraft(pool, deps(promptsRascunho), {
       organizationId: f.org,
       conversationId: f.conversation,
       contactId: f.contact,
@@ -282,7 +320,11 @@ describe("Sugerir resposta propõe quando o agente automático calaria (#3281)",
 
     // ── ponta 2 (controle): o MESMO cenário, pelo turno automático ─────────
     const promptsTurno: string[] = [];
-    const enviados = await turnoAutomatico(f, promptsTurno);
+    const chamadasAutomaticas: string[] = [];
+    const enviados = await turnoAutomatico(f, promptsTurno, chamadasAutomaticas);
+    // O controle precisa alcançar o modelo: primeiro turno + uma correção
+    // canônica. Silêncio por early-return não prova preservação do automático.
+    expect(chamadasAutomaticas).toHaveLength(2);
     expect(enviados, "o turno automático passou a falar sozinho").toEqual([]);
     expect(
       promptsTurno.some((p) => p.includes(MARCA_DO_PEDIDO)),
@@ -305,10 +347,11 @@ describe("Sugerir resposta propõe quando o agente automático calaria (#3281)",
        values ($1,$2,$3,$4,$5,'text','outbound','sent','Bom dia! Como posso ajudar?','crm',now(),now())`,
       [randomUUID(), f.org, f.conversation, f.channel, f.contact],
     );
-    const agent = (await loadAgentVersionConfig(pool, f.org, f.agent, f.version))!;
+    const agent = await loadAgentVersionConfig(pool, f.org, f.agent, f.version);
+    if (!agent) throw new Error("O agente publicado do cenário não foi carregado.");
 
     const prompts: string[] = [];
-    await generateReplyDraft(pool, deps(prompts) as never, {
+    await generateReplyDraft(pool, deps(prompts), {
       organizationId: f.org,
       conversationId: f.conversation,
       contactId: f.contact,
@@ -327,4 +370,97 @@ describe("Sugerir resposta propõe quando o agente automático calaria (#3281)",
     expect(rascunho?.status).toBe("failed");
     expect(rascunho?.error_code).toBe("no_candidate");
   });
+
+  it("texto solto usa uma correção canônica e não ganha terceira chamada", async () => {
+    const f = await fixtureAutomática();
+    await rajadaDaPessoa(f);
+    const agent = await loadAgentVersionConfig(pool, f.org, f.agent, f.version);
+    if (!agent) throw new Error("O agente publicado do cenário não foi carregado.");
+    const prompts: string[] = [];
+    const chamadas: string[] = [];
+    await generateReplyDraft(pool, deps(prompts, {
+      textoSolto: true,
+      chamadasComFerramentas: chamadas,
+    }), {
+      organizationId: f.org,
+      conversationId: f.conversation,
+      contactId: f.contact,
+      channelId: f.channel,
+      agent,
+    });
+    expect(chamadas).toHaveLength(2);
+    expect(prompts.some((p) => p.includes(MARCA_DO_PEDIDO))).toBe(false);
+    expect(await ultimoRascunho(f.org, f.conversation)).toMatchObject({
+      status: "failed", original_body: "", error_code: "no_candidate",
+    });
+  });
+
+  it.each<FinishReason>(["content-filter", "error", "other"])(
+    "término vazio %s não recebe pedido humano nem outra chamada com ferramentas",
+    async (finishReason) => {
+      const f = await fixtureAutomática();
+      await rajadaDaPessoa(f);
+      const agent = await loadAgentVersionConfig(pool, f.org, f.agent, f.version);
+      if (!agent) throw new Error("O agente publicado do cenário não foi carregado.");
+      const prompts: string[] = [];
+      const chamadas: string[] = [];
+      await generateReplyDraft(pool, deps(prompts, {
+        finishReason,
+        chamadasComFerramentas: chamadas,
+      }), {
+        organizationId: f.org,
+        conversationId: f.conversation,
+        contactId: f.contact,
+        channelId: f.channel,
+        agent,
+      });
+      expect(chamadas).toHaveLength(1);
+      expect(prompts.some((p) => p.includes(MARCA_DO_PEDIDO))).toBe(false);
+      expect(await ultimoRascunho(f.org, f.conversation)).toMatchObject({
+        status: "failed", original_body: "", error_code: "no_candidate",
+      });
+    },
+  );
+
+  it("orçamento esgotado antes da recuperação impede a segunda ida ao provedor", async () => {
+    const f = await fixtureAutomática();
+    await rajadaDaPessoa(f);
+    const agent = await loadAgentVersionConfig(pool, f.org, f.agent, f.version);
+    if (!agent) throw new Error("O agente publicado do cenário não foi carregado.");
+    const prompts: string[] = [];
+    const chamadas: string[] = [];
+    await expect(generateReplyDraft(pool, deps(prompts, {
+      chamadasComFerramentas: chamadas,
+      antesDoSilencio: async () => {
+        // Estado sintético no banco próprio: a primeira geração já foi admitida.
+        // A configuração do orçamento muda antes de pedir a recuperação.
+        await pool.query(`insert into ai_budgets
+          (organization_id,monthly_limit_cents,enforcement_mode,enforcement_effective_at)
+          values($1,1000,'bloquear',now()-interval '1 day')
+          on conflict(organization_id) do update set monthly_limit_cents=1000,
+            enforcement_mode='bloquear',enforcement_effective_at=excluded.enforcement_effective_at`,
+          [f.org]);
+        await pool.query(`insert into llm_calls
+          (organization_id,purpose,provider,model,cost_cents,status)
+          values($1,'fixture_budget_control','anthropic','test-model',2000,'ok')`, [f.org]);
+      },
+    }), {
+      organizationId: f.org,
+      conversationId: f.conversation,
+      contactId: f.contact,
+      channelId: f.channel,
+      agent,
+    })).rejects.toThrow(LlmBudgetExceededError);
+    expect(chamadas).toHaveLength(1);
+    expect(prompts.some((p) => p.includes(MARCA_DO_PEDIDO))).toBe(false);
+    const refusal = await pool.query<{ n: number }>(
+      "select count(*)::int n from llm_calls where organization_id=$1 and purpose='agent_preview' and error_code='orcamento_esgotado'",
+      [f.org],
+    );
+    expect(refusal.rows).toEqual([{ n: 1 }]);
+    expect(await ultimoRascunho(f.org, f.conversation)).toMatchObject({
+      status: "failed", error_code: "generation_failed",
+    });
+  });
+
 });
