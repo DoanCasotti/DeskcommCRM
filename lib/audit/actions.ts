@@ -1288,6 +1288,7 @@ export const AUDIT_ACTIONS = [
   // cliente precisa encontrar o ato administrativo que abriu a porta, e não só
   // as gravações que ela deixou passar.
   "crm.telefone_de_ficha_vazia_alterado",
+  "crm.nome_informado_alterado",
   // O admin da plataforma exportou o INVENTÁRIO das instalações em CSV (#2777).
   // É leitura, mas é leitura EM ESCALA DE PLATAFORMA: grava quem, quando, QUANTO
   // saiu, se o teto cortou e QUE filtros valiam — nunca o texto da busca, que é
