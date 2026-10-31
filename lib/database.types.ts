@@ -15810,6 +15810,10 @@ export type Database = {
         Args: { p_conversation_id: string; p_organization_id: string };
         Returns: number;
       };
+      fn_passar_conversas_do_contato: {
+        Args: { p_contact: string; p_dono: string; p_org: string };
+        Returns: number;
+      };
       fn_pgrst_recusar_replay_do_gateway: { Args: Record<PropertyKey, never>; Returns: undefined };
       fn_podar_fila_de_jobs: {
         Args: { p_limite?: number; p_retencao_dias?: number };

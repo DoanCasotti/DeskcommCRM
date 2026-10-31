@@ -4,7 +4,7 @@
  * A passagem SDR → Closer move o negócio, o cliente e a conversa. O negócio já
  * era da ação; a conversa usa `fn_conversation_assign` sem mudança nenhuma; a
  * carteira precisava de uma porta e ela é a MESMA (`fn_definir_carteira_do_cliente`,
- * migration 0799 / apêndice do baseline) — com a regra que faltava: **quem não
+ * migration 9057 / apêndice do baseline) — com a regra que faltava: **quem não
  * tem ator é o sistema, e o sistema se identifica pela origem `automacao`.**
  *
  * Este arquivo prova as quatro pontas dessa bicondicional, porque errar
@@ -20,9 +20,16 @@
  *      continuam recusados (`carteira_dono_invalido`), e contato de outra
  *      organização continua não sendo alcançável.
  *
- * Organização própria (namespace `ffffffff-`) para não encostar em `GOV_ORG`
- * nem na `eeeeeeee-` da irmã `carteira-do-cliente.test.ts`, que rodam em
- * paralelo no mesmo banco.
+ * 5. a passagem das CONVERSAS (`fn_passar_conversas_do_contato`, 9057): só as
+ *    abertas que estão com OUTRA pessoa, a contagem é a das linhas que a
+ *    atribuição gravou, é tudo ou nada, e só o service_role a executa. Com a
+ *    carteira junto (#3642), toda conversa aberta com gente vai para o novo dono.
+ *
+ * Organização própria (namespace `35653565-`) para não encostar em `GOV_ORG`,
+ * na `eeeeeeee-` da irmã `carteira-do-cliente.test.ts` nem na `ffffffff-` de
+ * `o-numero-segue-o-vendedor`, `gov-5-visibility-scope` e `webhooks-rls`, que
+ * rodam em paralelo no mesmo banco (esta suíte nasceu na `ffffffff-` e o
+ * `afterAll` dela apagava a organização das outras).
  */
 import { randomUUID } from "node:crypto";
 
@@ -30,17 +37,25 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { lastLine, sql } from "./gov-helpers";
 
-const ORG = "ffffffff-0000-4000-8000-000000000001";
-const OUTRA_ORG = "ffffffff-0000-4000-8000-000000000002";
-const CLOSER = "ffffffff-1111-4000-8000-000000000001"; // agent: o novo dono
-const SDR = "ffffffff-1111-4000-8000-000000000002"; // agent: o dono de antes
-const GESTOR = "ffffffff-1111-4000-8000-000000000003"; // manager, com ator
-const SOMENTE_LEITURA = "ffffffff-1111-4000-8000-000000000004"; // viewer
-const SAIU_DA_EQUIPE = "ffffffff-1111-4000-8000-000000000005"; // agent revogado
-const PIPELINE = "ffffffff-5555-4000-8000-000000000001";
-const ETAPA = "ffffffff-5555-4000-8000-000000000002";
-const CONTATO = "ffffffff-3333-4000-8000-000000000001";
-const CONTATO_DA_OUTRA_ORG = "ffffffff-3333-4000-8000-000000000002";
+const ORG = "35653565-0000-4000-8000-000000000001";
+const OUTRA_ORG = "35653565-0000-4000-8000-000000000002";
+const CLOSER = "35653565-1111-4000-8000-000000000001"; // agent: o novo dono
+const SDR = "35653565-1111-4000-8000-000000000002"; // agent: o dono de antes
+const GESTOR = "35653565-1111-4000-8000-000000000003"; // manager, com ator
+const SOMENTE_LEITURA = "35653565-1111-4000-8000-000000000004"; // viewer
+const SAIU_DA_EQUIPE = "35653565-1111-4000-8000-000000000005"; // agent revogado
+const PIPELINE = "35653565-5555-4000-8000-000000000001";
+const ETAPA = "35653565-5555-4000-8000-000000000002";
+const CONTATO = "35653565-3333-4000-8000-000000000001";
+const CONTATO_DA_OUTRA_ORG = "35653565-3333-4000-8000-000000000002";
+const CONTATO_DAS_CONVERSAS = "35653565-3333-4000-8000-000000000003";
+// Um número por conversa: a 0027 permite UMA conversa por contato e número.
+const NUMEROS = [1, 2, 3, 4, 5].map((n) => `35653565-2222-4000-8000-00000000000${n}`);
+const CONVERSA_DO_SDR = "35653565-4444-4000-8000-000000000001";
+const CONVERSA_DO_GESTOR = "35653565-4444-4000-8000-000000000002";
+const CONVERSA_ENCERRADA = "35653565-4444-4000-8000-000000000003";
+const CONVERSA_SEM_DONO = "35653565-4444-4000-8000-000000000004";
+const CONVERSA_DO_CLOSER = "35653565-4444-4000-8000-000000000005";
 
 /**
  * Chama a RPC como o MOTOR chama: `service_role`, sem ator humano, com a
@@ -94,6 +109,44 @@ function semCarteira(): string {
   return "NULL|NULL|false";
 }
 
+/** As cinco conversas do contato, do jeito que cada caso começa. */
+function conversasDoComeco(): void {
+  sql(`
+    delete from public.conversations where contact_id = '${CONTATO_DAS_CONVERSAS}';
+    insert into public.conversations
+      (id, organization_id, contact_id, channel_session_id, status, assigned_to_user_id)
+    values
+      ('${CONVERSA_DO_SDR}',    '${ORG}', '${CONTATO_DAS_CONVERSAS}', '${NUMEROS[0]}', 'claimed', '${SDR}'),
+      ('${CONVERSA_DO_GESTOR}', '${ORG}', '${CONTATO_DAS_CONVERSAS}', '${NUMEROS[1]}', 'claimed', '${GESTOR}'),
+      ('${CONVERSA_ENCERRADA}', '${ORG}', '${CONTATO_DAS_CONVERSAS}', '${NUMEROS[2]}', 'closed',  '${SDR}'),
+      ('${CONVERSA_SEM_DONO}',  '${ORG}', '${CONTATO_DAS_CONVERSAS}', '${NUMEROS[3]}', 'open',    null),
+      ('${CONVERSA_DO_CLOSER}', '${ORG}', '${CONTATO_DAS_CONVERSAS}', '${NUMEROS[4]}', 'claimed', '${CLOSER}');
+  `);
+}
+
+/** `dono|status` de cada conversa, na ordem das constantes. */
+function retratoDasConversas(): string[] {
+  return [CONVERSA_DO_SDR, CONVERSA_DO_GESTOR, CONVERSA_ENCERRADA, CONVERSA_SEM_DONO, CONVERSA_DO_CLOSER].map((id) =>
+    lastLine(
+      sql(`select coalesce(assigned_to_user_id::text, 'NULL') || '|' || status
+             from public.conversations where id = '${id}';`),
+    ),
+  );
+}
+
+function passaConversas(dono: string): string {
+  try {
+    return lastLine(
+      sql(`
+        set role service_role;
+        select public.fn_passar_conversas_do_contato('${ORG}', '${CONTATO_DAS_CONVERSAS}', '${dono}');
+      `),
+    );
+  } catch (err) {
+    return ((err as { stderr?: string }).stderr ?? "").replace(/\s+/g, " ");
+  }
+}
+
 describe("carteira do cliente pela origem `automacao` (#3514)", () => {
   beforeAll(() => {
     sql(`
@@ -122,7 +175,12 @@ describe("carteira do cliente pela origem `automacao` (#3514)", () => {
         where organization_id = '${ORG}' and user_id = '${GESTOR}';
       update public.user_organizations set role = 'viewer', revoked_at = null
         where organization_id = '${ORG}' and user_id = '${SOMENTE_LEITURA}';
+      insert into public.channel_sessions
+        (id, organization_id, provider, waha_session_name, webhook_secret_encrypted, status, display_name)
+      values ${NUMEROS.map((id, i) => `('${id}', '${ORG}', 'waha', 'passagem-inv-${i}', '\\x00'::bytea, 'WORKING', 'Passagem ${i}')`).join(",\n")}
+      on conflict (id) do nothing;
       insert into public.contacts (id, organization_id, display_name) values
+        ('${CONTATO_DAS_CONVERSAS}', '${ORG}', 'Contato das Conversas'),
         ('${CONTATO}', '${ORG}', 'Contato da Passagem'),
         ('${CONTATO_DA_OUTRA_ORG}', '${OUTRA_ORG}', 'Contato de Outra Org')
       on conflict (id) do nothing;
@@ -138,6 +196,8 @@ describe("carteira do cliente pela origem `automacao` (#3514)", () => {
 
   afterAll(() => {
     sql(`
+      delete from public.conversations where organization_id in ('${ORG}', '${OUTRA_ORG}');
+      delete from public.channel_sessions where organization_id in ('${ORG}', '${OUTRA_ORG}');
       delete from public.crm_leads where organization_id in ('${ORG}', '${OUTRA_ORG}');
       delete from public.user_organizations where organization_id in ('${ORG}', '${OUTRA_ORG}');
       delete from public.crm_stages where organization_id in ('${ORG}', '${OUTRA_ORG}');
@@ -236,5 +296,79 @@ describe("carteira do cliente pela origem `automacao` (#3514)", () => {
       recusa = ((err as { stderr?: string }).stderr ?? "").replace(/\s+/g, " ");
     }
     expect(recusa).toContain("contacts_carteira_so_pelo_servidor");
+  });
+
+  it("`conversas`: passa só as ABERTAS que estão com outra pessoa, e conta o que a atribuição gravou", () => {
+    conversasDoComeco();
+
+    expect(passaConversas(CLOSER)).toBe("2");
+    expect(retratoDasConversas()).toEqual([
+      `${CLOSER}|claimed`, // era do SDR
+      `${CLOSER}|claimed`, // era de uma terceira pessoa: a carteira não a pegaria
+      `${SDR}|closed`, // encerrada: nem o dono, nem o status
+      "NULL|open", // sem dono: fila ou IA, `transfer` calaria o bot
+      `${CLOSER}|claimed`, // já era do destino: não conta
+    ]);
+    // Pela porta do Transferir: o evento vai junto, com o motivo do vocabulário.
+    expect(
+      lastLine(
+        sql(`select count(*) from public.conversation_assignment_events
+              where conversation_id = '${CONVERSA_DO_GESTOR}' and reason = 'transfer'
+                and from_user_id = '${GESTOR}' and to_user_id = '${CLOSER}';`),
+      ),
+    ).toBe("1");
+
+    // De novo: não há mais o que passar, e a contagem diz zero.
+    expect(passaConversas(CLOSER)).toBe("0");
+  });
+
+  it("`conversas` é tudo ou nada: dono que não pode receber conversa não move nenhuma", () => {
+    conversasDoComeco();
+    expect(passaConversas(SOMENTE_LEITURA)).toContain("assignee_not_eligible_member");
+    expect(retratoDasConversas()).toEqual([
+      `${SDR}|claimed`,
+      `${GESTOR}|claimed`,
+      `${SDR}|closed`,
+      "NULL|open",
+      `${CLOSER}|claimed`,
+    ]);
+  });
+
+  it("`contato` + `conversas`: a carteira leva as do dono anterior (#3642), a opção leva as de terceiros", () => {
+    conversasDoComeco();
+    sql(`update public.contacts
+            set carteira_user_id = '${SDR}', carteira_origem = 'manual', carteira_definida_em = now()
+          where id = '${CONTATO_DAS_CONVERSAS}';`);
+
+    // Só a carteira: a conversa do SDR (dono anterior) vai; a do gestor fica.
+    sql(`
+      set role service_role;
+      select public.fn_definir_carteira_do_cliente('${ORG}', null, '${CONTATO_DAS_CONVERSAS}', '${CLOSER}', 'automacao');
+    `);
+    const soACarteira = retratoDasConversas();
+    expect(soACarteira[0]).toBe(`${CLOSER}|claimed`);
+    expect(soACarteira[1]).toBe(`${GESTOR}|claimed`);
+
+    // Com a opção das conversas, a do gestor vai também.
+    expect(passaConversas(CLOSER)).toBe("1");
+    const retrato = retratoDasConversas();
+    expect(retrato[1]).toBe(`${CLOSER}|claimed`);
+    expect(retrato[2]).toBe(`${SDR}|closed`);
+    // A `open` sem dono que a IA atende fica com a IA nas duas portas (doc 237, 3-B).
+    expect(
+      lastLine(sql(`select public.comando_da_conversa(c) from public.conversations c where id = '${CONVERSA_SEM_DONO}';`)),
+    ).toBe("automatico");
+    expect(retrato[3]).toBe("NULL|open");
+  });
+
+  it("só o service_role executa a passagem das conversas", () => {
+    const pode = (papel: string) =>
+      lastLine(
+        sql(`select has_function_privilege('${papel}',
+               'public.fn_passar_conversas_do_contato(uuid, uuid, uuid)', 'execute');`),
+      );
+    expect(pode("anon")).toBe("f");
+    expect(pode("authenticated")).toBe("f");
+    expect(pode("service_role")).toBe("t");
   });
 });
