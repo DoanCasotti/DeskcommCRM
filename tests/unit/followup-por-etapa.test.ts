@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import type { EventRow } from "@/lib/event-log/dispatcher";
+import { getRegisteredHandlers, type EventRow } from "@/lib/event-log/dispatcher";
+import { ensureHandlersRegistered } from "@/lib/event-log/register-handlers";
 import type { EnabledFollowupAgent, FollowupGateDb } from "@/lib/followup/agent-followup-gate";
 import {
   EVENTO_DE_ETAPA,
@@ -443,5 +444,90 @@ describe("follow-up por etapa — o ciclo inteiro: entra, sai, e o toque não sa
     const desarmou = await saida({});
     expect(desarmou.summary.canceladas).toBe(1);
     expect(desarmou.reg.canceladas[0]).toMatchObject({ id: ENROLLMENT, patch: { status: "cancelled" } });
+  });
+});
+
+describe("follow-up por etapa — etapa armada → etapa armada: o fluxo da nova etapa assume", () => {
+  /**
+   * O dispatcher roda os consumidores de `lead.stage_changed` em sequência, na
+   * ordem do registro. Este caso usa a ordem REAL (lida do registro, não escrita
+   * à mão) sobre um estado compartilhado pelas duas metades, com um dublê que
+   * imita `idx_followup_enrollments_one_live` (um toque vivo por contato — os
+   * status vivos do índice no baseline). Se o gatilho rodar antes da saída, o
+   * fluxo da etapa de destino bate no índice, o da origem é cancelado em
+   * seguida, e o contato fica sem follow-up nenhum.
+   */
+  const ETAPA_DESTINO = ETAPA_NEUTRA;
+  const POINTER_DESTINO = OUTRO_POINTER;
+  const VIVOS_NO_INDICE = ["active", "waiting_reply", "paused_handoff", "paused_manual"];
+
+  function ordemDoRegistro(): Array<"gatilho" | "saida"> {
+    ensureHandlersRegistered();
+    return getRegisteredHandlers()
+      .filter((h) => h.events.includes(EVENTO_DE_ETAPA))
+      .map((h) => h.key)
+      .filter((k) => k.startsWith("followup-gatilho-etapa") || k.startsWith("followup-saida-da-etapa"))
+      .map((k) => (k.startsWith("followup-saida-da-etapa") ? "saida" : "gatilho"));
+  }
+
+  it("a saída está registrada antes do gatilho de etapa", () => {
+    expect(ordemDoRegistro()).toEqual(["saida", "gatilho"]);
+  });
+
+  it("⭐ card vai da etapa com fluxo A para a etapa com fluxo B: B fica armado", async () => {
+    const inscricoes: Array<{ id: string; pointer_id: string; status: string }> = [
+      { id: ENROLLMENT, pointer_id: POINTER, status: "active" },
+    ];
+    const ev = evento({ payload: { from_stage_id: ETAPA_MARCADA, to_stage_id: ETAPA_DESTINO } });
+
+    const dbEntrada: GatilhoEtapaDb = {
+      async carregaPointersDeEtapa() {
+        return [pointerEntrada, { ...pointerEntrada, id: POINTER_DESTINO, stage_id: ETAPA_DESTINO }];
+      },
+      async carregaContatoDoNegocio() {
+        return CONTATO;
+      },
+      async carregaNoDeGatilho() {
+        return { id: "t1", pedeAgente: false };
+      },
+      async insereEnrollment(input) {
+        if (inscricoes.some((i) => VIVOS_NO_INDICE.includes(i.status))) return { inserted: false, id: null };
+        inscricoes.push({ id: ENROLLMENT_2, pointer_id: input.pointer_id, status: "active" });
+        return { inserted: true, id: ENROLLMENT_2 };
+      },
+      async insereEventoDoEnrollment() {},
+    };
+    const dbSaida: SaidaDaEtapaDb = {
+      async carregaPointersDaEtapa(_org, etapa) {
+        return etapa === ETAPA_MARCADA ? [pointerDaSaida] : [];
+      },
+      async carregaContatoDoNegocio() {
+        return CONTATO;
+      },
+      async carregaInscricoesVivas(_org, _contato, pointerIds) {
+        return inscricoes
+          .filter((i) => pointerIds.includes(i.pointer_id) && i.status === "active")
+          .map((i) => inscricao({ id: i.id, pointer_id: i.pointer_id }));
+      },
+      async insereEventoDoEnrollment() {
+        return { inserted: true };
+      },
+      async cancelaInscricao(id) {
+        const alvo = inscricoes.find((i) => i.id === id);
+        if (!alvo) return false;
+        alvo.status = "cancelled";
+        return true;
+      },
+    };
+
+    const ordem = ordemDoRegistro();
+    expect(ordem).toHaveLength(2);
+    for (const passo of ordem) {
+      if (passo === "saida") await aplicaSaidaDaEtapa({ db: dbSaida, clock: CLOCK }, ev);
+      else await aplicaGatilhoDeEtapa({ db: dbEntrada, gateDb: fakeGate(), clock: CLOCK }, ev);
+    }
+
+    const vivos = inscricoes.filter((i) => VIVOS_NO_INDICE.includes(i.status)).map((i) => i.pointer_id);
+    expect(vivos).toEqual([POINTER_DESTINO]);
   });
 });

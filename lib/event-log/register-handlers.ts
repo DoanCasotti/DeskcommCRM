@@ -61,11 +61,15 @@ export function ensureHandlersRegistered(): void {
   registerHandler(lgpdExportHandler);
   registerHandler(lgpdRedactHandler);
   registerHandler(automationRulesHandler);
-  registerHandler(followupGatilhoEtapaHandler);
   // A outra metade do mesmo evento: saiu da etapa, o toque que ela armou morre
-  // (escrita curta no banco, idempotente pela linha do event_log). Antes dos
-  // consumidores que saem por rede de terceiro, pelo mesmo critério dos vizinhos.
+  // (escrita curta no banco, idempotente pela linha do event_log). A ORDEM IMPORTA:
+  // a saída roda ANTES do gatilho porque o índice `idx_followup_enrollments_one_live`
+  // admite um único toque vivo por contato. Na ordem inversa, o card que vai de uma
+  // etapa com fluxo para outra etapa com fluxo bate no índice ao armar o fluxo novo
+  // (o antigo ainda vivo), e logo depois a saída cancela o antigo: o contato fica
+  // sem follow-up nenhum. Vigiado em `tests/unit/followup-por-etapa.test.ts`.
   registerHandler(followupSaidaDaEtapaHandler);
+  registerHandler(followupGatilhoEtapaHandler);
   // Escrita curta no banco (um item na Central), vizinha do gatilho de etapa
   // que consome o mesmo evento.
   registerHandler(avisoDeEtapaHandler);
