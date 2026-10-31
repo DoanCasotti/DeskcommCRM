@@ -247,6 +247,20 @@ const propostaShape = {
  * O nome exige seleção semântica nesta tool, contexto inbound do servidor e
  * correspondência com a mensagem real. Isso não autentica identidade e não
  * torna o classificador infalível. Só o retorno aplicado autoriza dizer "salvo".
+ *
+ * ⚠️ O TEXTO NÃO PROMETE A GRAVAÇÃO: as duas opções são POR ORGANIZAÇÃO e
+ * desligadas por padrão, e o nome ainda depende do turno real — quem lê a
+ * ferramenta não pode decidir antes de chamá-la se o desfecho foi escrita ou
+ * fila. Quem responde é o RETORNO (`motivo: "aplicado_automaticamente"`). Um
+ * modelo que acredite ter gravado responderia "pronto, já atualizei seu
+ * cadastro" prometendo o que não aconteceu; um que ache que nunca grava diria
+ * "vou anotar para alguém confirmar" quando o dado já entrou na ficha.
+ *
+ * Ela é de CATÁLOGO, e não nativa do Operador, porque o Operador não monta
+ * ToolSet nativo nenhum (zero ocorrências de `tool(` em operator-turn.ts) e só
+ * chama o modelo quando há MCP. Uma nativa não apareceria na tela que liga
+ * capacidades, não entraria no audit `mcp.tool_called` e sumiria da telemetria
+ * de uso — nasceria invisível ao invariante 3 do sistema vivo.
  */
 export const crmProposeContactField: McpToolDefinition<typeof propostaShape> = {
   name: "crm_propose_contact_field",
