@@ -9,7 +9,9 @@
 -- `app/api/v1/pipelines/[id]/board/route.ts` (`.order("position_in_stage")`).
 -- Quatro escritores decidiam onde o recém-chegado entra, e nenhum gravava o
 -- topo: a criação (`createLeadHandler`, `MAX + 1000`), o move sem posição
--- (`moveLeadHandler` e `PATCH /leads/[id]/move`), ESTA função, que é quem o
+-- (`moveLeadHandler`, chamado pela MCP e pela automação — a rota
+-- `POST /leads/[id]/move` exige `position_in_stage` no `moveLeadSchema` e não
+-- passa por esse ramo), ESTA função, que é quem o
 -- painel do Inbox dispara (`components/inbox/CRMSidePanel.tsx` → ação "move"
 -- em `POST /api/v1/leads/bulk` → `fn_mover_leads_em_lote`), e o nascimento
 -- pela conversa (`lib/leads/nascimento-do-lead.ts` → `fn_nascer_lead_da_conversa`,
@@ -17,6 +19,9 @@
 -- e caía no DEFAULT 1000. Esse quarto é o que a issue nomeia primeiro ("quando
 -- uma conversa é iniciada"); com só os três primeiros no topo, o card nascido
 -- da conversa ficaria ABAIXO de todos os que entraram pelos outros caminhos.
+-- Fora do banco, o mesmo PR leva ao topo os dois caminhos TypeScript que
+-- ainda gravavam o fim: o encerramento (`lib/leads/encerramento.ts` — `/win`,
+-- `/lose`, clone, retenção) e o "Mover para…"/seletor do dossiê do quadro.
 --
 -- Medido no Postgres local, numa coluna com três cards (1000, 2000, 3000),
 -- antes desta migration: conversa iniciada caía em 4000 e transferida do Inbox

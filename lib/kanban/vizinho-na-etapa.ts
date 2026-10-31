@@ -48,9 +48,10 @@ export function proximoNaEtapaInteira<C extends CardNaEtapa>(
 }
 
 /**
- * A posição de quem entra no FIM da etapa sem ter sido solto em lugar nenhum (o
- * "Mover para…" do menu do card). Pela etapa INTEIRA, pela mesma razão da #2545:
- * o último visível não é o último da etapa quando há filtro.
+ * A posição no FIM da etapa para quem é movido sem ponto de soltura para a
+ * etapa onde JÁ está (reordenar, não chegar). Pela etapa INTEIRA, pela mesma
+ * razão da #2545: o último visível não é o último da etapa quando há filtro.
+ * Quem CHEGA de outra etapa entra no topo — `posicaoNoTopoDaEtapa` (#3461).
  */
 export function posicaoNoFimDaEtapa(etapa: readonly CardNaEtapa[], leadId: string): number {
   const ultima = etapa.reduce<number | null>(

@@ -4,15 +4,18 @@ secao: alterado
 titulo: O card que chega numa etapa do funil aparece no topo da coluna, e o quadro ganha cards compactos
 ---
 
-O card que entra numa etapa passa a aparecer no topo da coluna, e não mais no
-fim. Vale para a conversa nova que abre um negócio sozinha, para o negócio
-criado à mão ou pela API, para quem é movido para outra etapa sem escolher a
-posição (pelo painel do Inbox, pela barra de ações em lote do quadro, por
-automação ou pelo assistente) e para a importação. Vários cards movidos juntos
-chegam ao topo na mesma ordem em que estavam. Cards que já estão nas colunas
-não mudam de lugar, e reordenar dentro da mesma etapa continua como antes.
-Dois cards com a mesma posição deixam de trocar de lugar a cada atualização da
-tela.
+O card que chega a uma etapa passa a aparecer no topo da coluna, e não mais no
+fim ou num ponto qualquer dela. Vale para a conversa nova que abre um negócio
+sozinha, para o negócio criado à mão, pela API ou pela importação, para o
+**Mover para…** do card e o seletor de etapa do dossiê, para o painel do Inbox,
+a barra de ações em lote, as automações, o assistente, o agendamento, a
+transferência para atendimento humano e para **Marcar como ganho/perdido**.
+Vários cards movidos juntos chegam ao topo na mesma ordem em que estavam.
+Arrastar um card continua deixando-o onde você soltou, e reordenar dentro da
+mesma etapa continua como antes. Ao arquivar uma etapa, os negócios dela vão
+para a etapa escolhida mantendo a posição que tinham. Cards que já estão nas
+colunas não mudam de lugar. Dois cards com a mesma posição deixam de trocar de
+lugar a cada atualização da tela.
 
 No quadro do funil, o botão **Compacta**, ao lado das abas de visão, deixa os
 cards mais baixos para caber mais contatos na coluna. No modo compacto o card

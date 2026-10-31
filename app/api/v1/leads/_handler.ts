@@ -1260,7 +1260,7 @@ export async function updateLeadHandler(
 
 export interface MoveLeadAdminInput {
   to_stage_id: string;
-  /** Optional fractional position. If omitted, append at end (max + 1000). */
+  /** Posição fracionária opcional. Sem ela: outra etapa entra no TOPO (min − 1000, #3461); a mesma etapa vai para o fim (max + 1000). */
   position_in_stage?: number;
   reason?: string;
   /**

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { compararNaEtapa, posicaoDeEntradaNaEtapa } from "./entrada-na-etapa";
+import { compararNaEtapa, posicaoDeEntradaNaEtapa, posicaoNoTopoDaEtapa } from "./entrada-na-etapa";
 
 /**
  * #3461, item 1 — o card recém-chegado entra no TOPO da coluna, e a ordem é
@@ -73,5 +73,21 @@ describe("compararNaEtapa", () => {
     const esperado = ["aaa", "zzz", "mmm"];
     expect(um.sort(compararNaEtapa).map((l) => l.id)).toEqual(esperado);
     expect(outro.sort(compararNaEtapa).map((l) => l.id)).toEqual(esperado);
+  });
+});
+
+describe("posicaoNoTopoDaEtapa", () => {
+  const card = (id: string, position_in_stage: number) => ({ id, position_in_stage });
+
+  it("etapa vazia: 1000", () => {
+    expect(posicaoNoTopoDaEtapa([], "movido")).toBe(1000);
+  });
+
+  it("entra acima do MENOR da etapa inteira, fora de ordem na lista", () => {
+    expect(posicaoNoTopoDaEtapa([card("c", 3000), card("a", 1000), card("b", 5000)], "movido")).toBe(0);
+  });
+
+  it("ignora o próprio card", () => {
+    expect(posicaoNoTopoDaEtapa([card("movido", -9000), card("a", 1000)], "movido")).toBe(0);
   });
 });

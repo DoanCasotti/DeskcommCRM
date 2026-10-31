@@ -56,3 +56,17 @@ export function compararNaEtapa(a: CardNaEtapa, b: CardNaEtapa): number {
   if (a.id === b.id) return 0;
   return a.id < b.id ? -1 : 1;
 }
+
+/**
+ * A posição de quem CHEGA à etapa pelo menu ("Mover para…" do card, seletor de
+ * etapa do dossiê) — o topo, pela mesma regra do `moveLeadHandler`. Lê a etapa
+ * INTEIRA (cache do quadro, sem o filtro da página — #2545): o primeiro visível
+ * não é o primeiro da etapa quando há filtro. O próprio card fica de fora.
+ */
+export function posicaoNoTopoDaEtapa(etapa: readonly CardNaEtapa[], leadId: string): number {
+  const primeira = etapa.reduce<number | null>(
+    (min, l) => (l.id === leadId || (min !== null && min <= l.position_in_stage) ? min : l.position_in_stage),
+    null,
+  );
+  return posicaoDeEntradaNaEtapa(primeira);
+}

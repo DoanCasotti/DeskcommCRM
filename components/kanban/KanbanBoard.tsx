@@ -15,7 +15,7 @@ import { useAtRiskLeads } from "@/hooks/leads/useAtRiskLeads";
 import { useReactivations } from "@/hooks/leads/useReactivations";
 import { midpoint } from "@/lib/kanban/fractional-indexing";
 import { posicaoNoFimDaEtapa, proximoNaEtapaInteira } from "@/lib/kanban/vizinho-na-etapa";
-import { compararNaEtapa } from "@/lib/kanban/entrada-na-etapa";
+import { compararNaEtapa, posicaoNoTopoDaEtapa } from "@/lib/kanban/entrada-na-etapa";
 import { decideMotivoDaPerda } from "@/lib/leads/motivo-da-perda";
 import type { Lead } from "@/lib/types/leads";
 import type { BoardData, Pipeline, Stage } from "@/lib/kanban/types";
@@ -244,18 +244,19 @@ export function KanbanBoard({
     [data, moveCard],
   );
 
-  // O menu não tem ponto de soltura: o card vai para o fim da etapa INTEIRA
-  // (cache do quadro, sem o filtro da página — #2545).
+  // O menu não tem ponto de soltura. Quem CHEGA a outra etapa entra no TOPO,
+  // a mesma regra do `moveLeadHandler` sem posição (#3461); a mesma etapa é
+  // reordenação e segue para o fim. As duas pontas leem a etapa INTEIRA (cache
+  // do quadro, sem o filtro da página — #2545).
   const aoMoverPelaLista = useCallback(
     (lead: Lead, stageId: string) => {
       const funil = qc.getQueryData<BoardData>(chaveDoQuadro(pipelineId))?.leads ?? data?.leads ?? [];
+      const etapa = funil.filter((l) => l.stage_id === stageId);
       moverPara({
         leadId: lead.id,
         stageId,
-        positionInStage: posicaoNoFimDaEtapa(
-          funil.filter((l) => l.stage_id === stageId),
-          lead.id,
-        ),
+        positionInStage:
+          stageId === lead.stage_id ? posicaoNoFimDaEtapa(etapa, lead.id) : posicaoNoTopoDaEtapa(etapa, lead.id),
         expectedUpdatedAt: lead.updated_at,
       });
     },
