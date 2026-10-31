@@ -711,7 +711,7 @@ function AssignOwnerForm({ config, onChange }: FormProps<ConfigDoAtribuir>) {
             <Label htmlFor="atribuir-passar-contato">{t("Passar também o contato (carteira)")}</Label>
             <p className="text-xs text-muted-foreground">
               {t(
-                "O cliente passa a ser deste atendente, no lugar do dono atual. Desligado, o cliente fica com quem está — o comportamento de sempre.",
+                "O cliente passa a ser deste atendente, no lugar do dono atual, e leva junto as conversas abertas que estavam com o dono anterior ou sem dono (as que a IA está atendendo ficam com a IA). Desligado, o cliente e as conversas ficam como estão.",
               )}
             </p>
           </div>
@@ -726,7 +726,7 @@ function AssignOwnerForm({ config, onChange }: FormProps<ConfigDoAtribuir>) {
             <Label htmlFor="atribuir-passar-conversas">{t("Passar também as conversas abertas do contato")}</Label>
             <p className="text-xs text-muted-foreground">
               {t(
-                "As conversas abertas que hoje estão com outra pessoa vão para este atendente, como no botão Transferir. Conversa encerrada e conversa sem dono não são tocadas.",
+                "As conversas abertas que hoje estão com qualquer outra pessoa vão para este atendente, como no botão Transferir. Esta opção não toca conversa encerrada nem conversa sem dono.",
               )}
             </p>
           </div>

@@ -111,9 +111,9 @@ const MOTIVO_DA_PARADA: Record<string, string> = {
      troca que aconteceu. Emitidos como `error` literal por
      lib/automation/actions/assign-owner.ts. */
   carteira_nao_passou:
-    "O negócio passou para a pessoa escolhida, mas a carteira do cliente não: ela continua com o dono anterior. O detalhe técnico abaixo diz o motivo; a ficha do contato mostra quem é o dono agora.",
+    "O negócio passou para a pessoa escolhida, mas a carteira do cliente não: ela e as conversas que iam junto continuam com o dono anterior. A ficha do contato mostra quem é o dono agora.",
   conversas_nao_passaram:
-    "O negócio passou para a pessoa escolhida, mas uma ou mais conversas abertas do cliente não foram transferidas e seguem com o dono anterior. O detalhe técnico abaixo diz quais.",
+    "O negócio passou para a pessoa escolhida, mas as conversas abertas do cliente que estavam com outra pessoa não foram transferidas: nenhuma mudou de dono. Transfira pela conversa, se precisar.",
   missing_input:
     "A ação não recebeu o que precisava (o lead do evento ou a pessoa configurada). Abra a automação e revise.",
   no_tags: "Esta ação não tem nenhuma etiqueta escolhida. Abra a automação e escolha pelo menos uma.",
