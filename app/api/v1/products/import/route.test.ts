@@ -441,6 +441,45 @@ describe("POST /api/v1/products/import — foto por URL", () => {
     expect(sonda.uploads).toEqual([]);
   });
 
+  it("corpo sem content-length para de ser lido ao passar de 5 MB, e a linha é recusada", async () => {
+    // `content-length` é opcional: uma origem em `chunked` manda o que quiser.
+    // O teto tem de valer ENQUANTO o corpo chega — conferido só no fim, o corpo
+    // inteiro já estaria na memória. A origem aqui oferece 20 MB, em pedaços de 1 MB.
+    const MEGA = 1024 * 1024;
+    let servidos = 0;
+    let cancelado = false;
+    vi.stubGlobal("fetch", async () => {
+      const corpo = new ReadableStream<Uint8Array>({
+        pull(controle) {
+          if (servidos >= 20) return controle.close();
+          const pedaco = new Uint8Array(MEGA);
+          if (servidos === 0) pedaco.set(JPEG);
+          servidos += 1;
+          controle.enqueue(pedaco);
+        },
+        cancel() {
+          cancelado = true;
+        },
+      });
+      return new Response(corpo, { status: 200, headers: { "content-type": "image/jpeg" } });
+    });
+    vi.mocked(createClient).mockResolvedValue(supabaseCom("BRL", []) as never);
+    const { POST } = await import("./route");
+
+    const res = await POST(pedido(planilhaComFoto(`IP15,iPhone 15,5499,${URL_DA_FOTO}`)));
+    const corpo = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(corpo.data.erros).toEqual([
+      { linha: 2, motivo: `a foto passa de 5 MB: ${URL_DA_FOTO}` },
+    ]);
+    expect(cancelado).toBe(true);
+    // 6 pedaços bastam para passar do teto; a folga é a leitura antecipada do stream.
+    expect(servidos).toBeLessThan(10);
+    expect(upserts.flat()).toEqual([]);
+    expect(sonda.uploads).toEqual([]);
+  });
+
   it("produto que já existe: a pasta é a do id dele e as fotos antigas saem do bucket", async () => {
     const idAntigo = idDe("AND-01");
     const fotoAntiga = `${ORG_ID}/${idAntigo}/11111111-1111-4111-8111-111111111111.jpg`;

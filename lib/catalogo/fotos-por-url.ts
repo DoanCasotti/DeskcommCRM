@@ -2,6 +2,7 @@ import "server-only";
 
 import { randomUUID } from "node:crypto";
 
+import type { TipoDeLogo } from "@/lib/branding/logo-arquivo";
 import {
   BUCKET_DAS_FOTOS,
   extensaoDe,
@@ -63,11 +64,43 @@ function frase(modelo: string, valores: Record<string, string>): string {
   return modelo.replace(/\{(\w+)\}/g, (_, nome: string) => valores[nome] ?? "");
 }
 
-/** Devolve os BYTES ou o motivo em português, já traduzido, para a linha. */
+/**
+ * Lê o corpo aos poucos e PARA ao passar do teto — `null` quando passou.
+ *
+ * `arrayBuffer()` só deixaria conferir o tamanho depois de o corpo inteiro estar
+ * na memória, e o `content-length` é opcional: uma origem em `chunked` mandaria
+ * o que quisesse durante todo o prazo. Mesmo padrão de `lerLimitado`
+ * (lib/prospecting/site-fetch.ts).
+ */
+async function lerAteOTeto(resposta: Response): Promise<Uint8Array | null> {
+  const leitor = resposta.body?.getReader();
+  if (!leitor) return new Uint8Array(0);
+  const pedacos: Uint8Array[] = [];
+  let recebido = 0;
+  for (;;) {
+    const { done, value } = await leitor.read();
+    if (done) break;
+    recebido += value.byteLength;
+    if (recebido > TAMANHO_MAXIMO_DA_FOTO) {
+      await leitor.cancel().catch(() => undefined);
+      return null;
+    }
+    pedacos.push(value);
+  }
+  const bytes = new Uint8Array(recebido);
+  let posicao = 0;
+  for (const pedaco of pedacos) {
+    bytes.set(pedaco, posicao);
+    posicao += pedaco.byteLength;
+  }
+  return bytes;
+}
+
+/** Devolve os BYTES e o tipo, ou o motivo em português, já traduzido, para a linha. */
 async function baixar(
   url: string,
   t: Pedido["t"],
-): Promise<{ bytes: Uint8Array } | { motivo: string }> {
+): Promise<{ bytes: Uint8Array; tipo: TipoDeLogo } | { motivo: string }> {
   let alvo = url;
   for (let salto = 0; salto <= MAXIMO_DE_SALTOS; salto += 1) {
     try {
@@ -104,22 +137,24 @@ async function baixar(
       };
     }
 
-    // Recusa pelo tamanho DECLARADO antes de bufferizar o corpo (como a rota de
-    // fotos da tela); o `byteLength` abaixo é o check autoritativo.
+    // Recusa pelo tamanho DECLARADO sem ler nada (como a rota de fotos da tela);
+    // a contagem durante a leitura é o check autoritativo.
     const declarado = Number(resposta.headers.get("content-length") ?? 0);
     if (declarado > TAMANHO_MAXIMO_DA_FOTO) {
+      await resposta.body?.cancel().catch(() => undefined);
       return { motivo: frase(t("a foto passa de 5 MB: {url}"), { url: alvo }) };
     }
-    const bytes = new Uint8Array(await resposta.arrayBuffer());
-    if (bytes.byteLength > TAMANHO_MAXIMO_DA_FOTO) {
+    const bytes = await lerAteOTeto(resposta);
+    if (!bytes) {
       return { motivo: frase(t("a foto passa de 5 MB: {url}"), { url: alvo }) };
     }
-    if (!farejarTipo(bytes)) {
+    const tipo = farejarTipo(bytes);
+    if (!tipo) {
       return {
         motivo: frase(t("o endereço não devolveu uma foto JPG ou PNG: {url}"), { url: alvo }),
       };
     }
-    return { bytes };
+    return { bytes, tipo };
   }
 
   return { motivo: frase(t("o link redireciona vezes demais: {url}"), { url }) };
@@ -148,7 +183,7 @@ export async function guardarFotosPorUrl(pedido: Pedido): Promise<ResultadoDasFo
       await limpar();
       return { ok: false, motivo: baixada.motivo };
     }
-    const tipo = farejarTipo(baixada.bytes)!;
+    const { tipo } = baixada;
     const caminho = `${orgId}/${produtoId}/${randomUUID()}.${extensaoDe(tipo)}`;
     const { error } = await createAdminClient()
       .storage.from(BUCKET_DAS_FOTOS)
