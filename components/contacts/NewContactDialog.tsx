@@ -83,6 +83,14 @@ export function NewContactDialog({
   // O MESMO vocabulário de sugestões da ficha (#2732): a chave do react-query é
   // a mesma, então quem já leu na lista de contatos não paga outra requisição.
   const vocabulario = useContactTagVocabulary(org?.orgId ?? null);
+  // O texto digitado no campo de etiquetas e a MESMA pergunta que o Inbox faz
+  // com ele (issue #3144): a leitura com `?busca=` alcança o vocabulário curado
+  // inteiro, que a lista "em uso" (teto de 200, só contatos) não vê.
+  const [buscaDeEtiqueta, setBuscaDeEtiqueta] = useState("");
+  const buscaNoVocabulario = useContactTagVocabulary(
+    org?.orgId ?? null,
+    buscaDeEtiqueta.trim(),
+  );
   const { definirCor } = useDefinirCorDaEtiqueta();
   // A cor da etiqueta é VOCABULÁRIO e a rota exige manager + MFA: para os outros
   // papéis a paleta nem chega ao campo, como na ficha e no editor do Inbox.
@@ -303,6 +311,9 @@ export function NewContactDialog({
               onDefinirCor={
                 podeDefinirCor ? (tag, cor) => void definirCor(tag, cor) : undefined
               }
+              encontradas={buscaNoVocabulario.data}
+              onDigitar={setBuscaDeEtiqueta}
+              erroNoVocabulario={vocabulario.isError || buscaNoVocabulario.isError}
             />
           </div>
           {serverError && (
