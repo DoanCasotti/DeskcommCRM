@@ -62,11 +62,10 @@ const blocoTerminal = () => {
  * O bloco que abre em `idx`, com as chaves EQUILIBRADAS — o `if` até a chave que
  * de fato o fecha, e não "até o próximo marco do arquivo".
  *
- * A distinção não é preciosismo: entre a correção e a decisão terminal cabe
- * outro passo — hoje o pedido humano do #3281 — e uma fatia que vai até o marco
- * seguinte passa a contar a chamada do VIZINHO como se fosse da correção. O que
- * esta cerca prende é "a correção é UMA"; a distância até o próximo marco é
- * outra coisa, e é medida pelo teto da região (teste do pedido humano).
+ * A distinção não é preciosismo: uma fatia que vai até o marco seguinte conta
+ * a chamada de qualquer passo VIZINHO como se fosse da correção. O que esta
+ * cerca prende é "a correção é UMA"; a distância até o próximo marco é outra
+ * coisa, e é medida pelo teto da região (teste do pedido humano).
  *
  * String (simples, dupla, template) e comentário de linha não abrem nem fecham
  * bloco — sem pular os dois, uma chave dentro de texto desbalancearia a conta.
@@ -138,29 +137,14 @@ describe("recuperação limitada do turno mudo (preservada)", () => {
   });
 });
 
-describe("o passo do pedido humano (#3281) é um passo À PARTE", () => {
-  it("vive FORA das chaves da correção — a correção não ganhou uma segunda chamada", () => {
-    const correcao = blocoCorrecao();
-    const depoisDaCorrecao = turno.slice(idxCorrecaoIf + correcao.length, idxSilencio);
-    // O `runModelCall` que o CI contava como segundo da correção é deste passo,
-    // e ele começa depois da chave que fecha a correção.
-    expect(correcao.split("await runModelCall(").length - 1).toBe(1);
-    expect(depoisDaCorrecao.split("await runModelCall(").length - 1).toBe(1);
-    // É o pedido de uma PESSOA, e só na prévia assistida: a régua é a decisão
-    // pura de `proposta-sob-pedido.ts` (allowlist de impedimentos), não o
-    // silêncio do turno automático.
-    expect(depoisDaCorrecao).toContain("previaContinuaAtePropor({");
-    expect(depoisDaCorrecao).toContain("previaAssistida !== null");
-    expect(depoisDaCorrecao).toContain("INSTRUCAO_DO_PEDIDO_HUMANO");
-    // Propor ≠ enviar: o passo novo não despacha nada — quem envia é o clique.
-    expect(depoisDaCorrecao).not.toContain("sendTurnMessage");
-  });
-
-  it("teto da região correção→decisão: duas chamadas no máximo, nunca três", () => {
-    // Correção (1) + pedido humano (1). Um terceiro `runModelCall` aqui é
-    // regressão de custo/duplicação e tem de doer neste teste, não só no review.
+describe("o pedido humano (#3281) ocupa a vaga da correção — não é um passo a mais", () => {
+  it("teto da região correção→decisão: UMA chamada de modelo, nunca duas", () => {
+    // Na prévia assistida o pedido humano troca a INSTRUÇÃO da correção; não
+    // ganha chamada própria. Um segundo `runModelCall` aqui é um clique pagando
+    // três chamadas (turno + correção + pedido) e tem de doer neste teste.
     const regiao = turno.slice(idxCorrecaoIf, idxSilencio);
-    expect(regiao.split("await runModelCall(").length - 1).toBe(2);
+    expect(regiao.split("await runModelCall(").length - 1).toBe(1);
+    expect(blocoCorrecao()).toContain("INSTRUCAO_DO_PEDIDO_HUMANO");
   });
 });
 
