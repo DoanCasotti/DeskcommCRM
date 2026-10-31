@@ -16,6 +16,7 @@ import type pg from 'pg';
 
 import { resolveOrgLlmConfig, type LlmEdgeConfig } from '../edge/llm/credentials';
 import { aplicarOrcamento, LlmBudgetExceededError, type RastroDaChamada } from '../edge/llm/run-model-call';
+import { chaveDeOrcamentoDaInstalacao } from '@/lib/instalacao/comportamento';
 import { logger } from '@/lib/logger';
 import type { ChannelCapabilities } from '@/lib/channels/types';
 
@@ -115,7 +116,8 @@ export async function resolverVozDoTurno(
       organizationId: input.tenantId,
       orcamentoDaConfig: elevenlabs.orcamento,
       orcamentoIndisponivelPorque: elevenlabs.orcamentoIndisponivelPorque,
-      chave: input.cfg.budgetEnforcement ?? 'on',
+      // A tela de admin (comportamento da instalação) vence o env, como no chat.
+      chave: chaveDeOrcamentoDaInstalacao(input.cfg.budgetEnforcement ?? 'on'),
       // O teto do plano só vincula a chave da INSTALAÇÃO — mesmo critério do chat.
       origemDaChave: elevenlabs.origemDaChave,
       purpose: 'sintese_de_voz',

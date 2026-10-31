@@ -1,9 +1,12 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
-const { resolveOrgLlmConfigMock, aplicarOrcamentoMock } = vi.hoisted(() => ({
+const { resolveOrgLlmConfigMock, aplicarOrcamentoMock, chaveDaTelaMock } = vi.hoisted(() => ({
   resolveOrgLlmConfigMock: vi.fn(),
   aplicarOrcamentoMock: vi.fn(),
+  chaveDaTelaMock: vi.fn(),
 }));
+
+vi.mock("@/lib/instalacao/comportamento", () => ({ chaveDeOrcamentoDaInstalacao: chaveDaTelaMock }));
 
 vi.mock("@/lib/agent-engine/edge/llm/credentials", () => ({
   resolveOrgLlmConfig: resolveOrgLlmConfigMock,
@@ -33,6 +36,9 @@ beforeEach(() => {
   aplicarOrcamentoMock.mockReset();
   // Default: orçamento OK (não lança) — cada teste de orçamento sobrescreve.
   aplicarOrcamentoMock.mockResolvedValue(undefined);
+  // Default: nada gravado na tela de admin — vale o piso que vem do env.
+  chaveDaTelaMock.mockReset();
+  chaveDaTelaMock.mockImplementation((piso: string) => piso);
 });
 
 describe("resolverVozDoTurno", () => {
@@ -191,6 +197,21 @@ describe("resolverVozDoTurno", () => {
       expect(aplicarOrcamentoMock).toHaveBeenCalledWith(
         expect.objectContaining({ chave: "avisar" }),
       );
+    });
+
+    it("o interruptor da tela de admin vence o env, como no chat", async () => {
+      resolveOrgLlmConfigMock.mockResolvedValue({ apiKey: "sk" });
+      chaveDaTelaMock.mockReturnValue("off");
+      await resolverVozDoTurno({
+        ...base,
+        cfg: { budgetEnforcement: "on" },
+        pool: pool(),
+        vozEnabled: true,
+        vozQuando: "sempre",
+        inboundType: null,
+      });
+      expect(chaveDaTelaMock).toHaveBeenCalledWith("on");
+      expect(aplicarOrcamentoMock).toHaveBeenCalledWith(expect.objectContaining({ chave: "off" }));
     });
 
     it("sem cfg.budgetEnforcement, usa 'on' — o kill switch só AFROUXA, nunca força desligado por omissão", async () => {
