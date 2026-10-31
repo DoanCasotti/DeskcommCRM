@@ -74,7 +74,7 @@ function horariosDoSeed(agora: Date, de: Date, ate: Date): Record<string, Horari
  * FORA do painel e só muda pelo `onMesVisivel`; a consulta pede a janela desse
  * mês. Aqui a "consulta" responde na hora — o que se mede é a decisão do painel.
  */
-function Agenda({ hoje, publicou = true }: { hoje: string; publicou?: boolean }) {
+function Agenda({ hoje, publicou = true, erro = false }: { hoje: string; publicou?: boolean; erro?: boolean }) {
   const ancora = ancoraLocalDoDia(hoje);
   const [mesDoPainel, setMesDoPainel] = React.useState(() => startOfMonth(ancora));
   const onMesVisivel = React.useCallback((mes: Date) => {
@@ -91,6 +91,7 @@ function Agenda({ hoje, publicou = true }: { hoje: string; publicou?: boolean })
       fuso="America/Sao_Paulo"
       horariosPorDia={publicou ? horariosDoSeed(agora, de, ate) : {}}
       publicouHorarios={publicou}
+      erroAoCarregar={erro}
       mesCarregado={mesDoPainel}
       onMesVisivel={onMesVisivel}
       permiteEncaixe
@@ -283,5 +284,50 @@ describe("os dias acendem só com os horários do mês em tela", () => {
 
     // Outubro em tela, dados ainda de setembro: nada acende até chegar outubro.
     expect(acesos()).toEqual([]);
+  });
+});
+
+/**
+ * SÓ A RESPOSTA QUE DECIDE GASTA A DECISÃO (#3777, @paulolimajr77).
+ *
+ * A troca de tipo (acima) reabre a decisão por CHAVE de tipo. Mas no MESMO tipo
+ * a consulta também é refeita — a duração entra na chave dela, e uma falha pode
+ * passar —, e a primeira resposta pode não decidir nada: sem jornada, ou com
+ * erro. Se ela gastasse a decisão, a resposta seguinte, com jornada e o mês
+ * esgotado, deixaria o painel num mês morto.
+ */
+describe("só a resposta que decide gasta a decisão de abertura", () => {
+  it("no mesmo tipo, sem jornada e depois com jornada, no último dia útil à tarde, vai ao mês seguinte", () => {
+    // Sexta 30/10/2026, 17h em São Paulo: outubro não tem mais horário.
+    congelar("2026-10-30T20:00:00Z");
+    const { rerender } = render(<Agenda hoje="2026-10-30" publicou={false} />);
+    expect(screen.getByTestId("sem-jornada-publicada")).toBeInTheDocument();
+
+    // A consulta do mesmo tipo é refeita e agora responde com jornada.
+    rerender(<Agenda hoje="2026-10-30" publicou />);
+
+    expect(
+      acesos(),
+      "o painel ficou em outubro: a resposta sem jornada gastou a decisão de abertura",
+    ).toContain("2026-11-02");
+    expect(screen.queryByTestId("motivo-do-bloqueio")).toBeNull();
+  });
+
+  it("com a decisão pendente (erro), quem vai e volta à mão pelas setas fica onde voltou", () => {
+    congelar("2026-10-30T20:00:00Z");
+    const { rerender } = render(<Agenda hoje="2026-10-30" erro />);
+
+    act(() => {
+      fireEvent.click(screen.getByTestId("mes-seguinte"));
+    });
+    act(() => {
+      fireEvent.click(screen.getByTestId("mes-anterior"));
+    });
+
+    // A consulta volta a responder, com outubro esgotado: a volta à mão vale.
+    rerender(<Agenda hoje="2026-10-30" />);
+
+    expect(acesos(), "a resposta atrasada ricocheteou a pessoa para novembro").toEqual([]);
+    expect(screen.getByTestId("dia-2026-10-30")).toHaveAttribute("data-encaixe", "true");
   });
 });

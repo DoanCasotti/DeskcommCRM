@@ -463,6 +463,14 @@ export function PainelDeMarcacao({
    * desse primeiro tipo a gastava ("sem jornada, fica") e a do tipo escolhido,
    * com outubro esgotado, chegava sem decidir nada: o mês morto de volta, em
    * 9 specs do e2e às 16h45 de sexta 30/10/2026.
+   *
+   * E só uma resposta que DECIDE gasta a decisão (#3777, @paulolimajr77):
+   * resposta sem jornada ou com erro deixa a decisão pendente. No MESMO tipo a
+   * consulta é refeita — a duração entra na chave dela, e uma falha pode passar
+   * —, e a resposta seguinte, com jornada e o mês esgotado, ainda precisa
+   * poder levar ao mês seguinte. Quem navega pelas setas decide por si: a
+   * decisão pendente não sobrevive a elas (senão a resposta que chega depois
+   * jogaria a pessoa de volta ao mês seguinte contra a volta à mão).
    */
   // Ajuste de estado DURANTE o render, não num efeito: o mês morto nem chega a
   // ser pintado (https://react.dev/learn/you-might-not-need-an-effect).
@@ -478,9 +486,16 @@ export function PainelDeMarcacao({
     setAberturaDecidida(!isSameMonth(mes, ancora));
   }
   const aberturaCarregada = mesCarregado != null && dadosDoMesEmTela && isSameMonth(mes, ancora);
-  if (tipoDaDecisao === chaveDoTipo && !aberturaDecidida && aberturaCarregada && !instanteInicial) {
+  if (
+    tipoDaDecisao === chaveDoTipo &&
+    !aberturaDecidida &&
+    aberturaCarregada &&
+    !instanteInicial &&
+    publicouHorarios &&
+    !erroAoCarregar
+  ) {
     setAberturaDecidida(true);
-    if (publicouHorarios && !erroAoCarregar && !semanas.flat().some(temHorario)) {
+    if (!semanas.flat().some(temHorario)) {
       setMes(startOfMonth(addDays(startOfMonth(mes), 32)));
     }
   }
@@ -835,7 +850,10 @@ export function PainelDeMarcacao({
               size="icon"
               aria-label={t("Mês anterior")}
               data-testid="mes-anterior"
-              onClick={() => setMes((m) => startOfMonth(addDays(startOfMonth(m), -1)))}
+              onClick={() => {
+                setAberturaDecidida(true);
+                setMes((m) => startOfMonth(addDays(startOfMonth(m), -1)));
+              }}
             >
               <CaretLeft size={16} weight="bold" aria-hidden />
             </Button>
@@ -844,7 +862,10 @@ export function PainelDeMarcacao({
               size="icon"
               aria-label={t("Próximo mês")}
               data-testid="mes-seguinte"
-              onClick={() => setMes((m) => startOfMonth(addDays(startOfMonth(m), 32)))}
+              onClick={() => {
+                setAberturaDecidida(true);
+                setMes((m) => startOfMonth(addDays(startOfMonth(m), 32)));
+              }}
             >
               <CaretRight size={16} weight="bold" aria-hidden />
             </Button>
