@@ -11,23 +11,34 @@
  * desenvolvimento e erraria no self-host — o defeito que a issue pede para não
  * reproduzir.
  *
- * O que o app enxerga é o que a ORGANIZAÇÃO fez: a linha de `voip_trunk_settings`.
- * Ela só existe depois que alguém abriu `/app/settings/voip-trunk` e salvou o
- * tronco — ou seja, depois de decidir usar telefonia de verdade. Sem tronco não
- * há chamada possível: a tela de Chamadas não teria o que mostrar, e o menu
- * estaria oferecendo uma porta que não funciona — exatamente o relato da issue.
+ * O que o app enxerga é o que a ORGANIZAÇÃO tem, por QUALQUER um dos caminhos
+ * que a main de fato usa para ligar — e não só o tronco salvo na tela:
  *
+ *  1. o tronco salvo em `voip_trunk_settings` (`/app/settings/voip-trunk`);
+ *  2. o tronco da INSTALAÇÃO em `VOIP_TRUNK_ENDPOINT`: sem tronco salvo, a
+ *     ligação de saída cai nele (`app/api/v1/calls/route.ts`), e o número (DID)
+ *     só se cadastra com ele (`app/api/v1/phone-numbers/route.ts`);
+ *  3. um número ATIVO em `phone_numbers`: é por ele que a ligação de ENTRADA
+ *     acha a organização (`workers/voice-agent`), sem ler o tronco salvo;
+ *  4. uma ligação SIP já registrada em `voice_calls` (`provider = 'sip'`): é o
+ *     que a tela de Chamadas lista. A ligação de WhatsApp (`provider =
+ *     'wacalls'`) mora na MESMA tabela e tem tela própria — contá-la daria a
+ *     porta de uma tela que abre vazia, que é o defeito da #1290.
+ *
+ * Olhar só o tronco salvo escondia Chamadas de quem atende ligação de verdade.
+
  * ─── O custo, declarado ──────────────────────────────────────────────────────
  *
- * É UMA leitura por chave primária (`organization_id` é a PK da tabela), dentro
- * do `Promise.all` que o shell de `/app` já dispara — não é uma consulta em
- * série no caminho quente. É o preço que a issue aceita ao pedir o filtro.
- *
+ * Até TRÊS leituras de uma linha (`limit(1)`), todas por `organization_id` e em
+ * paralelo, dentro do `Promise.all` que o shell de `/app` já dispara — não é
+ * consulta em série no caminho quente. Com `VOIP_TRUNK_ENDPOINT` definido, zero.
+
  * ─── A regra de leitura ──────────────────────────────────────────────────────
  *
- * Falha fechada, como `modulosLigados()` e `capacidadesLigadas()`: erro de banco,
- * exceção ou ausência de linha = DESLIGADA. Nunca lança — roda no layout de
- * `/app`, e um throw ali derruba todas as telas.
+ * Falha fechada POR FONTE, como `modulosLigados()` e `capacidadesLigadas()`:
+ * erro de banco ou exceção numa leitura = aquela fonte não conta. Basta UMA
+ * fonte dizer que sim. Nunca lança — roda no layout de `/app`, e um throw ali
+ * derruba todas as telas.
  *
  * Sem cache de processo de propósito: o tronco muda quando o cliente salva a
  * tela, e um menu que só acorda no próximo deploy repetiria o defeito que este
@@ -38,29 +49,71 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { logger } from "@/lib/logger";
 
-export async function telefoniaEmUso(
-  db: SupabaseClient,
+type Leitura = PromiseLike<{ data: unknown[] | null; error: unknown }>;
+
+// A consulta é MONTADA dentro do try: um cliente que não tenha `limit` (ou que
+// lance ao encadear) derruba só esta fonte, nunca o sinal inteiro.
+async function temLinha(
+  leitura: () => Leitura,
+  fonte: string,
   organizationId: string,
 ): Promise<boolean> {
   try {
-    const { data, error } = await db
-      .from("voip_trunk_settings")
-      .select("organization_id")
-      .eq("organization_id", organizationId)
-      .maybeSingle();
+    const { data, error } = await leitura();
     if (error) {
-      logger.warn("telefonia em uso: leitura recusada — tratando como desligada", {
+      logger.warn("telefonia em uso: leitura recusada — a fonte não conta", {
         organization_id: organizationId,
+        fonte,
         detalhe: (error as { message?: string }).message,
       });
       return false;
     }
-    return !!data;
+    return Array.isArray(data) && data.length > 0;
   } catch (erro) {
-    logger.warn("telefonia em uso: leitura falhou — tratando como desligada", {
+    logger.warn("telefonia em uso: leitura falhou — a fonte não conta", {
       organization_id: organizationId,
+      fonte,
       detalhe: erro instanceof Error ? erro.message : String(erro),
     });
     return false;
   }
+}
+
+export async function telefoniaEmUso(db: SupabaseClient, organizationId: string): Promise<boolean> {
+  if ((process.env.VOIP_TRUNK_ENDPOINT ?? "").trim() !== "") return true;
+  const fontes = await Promise.all([
+    temLinha(
+      () =>
+        db
+          .from("voip_trunk_settings")
+          .select("organization_id")
+          .eq("organization_id", organizationId)
+          .limit(1),
+      "tronco salvo",
+      organizationId,
+    ),
+    temLinha(
+      () =>
+        db
+          .from("phone_numbers")
+          .select("id")
+          .eq("organization_id", organizationId)
+          .eq("is_active", true)
+          .limit(1),
+      "número ativo",
+      organizationId,
+    ),
+    temLinha(
+      () =>
+        db
+          .from("voice_calls")
+          .select("id")
+          .eq("organization_id", organizationId)
+          .eq("provider", "sip")
+          .limit(1),
+      "ligação SIP registrada",
+      organizationId,
+    ),
+  ]);
+  return fontes.some(Boolean);
 }

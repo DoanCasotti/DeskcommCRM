@@ -49,8 +49,9 @@ function dbQueDevolve(
   const select = vi.fn(() => ({ eq, in: inFn }));
   const from = vi.fn((tabela: string) => {
     if (tabela === "voip_trunk_settings") {
+      // O sinal lê `.eq(...).limit(1)` e espera uma LISTA (lib/telefonia/em-uso.ts).
       const eqDoTronco = vi.fn(() => ({
-        maybeSingle: vi.fn(async () => ({ data: tronco ? { organization_id: "org-1" } : null, error: null })),
+        limit: vi.fn(async () => ({ data: tronco ? [{ organization_id: "org-1" }] : [], error: null })),
       }));
       return { select: vi.fn(() => ({ eq: eqDoTronco })) };
     }
