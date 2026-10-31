@@ -29,6 +29,8 @@
  * a linha em `platform_admins`.
  */
 
+import type { NavMetadata } from "@/lib/navigation/catalogo";
+
 export interface ItemDeAjuda {
   /** Texto do link. É a CHAVE do dicionário — o português é a chave. */
   texto: string;
@@ -119,7 +121,16 @@ export const BLOCOS_DE_AJUDA: readonly BlocoDeAjuda[] = [
   },
 ];
 
-/** O bloco do instalador só para quem tem a linha em `platform_admins`. */
-export function blocosVisiveis(ehDonoDoServidor: boolean): readonly BlocoDeAjuda[] {
-  return BLOCOS_DE_AJUDA.filter((bloco) => !bloco.soParaQuemInstala || ehDonoDoServidor);
+/** Os atalhos regulares são uma projeção da MESMA interface do menu. A porta
+ * de instalação tem o gate próprio da página, fora do catálogo do tenant. */
+export function blocosVisiveis(
+  ehDonoDoServidor: boolean,
+  destinos: readonly Pick<NavMetadata, "href">[],
+): readonly BlocoDeAjuda[] {
+  const visiveis = new Set(destinos.map((destino) => destino.href));
+  return BLOCOS_DE_AJUDA.flatMap((bloco) => {
+    if (bloco.soParaQuemInstala) return ehDonoDoServidor ? [bloco] : [];
+    const itens = bloco.itens.filter((item) => visiveis.has(item.href));
+    return itens.length ? [{ ...bloco, itens }] : [];
+  });
 }

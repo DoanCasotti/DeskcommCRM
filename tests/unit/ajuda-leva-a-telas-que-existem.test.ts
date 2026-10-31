@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import { BLOCOS_DE_AJUDA, blocosVisiveis } from "@/lib/ajuda/hub";
 import { DICIONARIO } from "@/lib/i18n/dicionario";
 import { GRUPO_NO_RODAPE, NAV_CATALOG } from "@/lib/navigation/catalogo";
+import { destinosDaInterface } from "@/lib/navigation/interface";
 
 /**
  * A AJUDA NÃO PODE APONTAR PARA O NADA.
@@ -83,8 +84,9 @@ describe("a ajuda dentro do produto", () => {
   });
 
   it("o bloco de quem instala só aparece para o dono do servidor", () => {
-    const paraQuemUsa = blocosVisiveis(false).map((b) => b.titulo);
-    const paraQuemInstala = blocosVisiveis(true).map((b) => b.titulo);
+    const destinos = destinosDaInterface(undefined, false, "admin", [], []);
+    const paraQuemUsa = blocosVisiveis(false, destinos).map((b) => b.titulo);
+    const paraQuemInstala = blocosVisiveis(true, destinos).map((b) => b.titulo);
 
     expect(paraQuemUsa).not.toContain("Para quem instala e mantém");
     expect(paraQuemInstala).toContain("Para quem instala e mantém");
@@ -92,9 +94,10 @@ describe("a ajuda dentro do produto", () => {
     expect(paraQuemInstala).toEqual(expect.arrayContaining(paraQuemUsa));
   });
 
-  it("há pelo menos uma jornada para quem só usa o produto", () => {
+  it("admin de tenant com interface completa mantém as jornadas do produto", () => {
     // Guarda contra o hub esvaziar: um `soParaQuemInstala` mal copiado em todos
     // os blocos deixaria a tela vazia para atendente, gerente e admin.
-    expect(blocosVisiveis(false).flatMap((b) => b.itens).length).toBeGreaterThanOrEqual(6);
+    const destinos = destinosDaInterface(undefined, false, "admin", [], []);
+    expect(blocosVisiveis(false, destinos).flatMap((b) => b.itens).length).toBe(9);
   });
 });
