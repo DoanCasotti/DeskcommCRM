@@ -30,11 +30,16 @@
  * `fn_definir_carteira_do_cliente` (a única que grava carteira, agora também com
  * a origem `automacao`) e `fn_conversation_assign` (a mesma do botão Transferir,
  * que grava o evento na mesma transação e revalida o destino como membro
- * ativo). Inventar uma terceira régua de dono é o defeito que a #3479 mediu.
+ * ativo), chamada por `fn_passar_conversas_do_contato`. Inventar uma terceira
+ * régua de dono é o defeito que a #3479 mediu.
+ *
+ * As duas opções se sobrepõem, e é de propósito: desde a #3642, passar a
+ * CARTEIRA já leva as conversas abertas do dono anterior e as sem dono que a IA
+ * não atende. `conversas` acrescenta as que estão com uma TERCEIRA pessoa. As
+ * duas ligadas = toda conversa aberta com gente vai para o novo dono.
  */
 import { registerAction } from "@/lib/automation/actions";
 import type { ActionCtx, ActionResultDetail } from "@/lib/automation/types";
-import { STATUS_ENCERRADOS } from "@/lib/inbox/comando-da-conversa";
 import { resolveOwnerPatch } from "@/lib/leads/owner-patch";
 import { rotuloDoMembro } from "@/lib/users/rotulo-do-atendente";
 
@@ -125,7 +130,7 @@ async function contatoDoNegocio(ctx: ActionCtx, lead: NegocioDoContexto): Promis
  * A carteira do contato (#2591) passa para o novo dono pela porta única.
  *
  * Sem ator humano: a automação não tem sessão. A função aceita `p_actor` nulo
- * SÓ com a origem `automacao` (migration 0799) — é o que separa "o sistema fez,
+ * SÓ com a origem `automacao` (migration 9057) — é o que separa "o sistema fez,
  * a pedido desta regra" de "uma pessoa fez, com o papel dela". O caminho do
  * humano continua exigindo manager+ e recusando origem `automacao`.
  */
@@ -140,62 +145,29 @@ async function passarACarteira(ctx: ActionCtx, contatoId: string, userId: string
   return error ? error.message : null;
 }
 
-/** Uma conversa aberta do contato que ainda está no nome de outra pessoa. */
-type ConversaComDono = { id: string; assigned_to_user_id: string | null };
-
 /**
- * As conversas ABERTAS do contato passam para o novo dono.
+ * As conversas ABERTAS do contato que estão com OUTRA pessoa passam para o novo
+ * dono, numa chamada só (migration 9057). A função trava as linhas pelo filtro
+ * de "aberta" e chama `fn_conversation_assign` (`reason = 'transfer'`, o botão
+ * Transferir) para cada uma — conversa encerrada no meio do caminho não é
+ * reaberta — e devolve quantas a atribuição de fato gravou. É tudo ou nada.
  *
- * "Aberta" é a régua de `STATUS_ENCERRADOS` — a mesma que responde "quem manda
- * nesta conversa" (`lib/inbox/comando-da-conversa.ts`). Conversa encerrada não é
- * tocada: nem o dono, nem o status.
- *
- * Conversa SEM dono fica onde está. Ela é fila ou IA atendendo, não tem dono
- * anterior a passar — e `fn_conversation_assign` com `reason='transfer'` silencia
- * o bot (`bot_silenced_until = 'infinity'`), então arrastá-la para o Closer
- * calaria a IA num atendimento que ninguém assumiu.
- *
- * A troca é a do botão Transferir: `fn_conversation_assign` com
- * `p_reason='transfer'` e `p_expected_assignee` do dono LIDO agora, para não
- * atropelar quem transferiu a conversa no meio do caminho (a função devolve
- * vazio e nada é gravado).
+ * Conversa SEM dono fica onde está: é fila ou IA atendendo, e `transfer`
+ * silencia o bot. (Com `contato` ligado, a carteira já levou as sem dono que a
+ * IA não atende — #3642.)
  */
 async function passarAsConversas(
   ctx: ActionCtx,
   contatoId: string,
   userId: string,
-): Promise<{ movidas: number; falhas: string[] }> {
-  const { data, error } = await ctx.admin
-    .from("conversations")
-    .select("id, assigned_to_user_id")
-    .eq("organization_id", ctx.organizationId)
-    .eq("contact_id", contatoId)
-    .not("status", "in", `(${[...STATUS_ENCERRADOS].join(",")})`)
-    .order("id");
-
-  if (error) return { movidas: 0, falhas: [error.message] };
-
-  const aPassar = ((data ?? []) as ConversaComDono[]).filter(
-    (conversa) => conversa.assigned_to_user_id !== null && conversa.assigned_to_user_id !== userId,
-  );
-
-  let movidas = 0;
-  const falhas: string[] = [];
-  for (const conversa of aPassar) {
-    const { error: erroDaTroca } = await ctx.admin.rpc("fn_conversation_assign", {
-      p_organization_id: ctx.organizationId,
-      p_conversation_id: conversa.id,
-      p_to_user_id: userId,
-      p_reason: "transfer",
-      // O dono lido acima: se outra pessoa mexeu na conversa nesse meio-tempo,
-      // a função devolve vazio em vez de sobrescrever a escolha dela.
-      p_expected_assignee: conversa.assigned_to_user_id as string,
-      p_enforce_expected: true,
-    });
-    if (erroDaTroca) falhas.push(`${conversa.id}: ${erroDaTroca.message}`);
-    else movidas += 1;
-  }
-  return { movidas, falhas };
+): Promise<{ movidas: number } | { erro: string }> {
+  const { data, error } = await ctx.admin.rpc("fn_passar_conversas_do_contato", {
+    p_org: ctx.organizationId,
+    p_contact: contatoId,
+    p_dono: userId,
+  });
+  if (error) return { erro: error.message };
+  return { movidas: typeof data === "number" ? data : 0 };
 }
 
 async function execute(ctx: ActionCtx, config: Record<string, unknown>): Promise<ActionResultDetail> {
@@ -281,14 +253,14 @@ async function execute(ctx: ActionCtx, config: Record<string, unknown>): Promise
 
   if (opcoes.conversas) {
     const conversas = await passarAsConversas(ctx, contatoId, userId);
-    detalhe.conversas = { movidas: conversas.movidas, falhas: conversas.falhas.length };
-    if (conversas.falhas.length > 0) {
+    if ("erro" in conversas) {
       falhouConversas = true;
-      detalhe.erro_conversas = conversas.falhas[0];
-      // A tela mostra `detalhe.erro` (lib: ActivityTab/detalheTecnicoDe) e a
-      // frase acima promete "o detalhe técnico abaixo diz quais". A carteira
-      // tem prioridade porque veio primeiro; sem ela, a conversa ocupa o lugar.
-      if (detalhe.erro === undefined) detalhe.erro = conversas.falhas[0];
+      detalhe.conversas = "falhou";
+      // Mensagem do banco: o recibo (`resultadoParaRecibo`) a troca pelo código
+      // antes de gravar. A carteira tem prioridade porque veio primeiro.
+      if (detalhe.erro === undefined) detalhe.erro = conversas.erro;
+    } else {
+      detalhe.conversas = { movidas: conversas.movidas };
     }
   }
 
