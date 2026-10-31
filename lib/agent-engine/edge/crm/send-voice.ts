@@ -138,8 +138,12 @@ export function registrarCustoDeVoz(params: {
    * (`WHERE organization_id=$1 AND job_id=$2`, usado pela tela de execuções)
    * nunca encontra essa linha — o custo da voz fica invisível execução a
    * execução, mesmo contando certo no total da organização.
+   *
+   * `null` só para quem não roda dentro de execução nenhuma — a prévia da
+   * tela de voz (`app/api/v1/ai/voz/preview/route.ts`). Explícito, não
+   * opcional: o chamador do agente continua obrigado a passar o seu.
    */
-  jobId: string;
+  jobId: string | null;
   caracteres: number;
   modelId: string;
 }): void {
