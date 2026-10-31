@@ -50748,7 +50748,7 @@ alter table public.contacts
 alter table public.contacts
   add constraint contacts_carteira_origem_vocabulario
   check (carteira_origem is null
-         or carteira_origem in ('manual', 'importacao', 'atribuicao_automatica'));
+         or carteira_origem in ('manual', 'importacao', 'atribuicao_automatica', 'automacao'));
 
 alter table public.contacts
   drop constraint if exists contacts_carteira_trio_coerente;
@@ -50828,27 +50828,40 @@ declare
   v_anterior uuid;
   v_conversa uuid;
 begin
+  if v_origem not in ('manual', 'importacao', 'atribuicao_automatica', 'automacao') then
+    raise exception 'carteira_origem_invalida' using errcode = '22023';
+  end if;
   if v_ator is null then
-    raise exception 'carteira_sem_ator' using errcode = '42501';
+    -- #3514: sem ator humano, quem grava é o SISTEMA — e só ele. A automação
+    -- não tem sessão; o que a identifica é a origem `automacao`, que a função
+    -- recusa a quem chega com ator (senão a origem do sistema virava um rótulo
+    -- que qualquer manager escolhia para esconder o próprio ato).
+    if v_origem <> 'automacao' then
+      raise exception 'carteira_sem_ator' using errcode = '42501';
+    end if;
   end if;
   if p_org is null or p_contact is null then
     raise exception 'carteira_parametro_invalido' using errcode = '22023';
   end if;
-  if v_origem not in ('manual', 'importacao', 'atribuicao_automatica') then
-    raise exception 'carteira_origem_invalida' using errcode = '22023';
-  end if;
 
-  -- Quem muda: manager+ da MESMA organização (e membro aceito, não revogado).
-  select uo.role into v_papel
-    from public.user_organizations uo
-   where uo.user_id = v_ator
-     and uo.organization_id = p_org
-     and uo.accepted_at is not null
-     and uo.revoked_at is null;
-  if v_papel is null or v_papel not in ('manager', 'admin') then
-    raise exception 'carteira_permissao_negada'
-      using errcode = '42501',
-            detail = 'Só manager e admin definem a carteira do cliente.';
+  if v_ator is not null then
+    -- Quem muda: manager+ da MESMA organização (e membro aceito, não revogado).
+    select uo.role into v_papel
+      from public.user_organizations uo
+     where uo.user_id = v_ator
+       and uo.organization_id = p_org
+       and uo.accepted_at is not null
+       and uo.revoked_at is null;
+    if v_papel is null or v_papel not in ('manager', 'admin') then
+      raise exception 'carteira_permissao_negada'
+        using errcode = '42501',
+              detail = 'Só manager e admin definem a carteira do cliente.';
+    end if;
+    if v_origem = 'automacao' then
+      raise exception 'carteira_origem_invalida'
+        using errcode = '22023',
+              detail = 'A origem automacao é do servidor, sem ator: quem chama com ator grava manual ou atribuicao_automatica.';
+    end if;
   end if;
 
   select c.organization_id, c.carteira_user_id into v_contato_org, v_anterior
@@ -50933,6 +50946,76 @@ $$;
 revoke execute on function public.fn_definir_carteira_do_cliente(uuid, uuid, uuid, uuid, text)
   from public, anon, authenticated;
 grant execute on function public.fn_definir_carteira_do_cliente(uuid, uuid, uuid, uuid, text)
+  to service_role;
+
+-- ---- a passagem das conversas do contato (migration 9057, #3514) ----
+
+-- ─── (C) as conversas abertas que estão com OUTRA pessoa ────────────────────
+--
+-- A opção "conversas" da ação passa ao dono novo as conversas ABERTAS do
+-- contato que hoje estão no nome de outra pessoa — inclusive a de um terceiro,
+-- que a carteira (#3642) deixa onde está de propósito. Conversa sem dono não é
+-- tocada aqui: ela é fila ou IA atendendo, e `reason = 'transfer'` calaria a IA.
+--
+-- Por que em SQL, e não um laço no servidor chamando `fn_conversation_assign`:
+--   * a conversa encerrada entre a leitura e a troca era REABERTA, porque a
+--     função de atribuição grava `status = 'claimed'` sem conferir o status de
+--     novo. Aqui as linhas são travadas (`for no key update`) pelo mesmo filtro
+--     de "aberta": quem encerra antes da trava tira a conversa do conjunto
+--     (o Postgres reavalia o WHERE na versão nova), quem encerra depois espera;
+--   * a contagem é a das linhas que a função de atribuição DEVOLVEU. Ela é
+--     `returns setof` e devolve vazio quando não grava; contar a chamada sem
+--     erro como "movida" contava o que não foi movido;
+--   * é tudo ou nada: o recibo diz "passou" ou "não passou", nunca "algumas".
+--
+-- "Aberta" é a mesma lista da 9039 e de `STATUS_ENCERRADOS`
+-- (`lib/inbox/comando-da-conversa.ts`): o complemento de closed/archived/resolved.
+
+create or replace function public.fn_passar_conversas_do_contato(
+  p_org uuid,
+  p_contact uuid,
+  p_dono uuid
+)
+returns integer
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_conversa uuid;
+  v_passou uuid;
+  v_movidas integer := 0;
+begin
+  if p_org is null or p_contact is null or p_dono is null then
+    raise exception 'passagem_parametro_invalido' using errcode = '22023';
+  end if;
+
+  for v_conversa in
+    select c.id
+      from public.conversations c
+     where c.organization_id = p_org
+       and c.contact_id = p_contact
+       and c.status in ('open', 'pending', 'claimed', 'ai_handling')
+       and c.assigned_to_user_id is not null
+       and c.assigned_to_user_id <> p_dono
+     order by c.id
+       for no key update
+  loop
+    -- Zero linhas devolvidas = nada gravado: `v_passou` fica nulo e não conta.
+    select a.id into v_passou
+      from public.fn_conversation_assign(p_org, v_conversa, p_dono, 'transfer') a;
+    if v_passou is not null then
+      v_movidas := v_movidas + 1;
+    end if;
+  end loop;
+
+  return v_movidas;
+end;
+$$;
+
+revoke execute on function public.fn_passar_conversas_do_contato(uuid, uuid, uuid)
+  from public, anon, authenticated;
+grant execute on function public.fn_passar_conversas_do_contato(uuid, uuid, uuid)
   to service_role;
 
 -- ─── (C) o negócio novo nasce com o dono ────────────────────────────────────

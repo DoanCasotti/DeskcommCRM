@@ -18285,6 +18285,15 @@ export const DICIONARIO: Traducoes = {
   "A fila do rodízio desta automação está vazia. Abra a automação e escolha quem entra no rodízio.": { es: "La fila de la rotación de esta automatización está vacía. Abre la automatización y elige quién entra en la rotación." },
   "A automação foi alterada e não tem mais o rodízio que disparou esta ação. Nada foi atribuído.": { es: "La automatización fue modificada y ya no tiene la rotación que disparó esta acción. No se asignó nada." },
   "O lead deste evento não foi encontrado nesta organização, então ninguém foi atribuído.": { es: "El lead de este evento no se encontró en esta organización, así que no se asignó a nadie." },
+  // #3514 — a passagem SDR → Closer na ação assign_owner (as duas caixas e as
+  // duas frases de falha parcial). Desligadas por padrão: o texto diz o que
+  // acontece SEM elas para quem só quer o negócio.
+  "Passar também o contato (carteira)": { es: "Pasar también el contacto (cartera)" },
+  "O cliente passa a ser deste atendente, no lugar do dono atual, e leva junto as conversas abertas que estavam com o dono anterior ou sem dono (as que a IA está atendendo ficam com a IA). Desligado, o cliente e as conversas ficam como estão.": { es: "El cliente pasa a ser de este asesor, en lugar del dueño actual, y se lleva las conversaciones abiertas que estaban con el dueño anterior o sin dueño (las que la IA está atendiendo se quedan con la IA). Desactivado, el cliente y las conversaciones quedan como están." },
+  "Passar também as conversas abertas do contato": { es: "Pasar también las conversaciones abiertas del contacto" },
+  "As conversas abertas que hoje estão com qualquer outra pessoa vão para este atendente, como no botão Transferir. Esta opção não toca conversa encerrada nem conversa sem dono.": { es: "Las conversaciones abiertas que hoy están con cualquier otra persona pasan a este asesor, como en el botón Transferir. Esta opción no toca la conversación cerrada ni la conversación sin dueño." },
+  "O negócio passou para a pessoa escolhida, mas a carteira do cliente não: ela e as conversas que iam junto continuam com o dono anterior. A ficha do contato mostra quem é o dono agora.": { es: "El negocio pasó a la persona elegida, pero la cartera del cliente no: ella y las conversaciones que iban con ella siguen con el dueño anterior. La ficha del contacto muestra quién es el dueño ahora." },
+  "O negócio passou para a pessoa escolhida, mas as conversas abertas do cliente que estavam com outra pessoa não foram transferidas: nenhuma mudou de dono. Transfira pela conversa, se precisar.": { es: "El negocio pasó a la persona elegida, pero las conversaciones abiertas del cliente que estaban con otra persona no se transfirieron: ninguna cambió de dueño. Transfiérelas desde la conversación, si hace falta." },
   "Vez de {nome}, posição {posicao} da fila do rodízio.": { es: "Turno de {nome}, posición {posicao} de la fila de la rotación." },
   // #3006 — "usar como exemplo para a IA": a conversa marcada vira material do
   // agente (opt-in de LGPD). O selo fica curto de propósito: ele divide a faixa
