@@ -242,6 +242,9 @@ import {
   previaPedeCorrecaoDoTurnoMudo,
   tetoDePassosAtingido,
 } from './desfecho-da-previa';
+// #3281 — o clique humano pode ocupar a recuperação única do silêncio inicial.
+// Veto, falha e oferta existente não autorizam outra geração.
+import { INSTRUCAO_DO_PEDIDO_HUMANO, previaContinuaAtePropor } from './proposta-sob-pedido';
 import { criarTravaDeDuplicata } from './near-dup';
 import { vetoReason } from '@/lib/leads/veto-activity';
 import { corposEnviadosDesdeUltimaInbound } from './memoria-envio';
@@ -5766,15 +5769,35 @@ async function executarTurnoDoAgente(
     //
     // Só o rascunho ASSISTIDO: a prévia de TESTE (sandbox) mostra o que o agente
     // produziu e uma segunda chamada esconderia o defeito que ela existe para
-    // revelar. Só com texto solto: silêncio sem texto é decisão já tomada, e
-    // pedir de novo pagaria uma chamada de modelo para ouvir a mesma coisa.
+    // revelar. Texto solto conserva a instrução canônica; só o silêncio inicial
+    // sem oferta nem impedimento pode usar a mesma vaga para o pedido humano.
     let correcaoTruncou = false;
     // A correção também pode gastar o teto dela (PASSOS_DA_CORRECAO) só em consultas: na
     // prévia isso é a mesma falha do teto da primeira chamada, não decisão.
     let tetoNaCorrecao = false;
+    // #3281 — só o primeiro silêncio sem oferta nem impedimento recebe o
+    // pedido humano. Ele ocupa a MESMA recuperação abaixo: nunca há terceira
+    // chamada depois de uma correção que também decidiu ficar em silêncio.
+    const pedidoHumano =
+      preview?.kind === 'assisted' &&
+      previaContinuaAtePropor({
+        candidatos: preview.result.candidates.length,
+        propostas: preview.result.proposals.length,
+        impedimentos: preview.result.impediments.map((i) => i.code),
+        tentativasDeEnvio,
+        textoEscrito: turn.result.text,
+        inboundsSemResposta: inboundsNaoRespondidos(preview.context.context.messages).length,
+        finishReason: turn.result.finishReason,
+        saidaTruncada,
+        tetoDePassosAtingido: tetoDePassosAtingido({
+          passosUsados: turn.result.steps?.length ?? 0,
+          maxSteps,
+          finishReason: turn.result.finishReason,
+        }),
+      });
     const correcaoDoTurnoMudoPedida =
       preview?.kind === 'assisted'
-        ? previaPedeCorrecaoDoTurnoMudo({
+        ? pedidoHumano || previaPedeCorrecaoDoTurnoMudo({
             textoEscrito: turn.result.text,
             candidatos: preview.result.candidates.length,
             tentativasDeEnvio,
@@ -5796,7 +5819,10 @@ async function executarTurnoDoAgente(
         job_id: job?.id ?? null,
         previa: preview?.kind ?? null,
       });
-      const pedidoDeCorrecao: ModelMessage = { role: 'user', content: CORRECAO_DO_TURNO_MUDO };
+      const pedidoDeCorrecao: ModelMessage = {
+        role: 'user',
+        content: pedidoHumano ? INSTRUCAO_DO_PEDIDO_HUMANO : CORRECAO_DO_TURNO_MUDO,
+      };
       const correcao = await runModelCall(
         pool,
         deps.llmCfg,
@@ -5812,6 +5838,9 @@ async function executarTurnoDoAgente(
           // Teto em `PASSOS_DA_CORRECAO` (turno-mudo.ts) — o MESMO número mede
           // `tetoNaCorrecao` logo abaixo; dois literais já divergiram (6 aqui, 3 lá).
           maxSteps: Math.min(maxSteps, PASSOS_DA_CORRECAO),
+          ...(preview?.kind === 'assisted'
+            ? { pararQuando: () => preview.result.candidates.length > 0 }
+            : {}),
           ...(agentConfig !== null
             ? {
                 model: agentConfig.model,
