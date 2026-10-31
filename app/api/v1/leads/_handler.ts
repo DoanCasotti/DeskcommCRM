@@ -19,6 +19,11 @@ import { emitLeadActivity, stageChangeReason } from "@/lib/leads/activity-emitte
 import { listaLegivel } from "@/lib/leads/activity-vocabulary";
 import { camposAlterados } from "@/lib/leads/campos-alterados";
 import { valoresAntesDepois } from "@/lib/leads/valores-audit";
+import {
+  mencionaRecorrencia,
+  recorrenciaParaGravar,
+  type RecorrenciaNoPatch,
+} from "@/lib/leads/valor-recorrente";
 import { RECUSA_DE_TROCA_DE_FUNIL } from "@/lib/leads/clonar-para-funil";
 import {
   camposQueMudaram,
@@ -55,6 +60,7 @@ import type { CreateLeadInput, UpdateLeadInput } from "@/lib/schemas";
 import { ehCorrecaoDeMovimentoDaIa } from "@/lib/leads/correcao-humana";
 import { ocultarProvaMetaNaResposta, removerProvaMetaLeadSubmitted } from "@/lib/leads/prova-meta-lead-submitted";
 import { ehRecusaDaVisibilidadeDoFunil } from "@/lib/leads/recusa-da-visibilidade";
+import { posicaoDeEntradaNaEtapa } from "@/lib/kanban/entrada-na-etapa";
 
 type SB = SupabaseClient;
 
@@ -734,19 +740,33 @@ export async function createLeadHandler(
 
   if (input.contact_id) await contatoDaOrgOrThrow(supabase, ctx, input.contact_id);
 
-  // next position_in_stage = MAX + 1000.
-  const { data: maxRow, error: maxErr } = await supabase
+  // ── ONDE UM CARD NOVO ENTRA NA COLUNA (issue #3461, item 1) ────────────────
+  //
+  // Era `MAX + 1000`: o card nascia ABAIXO de todos os outros, e a conversa
+  // iniciada no Inbox aparecia no fim da coluna. Agora ele entra ACIMA do
+  // primeiro (`posicaoDeEntradaNaEtapa`, MIN − 1000) — a régua que a resposta
+  // rápida já usa desde a migration 0729. A leitura continua sendo UMA linha
+  // pela mesma coluna; só muda a ponta.
+  const { data: primeiraRow, error: primeiraErr } = await supabase
     .from("crm_leads")
     .select("position_in_stage")
     .eq("stage_id", input.stage_id)
-    .order("position_in_stage", { ascending: false })
+    // O segundo argumento EXPLÍCITO (e não o default do supabase-js): os fakes
+    // `FakeQuery` das suítes de invariante leem `opts.ascending` sem guarda, e
+    // um `.order(col)` de um argumento só os derruba com `Cannot read
+    // properties of undefined (reading 'ascending')` — um vermelho que aparece
+    // em arquivo FORA do diff e some da vista de quem revisa. `true` é o mesmo
+    // que o default fazia: o primeiro card da coluna é o de MENOR posição.
+    .order("position_in_stage", { ascending: true })
     .limit(1)
     .maybeSingle();
 
-  if (maxErr) {
-    throw new ApiError(500, "internal_error", undefined, ctx.requestId, maxErr.message);
+  if (primeiraErr) {
+    throw new ApiError(500, "internal_error", undefined, ctx.requestId, primeiraErr.message);
   }
-  const nextPos = maxRow?.position_in_stage ? Number(maxRow.position_in_stage) + 1000 : 1000;
+  const nextPos = posicaoDeEntradaNaEtapa(
+    primeiraRow?.position_in_stage == null ? null : Number(primeiraRow.position_in_stage),
+  );
 
   // Nascer com dono e sem owner_kind é drift silencioso (o CHECK aceita kind
   // null): o lead teria dono e sumiria do filtro e das métricas por kind.
@@ -788,6 +808,13 @@ export async function createLeadHandler(
       description: input.description ?? null,
       contact_id: input.contact_id ?? null,
       value_cents: input.value_cents ?? null,
+      // O VALOR RECORRENTE — as três colunas da fatia 1 da #3602, SEMPRE
+      // nomeadas (nulas quando o negócio não tem recorrência). `value_cents`
+      // acima segue sendo o valor ÚNICO: nada é somado, e é por isso que o card
+      // consegue escrever "R$ 3.000 + R$ 500/mês". A coerência do trio
+      // (recorrente nulo ⇒ periodicidade e duração nulas; recorrente sem
+      // periodicidade ⇒ mensal) é da régua pura, a MESMA que o PATCH usa.
+      ...recorrenciaParaGravar(input),
       currency,
       ...ownerPatch,
       assigned_at:
@@ -1010,6 +1037,25 @@ export async function updateLeadHandler(
   if (input.description !== undefined) patch.description = input.description;
   if (input.contact_id !== undefined) patch.contact_id = input.contact_id;
   if (input.value_cents !== undefined) patch.value_cents = input.value_cents;
+  // O RECORRENTE SÓ É TOCADO quando a requisição o menciona (fatia 1 da #3602):
+  // um PATCH de título que carimbasse `null` nas três apagaria a mensalidade do
+  // negócio em silêncio. E, tocado, vai o TRIO coerente — mandar só
+  // `recurring_months` deixaria duração sem mensalidade no banco.
+  if (mencionaRecorrencia(input)) {
+    // A chave ausente vale o que a linha JÁ tem: o MCP e a REST mandam só o que
+    // mudou, e "a duração agora é 24" não pode apagar a mensalidade gravada.
+    const atual = existing as RecorrenciaNoPatch;
+    const valorDe = <K extends keyof RecorrenciaNoPatch>(k: K) =>
+      input[k] !== undefined ? input[k] : atual[k];
+    Object.assign(
+      patch,
+      recorrenciaParaGravar({
+        recurring_value_cents: valorDe("recurring_value_cents"),
+        recurring_period: valorDe("recurring_period"),
+        recurring_months: valorDe("recurring_months"),
+      }),
+    );
+  }
   if (input.currency !== undefined) patch.currency = input.currency;
   // Dono do negócio (0070): regra em lib/leads/owner-patch.ts, compartilhada
   // com create, bulk e MCP. owner_kind é DERIVADO — nunca lido do body.
@@ -1266,7 +1312,7 @@ export async function updateLeadHandler(
 
 export interface MoveLeadAdminInput {
   to_stage_id: string;
-  /** Optional fractional position. If omitted, append at end (max + 1000). */
+  /** Posição fracionária opcional. Sem ela: outra etapa entra no TOPO (min − 1000, #3461); a mesma etapa vai para o fim (max + 1000). */
   position_in_stage?: number;
   reason?: string;
   /**
@@ -1376,14 +1422,32 @@ export async function moveLeadHandler(
 
   let position = input.position_in_stage;
   if (position === undefined) {
-    const { data: maxRow } = await supabase
+    // ── SEM POSIÇÃO: A ENTRADA VAI PARA O TOPO (issue #3461, item 1) ────────
+    //
+    // Este é o caminho de quem move etapa SEM passar pelo quadro — a tool MCP
+    // `crm_move_lead_stage`, a ação `create_or_move_lead` e o espelho de etapa
+    // do agente. Era `MAX + 1000` (fim da coluna) e é por isso que a conversa
+    // transferida pelo Inbox aparecia no fim. Agora a etapa de DESTINO manda o
+    // primeiro card, e a entrada fica acima dele.
+    //
+    // A MESMA ETAPA fica de fora de propósito: mover para onde o card já está
+    // é reordenação sem alvo — não há "chegada" a homenagear, e mandá-lo ao
+    // topo transformaria um reordenar em "pular para o começo". Continua no
+    // fim, como era.
+    const mesmaEtapaJa = stage.id === lead.stage_id;
+    const { data: ponta } = await supabase
       .from("crm_leads")
       .select("position_in_stage")
       .eq("stage_id", input.to_stage_id)
-      .order("position_in_stage", { ascending: false })
+      .order("position_in_stage", { ascending: mesmaEtapaJa ? false : true })
       .limit(1)
       .maybeSingle();
-    position = maxRow?.position_in_stage ? Number(maxRow.position_in_stage) + 1000 : 1000;
+    const valorDaPonta = ponta?.position_in_stage == null ? null : Number(ponta.position_in_stage);
+    position = mesmaEtapaJa
+      ? valorDaPonta == null
+        ? 1000
+        : valorDaPonta + 1000
+      : posicaoDeEntradaNaEtapa(valorDaPonta);
   }
 
   // ── A MESMA ETAPA É REORDENAÇÃO, NÃO ENTRADA ────────────────────────────────
@@ -1727,6 +1791,9 @@ export async function retomarLeadHandler(
     description?: string | null;
     contact_id?: string | null;
     value_cents?: number | null;
+    recurring_value_cents?: number | null;
+    recurring_period?: "monthly" | null;
+    recurring_months?: number | null;
     currency?: string | null;
     owner_user_id?: string | null;
     owner_agent_id?: string | null;
@@ -1867,6 +1934,16 @@ export async function retomarLeadHandler(
     },
     ...(copia("description") ? { description: origemTipada.description ?? null } : {}),
     ...(copia("value_cents") ? { value_cents: origemTipada.value_cents ?? null } : {}),
+    // O RECORRENTE acompanha o valor único quando a retomada copia valores
+    // (fatia 1 da #3602): reabrir o negócio só com o setup entregaria um
+    // contrato pela metade, e a mensalidade sumiria sem erro nenhum.
+    ...(copia("value_cents") && origemTipada.recurring_value_cents != null
+      ? {
+          recurring_value_cents: origemTipada.recurring_value_cents,
+          recurring_period: origemTipada.recurring_period ?? "monthly",
+          recurring_months: origemTipada.recurring_months ?? null,
+        }
+      : {}),
     ...(copia("currency") && origemTipada.currency ? { currency: origemTipada.currency } : {}),
     ...(copia("expected_close_date")
       ? { expected_close_date: origemTipada.expected_close_date ?? null }
@@ -1888,11 +1965,20 @@ export async function retomarLeadHandler(
   // A RÉGUA DE CAMPOS OBRIGATÓRIOS (issue #1536): a retomada ENTRA numa etapa,
   // e a etapa exigente vale para ela como vale para o arrasto. Só conta o que o
   // negócio novo vai ter — os campos copiados da origem.
+  //
+  // O ARQUIVO não é cobrado (#2829, fatia 2): a retomada CRIA o negócio
+  // (`createLeadHandler` logo abaixo), e o anexo é do negócio que ainda vai
+  // nascer. Passar `semAnexosAinda` aqui é o que faz esta pergunta ser a MESMA
+  // do escritor — sem ela, a retomada recusava com 422 uma etapa que exige
+  // documento e o caminho do `createLeadHandler` (que pula o arquivo, #3433)
+  // nunca era alcançado. A cobrança volta no próximo move, no lote ou no
+  // fechamento, onde `camposComAnexo` é lido de verdade.
   const vereditoDeCampos = validaCamposExigidos({
     lead: { custom_fields: payload.custom_fields ?? {} },
     settingsDoFunil: settings,
     destino: { stageId: etapa.id, desfecho: null },
     motivoDeGanho: null,
+    semAnexosAinda: true,
   });
   if (vereditoDeCampos.faltando.length > 0) {
     const recusa = recusaDeCamposObrigatorios(vereditoDeCampos.faltando, idioma);
