@@ -141,6 +141,10 @@ const TEXTO_DO_MODULO: Record<ModuloOpcional, { nome: string; oQueFaz: string }>
     oQueFaz:
       "Conecta a assinatura do ChatGPT (o mesmo login do Codex): cada empresa conecta a própria conta, em Credenciais, com a chave de API da mesma empresa como reserva. Desligado por padrão.",
   },
+  setores: {
+    nome: "Setores de atendimento",
+    oQueFaz: "Agrupa os atendentes da Equipe por área e filtra a aba Atendimento por setor. Não muda quem recebe as conversas.",
+  },
 };
 
 /**
@@ -466,6 +470,17 @@ const DA_EMPRESA: RecursoOpcional[] = [
     quemDecide: "admin",
     href: "/app/settings/tenant/agenda",
     ler: peloSettings((s) => objeto(s.crm)?.cliente_pela_agenda === true),
+  },
+  {
+    id: "cliente_pela_venda",
+    nome: "Quem já comprou volta pelo funil de clientes",
+    oQueFaz:
+      "Contato com negócio ganho e nenhum aberto entra no funil de clientes, não no de captação.",
+    nivel: "organizacao",
+    padrao: "desligado",
+    quemDecide: "admin",
+    href: "/app/settings/atendimento",
+    ler: peloSettings((s) => objeto(s.crm)?.cliente_pela_venda === true),
   },
   {
     id: "colegas_mexem_na_agenda",
