@@ -387,9 +387,11 @@ export async function POST(req: NextRequest): Promise<Response> {
 /**
  * GET devolve o modelo de planilha, para a pessoa não ter de adivinhar as colunas.
  *
- * A coluna `foto` traz DUAS URLs separadas por `|` na primeira linha (a primeira
- * é a capa) e vazia na segunda: é assim que o modelo ensina as duas coisas que a
- * coluna aceita — lista na ordem, e ausência (produto sem foto pela planilha).
+ * A coluna `foto` vem no cabeçalho e VAZIA nas duas linhas: o modelo tem de
+ * importar limpo como vem, que é o primeiro gesto de quem testa a importação.
+ * Um link de exemplo ali seria baixado de verdade — de um domínio de terceiros —
+ * e a linha voltaria recusada. O formato `link1|link2` é explicado na tela de
+ * Produtos, ao lado do link do modelo.
  */
 export async function GET(): Promise<Response> {
   const requestId = randomUUID();
@@ -398,7 +400,7 @@ export async function GET(): Promise<Response> {
 
   const modelo = [
     "codigo,nome,marca,categoria,preco,custo,estoque,foto",
-    "IP15-128,iPhone 15 128GB,Apple,Celular,5499.00,4100.00,3,https://exemplo.com/iphone-15-frente.jpg|https://exemplo.com/iphone-15-verso.jpg",
+    "IP15-128,iPhone 15 128GB,Apple,Celular,5499.00,4100.00,3,",
     "PERF-212,212 VIP Men 100ml,Carolina Herrera,Perfume,449.90,280.00,7,",
   ].join("\n");
 

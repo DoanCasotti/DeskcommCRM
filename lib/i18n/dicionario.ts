@@ -12544,6 +12544,9 @@ export const DICIONARIO: Traducoes = {
   "Novo produto": { es: "Nuevo producto" },
   "Importar planilha": { es: "Importar hoja de cálculo" },
   "Baixar planilha modelo": { es: "Descargar plantilla" },
+  "Na coluna foto, cole o link da imagem (JPG ou PNG, até 5 MB). Para até 5 fotos, separe os links com | — a primeira é a capa.": {
+    es: "En la columna foto, pega el enlace de la imagen (JPG o PNG, hasta 5 MB). Para hasta 5 fotos, separa los enlaces con | — la primera es la portada.",
+  },
   "Produto cadastrado": { es: "Producto registrado" },
   "Produto desativado": { es: "Producto desactivado" },
   "Produto reativado": { es: "Producto reactivado" },

@@ -1091,11 +1091,6 @@ const HOSTS_DECLARADOS: Record<string, EntradaDeHost> = {
     motivo:
       "placeholder do campo de base URL de gateway OpenAI-compatible na tela de provedores: amostra do formato aceito.",
   },
-  "exemplo.com": {
-    categoria: "AMOSTRA",
-    motivo:
-      "endereço das duas fotos da linha de exemplo do modelo de planilha que `GET /api/v1/products/import` devolve como download (`modelo-catalogo.csv`, em `app/api/v1/products/import/route.ts`). É amostra de formato, não destino: o produto nunca fala com ele — quem baixa o modelo troca o link pelo da foto do próprio estoque. Fica AMOSTRA, e não silêncio, porque o arquivo chega à mão do cliente com o endereço escrito nele.",
-  },
   "meet.jit.si": {
     categoria: "AMOSTRA",
     motivo:
@@ -1382,13 +1377,6 @@ describe("catraca de host de terceiro no código que embarca", () => {
       // Decisão escrita: painel de chaves do ElevenLabs, o mesmo caso dos outros
       // CONSOLE — o link "Onde pegar a chave" da tela de Credenciais.
       "elevenlabs.io",
-      // Decisão escrita (#3587): o modelo de planilha do catálogo
-      // (`GET /api/v1/products/import`) ensina a coluna `foto` com duas URLs de
-      // exemplo, e esse CSV chega baixado na mão de quem importa. É amostra de
-      // formato, não destino — o produto nunca fala com o host. Entra aqui, e
-      // não em TLDS_RESERVADOS, porque a doutrina da régua é declarar amostra
-      // em vez de ignorá-la em silêncio (mesmo caso de `mi-gateway.ejemplo.com`).
-      "exemplo.com",
       // Decisão escrita (spec 24, auditoria de site): marca agregador e conta
       // como link social no raio-X — nunca chamada, nunca exibida (a tela mostra
       // o rótulo traduzido).

@@ -531,9 +531,11 @@ describe("POST /api/v1/products/import — foto por URL", () => {
     expect(texto.split("\n")[0]).toBe("codigo,nome,marca,categoria,preco,custo,estoque,foto");
     const lido = lerPlanilha(texto);
     if ("erro" in lido) throw new Error(`o modelo devolvido não é lido pelo importador: ${lido.erro}`);
-    expect(lido.produtos[0]!.fotos).toHaveLength(2);
-    // A segunda linha do modelo mostra a coluna VAZIA: foto é opcional.
-    expect(lido.produtos[1]).not.toHaveProperty("fotos");
+    // As linhas do modelo trazem a coluna VAZIA: importado como vem, o modelo
+    // não baixa nada de ninguém e nenhuma linha volta recusada.
+    expect(lido.produtos).toHaveLength(2);
+    for (const produto of lido.produtos) expect(produto).not.toHaveProperty("fotos");
+    expect(texto).not.toMatch(/https?:\/\//);
   });
 });
 vi.mock("@/lib/impersonate/support", async (importOriginal) => ({
