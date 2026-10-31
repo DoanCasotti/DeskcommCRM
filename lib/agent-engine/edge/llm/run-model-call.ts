@@ -1060,13 +1060,19 @@ export async function runModelCall(db: pg.Pool, cfg: LlmEdgeConfig, input: RunMo
           });
           return;
         }
-        renovacaoDoTurno.recusa = r.motivoDetalhe ? `${r.motivo}:${r.motivoDetalhe}` : r.motivo;
+        const motivo = r.motivoDetalhe ? `${r.motivo}:${r.motivoDetalhe}` : r.motivo;
+        // Só recusa de LOGIN vira aviso de conta desconectada. `em_curso` (outro
+        // processo renovando dentro da trava) e `modulo_desligado` não dizem nada
+        // sobre a conta — anunciá-la desconectada mandaria reconectar uma conta boa.
+        if (r.motivo === 'falha' || r.motivo === 'nao_encontrada') {
+          renovacaoDoTurno.recusa = motivo;
+        }
         deps.log?.error('llm: a assinatura respondeu 401 e a renovação foi RECUSADA', {
           organization_id: input.tenantId,
           purpose,
           provider: cfgUsada.provider,
           model,
-          motivo: renovacaoDoTurno.recusa,
+          motivo,
         });
       },
     });

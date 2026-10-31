@@ -215,6 +215,17 @@ describe("401 → renova → 401: dois POSTs e ponto (sem laço)", () => {
     });
   });
 
+  it("⭐ `em_curso` (outro processo renovando) NÃO abre aviso de conta desconectada", async () => {
+    vi.mocked(renovarAssinaturaNoTurno).mockResolvedValue({ ok: false, motivo: "em_curso" });
+    vi.mocked(sincronizarAvisoDaAssinatura).mockClear();
+    roteiroDoProvedor(["401", "401"]);
+
+    await expect(rodar()).rejects.toThrow();
+
+    // A conta não desconectou: só a trava estava com outro processo.
+    expect(vi.mocked(sincronizarAvisoDaAssinatura)).not.toHaveBeenCalled();
+  });
+
   it("renovação RECUSADA também não vira laço: mesma renovação, mesma repetição", async () => {
     vi.mocked(renovarAssinaturaNoTurno).mockResolvedValue({
       ok: false,
