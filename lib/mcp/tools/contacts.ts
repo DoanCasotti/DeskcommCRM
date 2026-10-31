@@ -19,6 +19,7 @@ import { CAMPOS_PROPONIVEIS, proporDadoDoContato } from "@/lib/contacts/proposta
 import { nomeDoContato } from "@/lib/contacts/rotulo-do-contato";
 import { audit } from "@/lib/audit";
 import { origemConfiavelDoNome, registrarNomeInformado } from "@/lib/contacts/nome-informado";
+import { registrarNomeAplicadoNaTimeline } from "@/lib/contacts/telefone-aplicado";
 import { currentExecutionJob, currentExecutionBoundary, guardServiceEffect } from "@/lib/atendimento/fronteira-server";
 import { getRequestPool } from "@/lib/agent-engine/db/request-pool";
 
@@ -289,6 +290,14 @@ export const crmProposeContactField: McpToolDefinition<typeof propostaShape> = {
     if (origemNome) {
       const nome = await registrarNomeInformado(getRequestPool(), origemNome, input.valor, guardServiceEffect);
       if (nome.aplicado) {
+        // O rastro visível, como o do telefone: a auditoria gravada junto com o
+        // nome não aparece na ficha. Nunca lança — o nome já está gravado.
+        await registrarNomeAplicadoNaTimeline(ctx.supabase, {
+          organizationId: ctx.organizationId,
+          contactId: origemNome.contactId,
+          nome: nome.nome,
+          agentId: ctx.actor.type === "ai_agent" ? (ctx.actor.agent_id ?? null) : null,
+        });
         return {
           proposta_criada: false,
           motivo: "aplicado_automaticamente",
