@@ -234,7 +234,10 @@ async function generate(page: Page) {
   await expect(panel(page).getByText("Sugestão para revisar", { exact: true })).toBeVisible();
   return (await r.json()).data.draft_id as string;
 }
-async function deliver(f: Fixture, draft: string, pool: pg.Pool, esperado: "sent" | "queued" = "sent") {
+// Veto de ritmo não é estado do rascunho (o CHECK de ai_reply_drafts.status não
+// tem 'queued'): fn_reply_settle('queued') devolve o job a 'pending' e o rascunho
+// segue 'approved', com o motivo em error_code.
+async function deliver(f: Fixture, draft: string, pool: pg.Pool, esperado: "sent" | "approved" = "sent") {
   const { rows } = await pool.query(
     "update job_queue j set status='running',locked_by='autonomia-browser',locked_at=clock_timestamp(),attempts=attempts+1 from ai_reply_drafts d where d.organization_id=$1 and d.id=$2 and j.organization_id=d.organization_id and j.id=d.send_job_id and j.status='pending' returning j.*,j.locked_at::text claim_acquired_at",
     [f.org, draft],
@@ -528,12 +531,16 @@ test("pedido humano recupera o silêncio inicial e a aprovação mantém o veto 
     // Não é uma segunda entregaHTTP: simula o consumo concorrente de cota
     // após a aprovação, sem alterar a revisão ou contornar sua checagem.
     await recordSend(pool, f.org, f.channel, new Date());
-    await deliver(f, second, pool, "queued");
-    const veto = await pool.query<{ status: string; error_code: string }>(
-      "select status,error_code from ai_reply_drafts where organization_id=$1 and id=$2",
+    await deliver(f, second, pool, "approved");
+    const veto = await pool.query<{
+      status: string; error_code: string; job_status: string; reagendado: boolean;
+    }>(
+      "select d.status,d.error_code,j.status job_status,j.run_after>now() reagendado from ai_reply_drafts d join job_queue j on j.organization_id=d.organization_id and j.id=d.send_job_id where d.organization_id=$1 and d.id=$2",
       [f.org, second],
     );
-    expect(veto.rows).toEqual([{ status: "queued", error_code: "daily_cap" }]);
+    expect(veto.rows).toEqual([
+      { status: "approved", error_code: "daily_cap", job_status: "pending", reagendado: true },
+    ]);
     expect(channel.bodies).toHaveLength(1);
     const after = await pool.query<{ n: number }>(
       "select count(*)::int n from messages where organization_id=$1 and conversation_id=$2 and direction='outbound'",
