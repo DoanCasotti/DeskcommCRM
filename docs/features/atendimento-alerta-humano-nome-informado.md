@@ -12,8 +12,11 @@ continuam disponíveis.
 
 1. Abra **Central de alertas → Aviso no WhatsApp** (`/app/ai/cases/avisos`).
 2. Configure uma conexão que aceite mensagens livres e o número da equipe, e ligue o aviso.
-3. O mesmo cadastro passa a valer para novas transferências humanas. Se já estava ligado,
-   não há um segundo interruptor: as transferências também passam a avisar esse destinatário.
+3. O mesmo cadastro passa a valer para novas transferências humanas. Se já estava ligado, as
+   transferências também passam a avisar esse destinatário. Logo abaixo do formulário, a opção
+   **Avisar também nas transferências para atendimento humano** (ligada por padrão, como o aviso de
+   Propostas) tira as transferências do número sem desligar os avisos de casos. Ela mora em
+   `settings.crm.avisar_transferencia_no_whatsapp`; só o booleano `false` desliga.
 4. Consulte o resultado no item da transferência na Central. Abra a conversa pelo link do aviso
    e responda pelo CRM; responder ao aviso interno não envia uma resposta ao cliente.
 
@@ -24,12 +27,14 @@ link vem da URL pública da instalação, exige HTTPS e descarta caminho, query 
 CONFIRMADO pelo código:
 
 - `performHumanHandoff` preserva um UUID enquanto a conversa permanece silenciada. A Central e
-  o evento `ai.handoff_aviso_solicitado` são gravados no mesmo statement; sem opt-in, só a Central.
+  o evento `ai.handoff_aviso_solicitado` são gravados no mesmo statement; sem opt-in, ou com as
+  transferências desligadas, só a Central.
 - O marcador na conversa evita solicitar novamente o mesmo episódio mesmo após a poda do evento.
   Após devolver ao automático, uma nova transferência pode iniciar outro episódio.
 - O consumidor `escalacao-aviso-handoff.v1` roda pelo worker. Na requisição HTTP ele adia; na
   organização suspensa ou inoperante ele pula, conforme o contrato do dispatcher.
-- Antes do transporte, relê a configuração e o episódio; confere organização, contato,
+- Antes do transporte, relê a configuração, a opção das transferências (desligada no meio do
+  caminho cancela com `desligado_em_transferencias`) e o episódio; confere organização, contato,
   anonimização, canal, capacidade, destino circular e pacing existentes. Canal offline e pacing
   adiam sem reservar uma tentativa. Evento com mais de 24 horas é cancelado.
 - Uma reserva persistida por compare-and-set permite uma única tentativa externa. Timeout,
@@ -75,9 +80,9 @@ CONFIRMADO pelo código:
 
 Limites: correspondência literal **não autentica identidade e não prova que o texto é um nome**.
 Se o modelo selecionar incorretamente “Tudo bem” como nome, a igualdade por si só não o rejeita;
-há um caso explícito para esse limite na suíte. A gravação muda a ficha e emite auditoria, mas
-**não acrescenta uma atividade de nome aplicado à timeline do contato**. Esta é uma limitação
-visível de observabilidade da contribuição, sujeita à revisão do mantenedor.
+há um caso explícito para esse limite na suíte. A gravação muda a ficha, emite auditoria e
+deixa a linha `contact_field_auto_applied` (campo `name`) na timeline do contato, como o telefone
+aplicado — quando o contato tem um negócio aberto; sem negócio, só a auditoria registra.
 
 ## Ligações do sistema
 
@@ -86,10 +91,10 @@ visível de observabilidade da contribuição, sujeita à revisão do mantenedor
 | Entrada | `human-handoff.ts` e o contexto inbound de `crm_propose_contact_field` |
 | Saída | Transporte do aviso interno; `contacts.name`; revisão em `proporDadoDoContato` |
 | Registro | Evento e metadata da reserva, recibo em `agent_inbox_items`, `api_audit_log` |
-| Tela | Central de alertas e link para o Inbox; ficha do contato. Sem atividade nova na timeline para o nome aplicado |
+| Tela | Central de alertas e link para o Inbox; ficha do contato e linha na timeline do nome aplicado |
 | Porta | Destinos existentes `/app/ai/cases/avisos` e `/app/settings/atendimento` no catálogo de navegação |
 | Anti-morte | Central persiste mesmo sem aviso; resultado incerto exige conferência humana; proposta continua no fluxo existente |
-| Configuração | `AvisoNoWhatsApp`, `NomeInformado` e ação `definirNomeInformado` |
+| Configuração | `AvisoNoWhatsApp`, `AvisoDeTransferencia`, `NomeInformado` e ações `definirNomeInformado` e `definirAvisoDeTransferencia` |
 | Continuidade | Handoff conserva o contexto existente; o aviso só leva à conversa; retorno ao automático delimita novo episódio |
 | Retorno | Recibo incerto muda a ação da equipe; ficha pode ser corrigida e opção desligada. Não há aprendizado automático novo |
 | Mapa | `docs/architecture/atendimento-alerta-humano-nome-informado.architecture.json` |
@@ -101,6 +106,11 @@ rodam no Vitest padrão (`pnpm test:unit`). Cobrem reserva, concorrência, repla
 interrupção simulada, recibo concorrente, escopo, opt-in, mensagem original e CAS. As fixtures
 de banco e transporte são sintéticas: não comprovam SQL executado, RLS, múltiplos processos,
 queda real, entrega WhatsApp nem classificação por um modelo real.
+
+`tests/invariants/nome-informado-e-aviso-de-handoff.test.ts` (`pnpm test:db`) executa o SQL novo
+em Postgres real: nome preenchido nunca sobrescrito, id de outra organização sem efeito, gravação
+única com uma auditoria, um evento por episódio mesmo depois da poda do `event_log`, novo episódio
+após retomar o automático, e nenhum evento com as transferências desligadas.
 
 `tests/unit/aviso-de-caso-tela.test.tsx` monta o componente real com hooks simulados e mede o
 texto explicativo. `tests/unit/dispatcher-org-parada.test.ts` mede o registro e a classificação

@@ -34,9 +34,9 @@
     { "id": "e13", "from": "tool", "to": "nome", "label": "valor selecionado + IDs do job e fronteira confiáveis" },
     { "id": "e14", "from": "nome", "to": "ficha", "label": "aplica só no nome vazio e audita atomicamente" },
     { "id": "e15", "from": "nome", "to": "proposta", "label": "sem aplicação, usa proporDadoDoContato" },
-    { "id": "e16", "from": "ficha", "to": "proposta", "label": "cadastro atualizado visível; sem nova atividade de timeline" },
+    { "id": "e16", "from": "ficha", "to": "proposta", "label": "cadastro atualizado visível; linha contact_field_auto_applied (name) na timeline" },
     { "id": "e17", "from": "proposta", "to": "configNome", "label": "equipe pode corrigir ficha e desligar a opção" },
     { "id": "e18", "from": "inbox", "to": "tool", "label": "nova mensagem pode originar seleção pelo assistente" }
   ],
-  "cards": [{ "dot": "slate", "title": "Limites e não-ligações", "items": ["O aviso reutiliza o mesmo opt-in dos casos; não é resposta ao cliente nem autorização para responder pelo WhatsApp interno.", "Aceite do canal não comprova entrega; reserva interrompida vira incerta sem nova tentativa.", "Nome informado não autentica identidade: a seleção semântica ainda pode errar. O SQL protege escopo e escrita, não classifica linguagem.", "A autoaplicação do nome grava auditoria e muda a ficha, mas não emite nova atividade na timeline. Não há aprendizado automático novo."] }]
+  "cards": [{ "dot": "slate", "title": "Limites e não-ligações", "items": ["O aviso reutiliza o destinatário dos casos, com opção própria settings.crm.avisar_transferencia_no_whatsapp (ligada por padrão); não é resposta ao cliente nem autorização para responder pelo WhatsApp interno.", "Aceite do canal não comprova entrega; reserva interrompida vira incerta sem nova tentativa.", "Nome informado não autentica identidade: a seleção semântica ainda pode errar. O SQL protege escopo e escrita, não classifica linguagem.", "A autoaplicação do nome grava auditoria, muda a ficha e deixa linha na timeline quando há negócio aberto. Não há aprendizado automático novo."] }]
 }

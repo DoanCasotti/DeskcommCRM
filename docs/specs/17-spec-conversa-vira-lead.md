@@ -117,8 +117,8 @@ contato, contexto e revisão do runtime, correspondência com o texto e CAS que 
 humana. As opções vêm desligadas; nome existente diferente, e-mail e nascimento continuam
 aguardando revisão. O percurso e seus limites estão em
 [`Aviso de transferência humana e nome informado`](../features/atendimento-alerta-humano-nome-informado.md).
-A aplicação automática do nome registra auditoria e muda a ficha; não grava consentimento nem
-atividade nova na timeline. A seção abaixo descreve a confirmação humana, não transforma a
+A aplicação automática do nome registra auditoria, muda a ficha e deixa uma linha na timeline
+do contato (como o telefone aplicado); não grava consentimento. A seção abaixo descreve a confirmação humana, não transforma a
 autoaplicação em confirmação ou consentimento do titular.
 
 ### Base legal — aplicada, não inventada
