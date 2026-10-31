@@ -23,7 +23,7 @@ import { midpoint } from "@/lib/kanban/fractional-indexing";
  *   2. a ORDEM relativa em que os cards estavam sobrevive à movida;
  *   3. o lote pousa no TOPO da etapa de destino — ACIMA de quem já estava, sem
  *      reescrever a posição de ninguém (issue #3461: o card que entra na coluna
- *      nasce no topo; até a 9022 o lote encostava abaixo do último, e era por
+ *      nasce no topo; até a 9058 o lote encostava abaixo do último, e era por
  *      isso que a conversa transferida do Inbox aparecia no fim).
  */
 

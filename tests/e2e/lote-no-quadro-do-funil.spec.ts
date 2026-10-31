@@ -371,7 +371,7 @@ test.describe("Quadro do funil — agir em vários cards de uma vez", () => {
     expect(transbordo, "a página não rola na horizontal com a barra aberta").toBeLessThanOrEqual(0);
   });
 
-  test("mover vários de uma vez: os cards vão para a etapa nova, no fim e na mesma ordem", async ({
+  test("mover vários de uma vez: os cards vão para a etapa nova, no topo e na mesma ordem", async ({
     page,
   }) => {
     await login(page, creds.users.manager!.email, creds.password);
