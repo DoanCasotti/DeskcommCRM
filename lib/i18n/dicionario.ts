@@ -65,6 +65,23 @@ export const DICIONARIO: Traducoes = {
   "A conversa vai continuar pelo número de {nome} ({numero}).": {
     es: "La conversación va a continuar por el número de {nome} ({numero}).",
   },
+  // #3732 — a recusa do envio diz para onde ir, e a caixa de resposta trava.
+  "Esta conversa continua no seu número, em outra conversa do mesmo contato. Abra a conversa para responder.":
+    {
+      es: "Esta conversación continúa en tu número, en otra conversación del mismo contacto. Abre la conversación para responder.",
+    },
+  "Esta conversa continua pelo número de {nome}, em outra conversa do mesmo contato. Abra a conversa para responder.":
+    {
+      es: "Esta conversación continúa por el número de {nome}, en otra conversación del mismo contacto. Abre la conversación para responder.",
+    },
+  "Esta conversa continua em outra conversa do mesmo contato, no número de outro atendente. Abra a conversa para responder.":
+    {
+      es: "Esta conversación continúa en otra conversación del mismo contacto, en el número de otro atendente. Abre la conversación para responder.",
+    },
+  "A conversa continua no número em que está: o destino não tem número conectado do mesmo canal, ou o contato já tem conversa no número dele.":
+    {
+      es: "La conversación sigue en el número en el que está: el destino no tiene un número conectado del mismo canal, o el contacto ya tiene una conversación en su número.",
+    },
   "Destino inválido.": { es: "Destino inválido." },
   "Novas mensagens · Ir para o fim": { es: "Mensajes nuevos · Ir al final" },
   // Versão anterior barrada na prévia (doc de decisão 234): a moldura e as causas de `motivoDoVeto`.
@@ -921,6 +938,19 @@ export const DICIONARIO: Traducoes = {
   "já estavam na base ou foram excluídas a pedido do titular": { es: "ya estaban en la base o fueron eliminadas a pedido del titular" },
   "Sem nome da empresa.": { es: "Sin nombre de la empresa." },
   "Sem telefone válido.": { es: "Sin teléfono válido." },
+  // #3724 — a prévia da importação: os motivos vêm do SERVIDOR como frase pronta
+  // (`TEXTO_DO_MOTIVO`), então cada um precisa da sua chave aqui; é o que `t(r.motivo)` lê.
+  "Sem telefone.": { es: "Sin teléfono." },
+  "Telefone repetido na planilha.": { es: "Teléfono repetido en la planilla." },
+  "Já é contato do CRM.": { es: "Ya es un contacto del CRM." },
+  "Excluído a pedido do titular (LGPD).": { es: "Excluido a pedido del titular (LGPD)." },
+  "Conferir a lista antes de importar": { es: "Revisar la lista antes de importar" },
+  "entram": { es: "entran" },
+  "Linhas que ficam de fora": { es: "Líneas que quedan fuera" },
+  "Não foi possível conferir a planilha.": { es: "No fue posible revisar la planilla." },
+  "Nada foi importado ainda: a conferência não cria campanha.": {
+    es: "Todavía no se importó nada: la revisión no crea una campaña.",
+  },
   "Suas campanhas": { es: "Tus campañas" },
   "empresas": { es: "empresas" },
   "Sua próxima conversa começa aqui": { es: "Tu próxima conversación comienza aquí" },
@@ -1652,6 +1682,8 @@ export const DICIONARIO: Traducoes = {
   "aberto excepcionalmente": { es: "abierto excepcionalmente" },
   "Abrir atendimento": { es: "Abrir atención" },
   "Abra o atendimento e diga o que fazer: concluir, pedir informação ao cliente ou passar para uma pessoa.": { es: "Abre la atención e indica qué hacer: concluirla, pedir información al cliente o pasarla a una persona." },
+  "Confira em Conexões se o número voltou e se o histórico do período fora do ar entrou como esperado.": { es: "Revise en Conexiones si el número volvió y si el historial del período sin conexión entró como se esperaba." },
+  "Abra a conversa e responda o cliente — ele escreveu enquanto o número estava fora do ar.": { es: "Abra la conversación y responda al cliente: escribió mientras el número estaba sin conexión." },
   // O caso aberto na Central, na hora (`lib/escalacao/caso-na-central.handler.ts`).
   "A IA pediu ajuda à equipe": { es: "La IA pidió ayuda al equipo" },
   "Abra o caso para responder. A IA continua atendendo o cliente enquanto isso.": {
@@ -3857,6 +3889,37 @@ export const DICIONARIO: Traducoes = {
   "Credencial salva. Validando…": { es: "Credencial guardada. Validando…" },
   "Credencial salva. Validação em segundo plano.": { es: "Credencial guardada. Se validará en segundo plano." },
   "modelos disponíveis.": { es: "modelos disponibles." },
+  "vozes disponíveis.": { es: "voces disponibles." },
+  "Serviços de voz": { es: "Servicios de voz" },
+  Vozes: { es: "Voces" },
+  "Responder falando": { es: "Responder hablando" },
+  "Enviar nota de voz, não só texto": { es: "Enviar nota de voz, no solo texto" },
+  "Precisa de uma credencial do ElevenLabs cadastrada e de uma voz escolhida em Agente de IA → Provedores. Sem os dois, o agente continua respondendo em texto — ligar aqui não quebra nada.":
+    {
+      es: "Necesita una credencial de ElevenLabs registrada y una voz elegida en Agente de IA → Proveedores. Sin los dos, el agente sigue respondiendo en texto — activar esto no rompe nada.",
+    },
+  "Quando falar": { es: "Cuándo hablar" },
+  "Só quando o cliente mandar áudio": { es: "Solo cuando el cliente envíe audio" },
+  "Nunca (desligado, sem apagar a configuração)": {
+    es: "Nunca (desactivado, sin borrar la configuración)",
+  },
+  "Voz salva:": { es: "Voz guardada:" },
+  "Voz do agente": { es: "Voz del agente" },
+  "Qual voz sai quando um agente responde em áudio — ligado por versão, no editor do agente. Precisa de uma credencial do ElevenLabs validada.":
+    {
+      es: "Qué voz se usa cuando un agente responde en audio — se activa por versión, en el editor del agente. Necesita una credencial de ElevenLabs validada.",
+    },
+  "Sem credencial do ElevenLabs validada ainda.": {
+    es: "Aún no hay una credencial de ElevenLabs validada.",
+  },
+  "Cadastrar em Credenciais": { es: "Registrar en Credenciales" },
+  "Voice ID": { es: "Voice ID" },
+  "Ouvir prévia": { es: "Escuchar vista previa" },
+  "Salvar voz": { es: "Guardar voz" },
+  "Para o agente ouvir o áudio que o cliente manda com mais precisão (inclusive diferenciando quem fala) e para responder falando, em nota de voz, quando fizer sentido.":
+    {
+      es: "Para que el agente escuche el audio que el cliente envía con más precisión (incluso diferenciando quién habla) y para responder hablando, en nota de voz, cuando tenga sentido.",
+    },
   "Salvar e validar": { es: "Guardar y validar" },
   "Obrigatório": { es: "Obligatorio" },
   "Chave muito curta": { es: "Clave demasiado corta" },
@@ -4886,14 +4949,29 @@ export const DICIONARIO: Traducoes = {
   "Transforma o áudio que o cliente mandou em texto que o agente lê.": {
     es: "Transforma el audio que envió el cliente en texto que el agente lee.",
   },
-  "Este ponto não tem modelo escolhido no painel: quem ouve o áudio é a escada de transcrição, e ela decide a cada nota de voz. Primeiro o serviço desta instalação (TRANSCRIPTION_API_KEY); na falta dele, a chave OpenAI com o modelo de transcrição de sempre (whisper-1, ou o que TRANSCRIPTION_MODEL trouxer); se a conversa da organização for OpenRouter, a própria OpenRouter transcreve com a mesma chave; e quando não há chave OpenAI nenhuma, o modelo de conversa da organização — desde que ele declare a capacidade de áudio, que é como uma organização só com Gemini transcreve. Sem nenhum dos quatro, o áudio não vira texto, e o motivo aparece aqui. Por isso fixar um provedor aqui apagaria os degraus seguintes.": {
-    es: "Este punto no tiene un modelo elegido en el panel: quien escucha el audio es la escalera de transcripción, y decide en cada nota de voz. Primero el servicio de esta instalación (TRANSCRIPTION_API_KEY); si no, la clave de OpenAI con el modelo de transcripción de siempre (whisper-1, o lo que traiga TRANSCRIPTION_MODEL); si la conversación de la organización es OpenRouter, la propia OpenRouter transcribe con la misma clave; y cuando no hay ninguna clave de OpenAI, el modelo de conversación de la organización — siempre que declare la capacidad de audio, que es como una organización solo con Gemini transcribe. Sin ninguno de los cuatro, el audio no se convierte en texto, y el motivo aparece aquí. Por eso fijar un proveedor aquí borraría los escalones siguientes.",
+  "Este ponto não tem modelo escolhido no painel: quem ouve o áudio é a escada de transcrição, e ela decide a cada nota de voz. Primeiro o serviço desta instalação (TRANSCRIPTION_API_KEY); na falta dele, a chave OpenAI com o modelo de transcrição de sempre (whisper-1, ou o que TRANSCRIPTION_MODEL trouxer); se a conversa da organização for OpenRouter, a própria OpenRouter transcreve com a mesma chave; e quando não há chave OpenAI nenhuma, o modelo de conversa da organização — desde que ele declare a capacidade de áudio, que é como uma organização só com Gemini transcreve. Sem nenhum dos quatro, o áudio não vira texto, e o motivo aparece aqui. Por isso fixar um provedor aqui apagaria os degraus seguintes. A única escolha é usar o ElevenLabs (Scribe) antes de todos eles, com a chave do ElevenLabs da organização; sem essa chave, vale a ordem acima.": {
+    es: "Este punto no tiene un modelo elegido en el panel: quien escucha el audio es la escalera de transcripción, y decide en cada nota de voz. Primero el servicio de esta instalación (TRANSCRIPTION_API_KEY); si no, la clave de OpenAI con el modelo de transcripción de siempre (whisper-1, o lo que traiga TRANSCRIPTION_MODEL); si la conversación de la organización es OpenRouter, la propia OpenRouter transcribe con la misma clave; y cuando no hay ninguna clave de OpenAI, el modelo de conversación de la organización — siempre que declare la capacidad de audio, que es como una organización solo con Gemini transcribe. Sin ninguno de los cuatro, el audio no se convierte en texto, y el motivo aparece aquí. Por eso fijar un proveedor aquí borraría los escalones siguientes. La única elección es usar ElevenLabs (Scribe) antes que todos ellos, con la clave de ElevenLabs de la organización; sin esa clave, vale el orden anterior.",
   },
   "o serviço de transcrição configurado nesta instalação (TRANSCRIPTION_API_KEY) é o que ouve os áudios": {
     es: "el servicio de transcripción configurado en esta instalación (TRANSCRIPTION_API_KEY) es el que escucha los audios",
   },
   "a chave OpenAI desta organização ou instalação usa o padrão de transcrição de sempre": {
     es: "la clave de OpenAI de esta organización o instalación usa el estándar de transcripción de siempre",
+  },
+  "Responder o cliente falando": {
+    es: "Responder al cliente hablando",
+  },
+  "Transforma a resposta do agente em nota de voz, nas organizações e versões que ligaram essa opção.": {
+    es: "Convierte la respuesta del agente en nota de voz, en las organizaciones y versiones que activaron esa opción.",
+  },
+  "A organização ligou a resposta em voz e o agente continua respondendo só em texto.": {
+    es: "La organización activó la respuesta en voz y el agente sigue respondiendo solo en texto.",
+  },
+  "Usa o ElevenLabs — não é um modelo de conversa, e hoje não há um segundo serviço de síntese para escolher entre.": {
+    es: "Usa ElevenLabs — no es un modelo de conversación, y hoy no hay un segundo servicio de síntesis entre el cual elegir.",
+  },
+  "a organização escolheu o ElevenLabs (Scribe) para ouvir os áudios, com a chave do ElevenLabs dela": {
+    es: "la organización eligió ElevenLabs (Scribe) para escuchar los audios, con su propia clave de ElevenLabs",
   },
   "o provedor de conversa desta organização é a OpenRouter, que transcreve na própria API com a mesma chave": {
     es: "el proveedor de conversación de esta organización es OpenRouter, que transcribe en la propia API con la misma clave",
@@ -8684,6 +8762,15 @@ export const DICIONARIO: Traducoes = {
   "Mídia apagada pela política de retenção ({n} dias)": {
     es: "Multimedia eliminada por la política de retención ({n} días)",
   },
+  // O aviso equivalente no ANEXO DA NOTA INTERNA (#3756): a mesma política, o
+  // mesmo tom de operador — a palavra é "anexo" porque é o que a nota perde, e
+  // "mídia" ali faria o operador procurar uma conversa.
+  "Anexo da nota apagado pela política de retenção.": {
+    es: "Archivo adjunto de la nota eliminado por la política de retención.",
+  },
+  "Anexo da nota apagado pela política de retenção ({n} dias)": {
+    es: "Archivo adjunto de la nota eliminado por la política de retención ({n} días)",
+  },
   Áudio: { es: "Audio" },
   Imagem: { es: "Imagen" },
   Figurinha: { es: "Sticker" },
@@ -10805,6 +10892,12 @@ export const DICIONARIO: Traducoes = {
   "Período anterior": { es: "Período anterior" },
   "Próximo período": { es: "Período siguiente" },
   "Tipo de agendamento": { es: "Tipo de cita" },
+  // #3766 — o título livre do compromisso.
+  "Título do compromisso": { es: "Título de la cita" },
+  "OS 1234 · Atendimento fulano": { es: "OS 1234 · Atención a fulano" },
+  "Aparece na agenda e também para o cliente, no lembrete e no convite. Em branco, usa o nome do tipo de agendamento.": {
+    es: "Aparece en la agenda y también para el cliente, en el recordatorio y en la invitación. En blanco, usa el nombre del tipo de cita.",
+  },
   "Por que está cancelando?": { es: "¿Por qué estás cancelando?" },
   "O paciente pediu para remarcar por telefone": { es: "El paciente pidió reprogramar por teléfono" },
   "Sincronizar com o Google ainda não está disponível": { es: "Sincronizar con Google todavía no está disponible" },
@@ -12119,6 +12212,18 @@ export const DICIONARIO: Traducoes = {
     es: "Las respuestas a los clientes están esperando. Recarga el saldo en la cuenta del proveedor: salen solas cuando vuelva el saldo, durante hasta 6 horas. Después de eso, la conversación que no se respondió aparece aquí en la Central.",
   },
   "Revisar credencial": { es: "Revisar credencial" },
+  // ─── lib/ai/inbox-destino.ts, `assinatura_desconectada` (#3371, migration 9027) ───
+  // O botão diz o que FAZER ("Reconectar"), não "revisar": nada há para inspecionar,
+  // a conta precisa ser conectada de novo. O espanhol repete a ação, não o rótulo.
+  "Reconectar a assinatura": { es: "Reconectar la suscripción" },
+  // O título do item na Central (`KIND_LABEL`): o `agent-inbox-copy.test.ts` exige
+  // o par `es` para TODO kind do vocabulário, e é o que o cliente vê na lista.
+  "A conta do ChatGPT desconectou — a IA parou de responder": {
+    es: "La cuenta de ChatGPT se desconectó — la IA dejó de responder",
+  },
+  "A conta que paga a assinatura recusou o login. Reconecte em IA › Credenciais; este aviso se resolve sozinho quando o login voltar.": {
+    es: "La cuenta que paga la suscripción rechazó el inicio de sesión. Reconéctala en IA › Credenciales; este aviso se cierra solo cuando el inicio de sesión vuelva.",
+  },
   // ─── lib/agent-engine/agent/aviso-de-destino-recusado.ts (#2297) ───
   "Transferência para o funil da intenção recusada": {
     es: "Transferencia al embudo de la intención rechazada",
@@ -12464,6 +12569,9 @@ export const DICIONARIO: Traducoes = {
   "Novo produto": { es: "Nuevo producto" },
   "Importar planilha": { es: "Importar hoja de cálculo" },
   "Baixar planilha modelo": { es: "Descargar plantilla" },
+  "Na coluna foto, cole o link da imagem (JPG ou PNG, até 5 MB). Para até 5 fotos, separe os links com | — a primeira é a capa.": {
+    es: "En la columna foto, pega el enlace de la imagen (JPG o PNG, hasta 5 MB). Para hasta 5 fotos, separa los enlaces con | — la primera es la portada.",
+  },
   "Produto cadastrado": { es: "Producto registrado" },
   "Produto desativado": { es: "Producto desactivado" },
   "Produto reativado": { es: "Producto reactivado" },
@@ -12650,6 +12758,28 @@ export const DICIONARIO: Traducoes = {
     es: ". Mayúsculas y minúsculas no cambian el código — escríbelo igual que en el catálogo para actualizar el producto.",
   },
   "nenhuma coluna": { es: "ninguna columna" },
+  // Foto por URL na planilha (#3587). A frase é a chave INTEIRA com o valor
+  // como placeholder: traduzida aos pedaços, cada trecho novo é mais uma chave
+  // que pode faltar.
+  'foto não reconhecida ("{url}") — use o endereço completo, começando com http:// ou https://': {
+    es: 'foto no reconocida ("{url}") — usa la dirección completa, empezando por http:// o https://',
+  },
+  "a linha traz {quantidade} fotos — o produto aceita até {limite}. Deixe as {limite} primeiras na coluna.": {
+    es: "la fila trae {quantidade} fotos — el producto acepta hasta {limite}. Deja las {limite} primeras en la columna.",
+  },
+  "a foto aponta para um endereço que o servidor não pode acessar: {url}": {
+    es: "la foto apunta a una dirección que el servidor no puede alcanzar: {url}",
+  },
+  "não consegui baixar a foto: {url}": { es: "no pude descargar la foto: {url}" },
+  "não consegui baixar a foto (HTTP {status}): {url}": {
+    es: "no pude descargar la foto (HTTP {status}): {url}",
+  },
+  "a foto passa de 5 MB: {url}": { es: "la foto supera los 5 MB: {url}" },
+  "o endereço não devolveu uma foto JPG ou PNG: {url}": {
+    es: "la dirección no devolvió una foto JPG o PNG: {url}",
+  },
+  "o link redireciona vezes demais: {url}": { es: "el enlace redirige demasiadas veces: {url}" },
+  "não consegui guardar a foto: {url}": { es: "no pude guardar la foto: {url}" },
 
   // ─── Análise → Meta Ads e Configurações → Meta Ads (0214) ───
   //
@@ -13147,6 +13277,8 @@ export const DICIONARIO: Traducoes = {
   "Esta chave de idempotência já foi usada com outro conteúdo.": { es: "Esta clave de idempotencia ya se usó con otro contenido." },
   "Um canal está em modo de teste — a IA não responde ninguém nele": { es: "Un canal está en modo de prueba — la IA no responde a nadie en él" },
   "Um canal foi pausado — não recebe nem envia mensagens": { es: "Un canal fue pausado — no recibe ni envía mensajes" },
+  "A conexão voltou de uma queda — recuperação das conversas": { es: "La conexión volvió de una caída — recuperación de las conversaciones" },
+  "Um cliente escreveu enquanto o número estava fora e ainda não teve resposta": { es: "Un cliente escribió mientras el número estaba fuera y todavía no tuvo respuesta" },
   "Se este canal precisar voltar a operar, retome a pausa em Conexões — este aviso se resolve sozinho quando a pausa for desfeita.": { es: "Si este canal necesita volver a operar, reanuda la pausa en Conexiones — este aviso se resuelve solo cuando se deshace la pausa." },
   "A mesma requisição ainda está em curso. Tente de novo em instantes.": { es: "La misma solicitud todavía está en curso. Inténtalo de nuevo en unos instantes." },
   "Filtros inválidos.": { es: "Filtros inválidos." },
@@ -16993,6 +17125,8 @@ export const DICIONARIO: Traducoes = {
   "No arquivo de ambiente do servidor, ligue o canal do parceiro (bloco do parceiro no .env.example) e reinicie o app.": { es: "En el archivo de entorno del servidor, activa el canal del socio (bloque del socio en .env.example) y reinicia la app." },
   "Fazer e receber chamada de voz pelo número. Depois, cada empresa aceita o risco e liga.": { es: "Hacer y recibir llamadas de voz por el número. Después, cada empresa acepta el riesgo y la activa." },
   "No arquivo de ambiente, WACALLS_API_BASE_URL e WACALLS_API_TOKEN, e voz em COMPOSE_PROFILES.": { es: "En el archivo de entorno, WACALLS_API_BASE_URL y WACALLS_API_TOKEN, y voz en COMPOSE_PROFILES." },
+  "Telefonia da empresa": { es: "Telefonía de la empresa" },
+  "Com o servidor preparado para telefonia, a empresa salva o tronco SIP da operadora e passa a ver as ligações em Chamadas.": { es: "Con el servidor preparado para telefonía, la empresa guarda el tronco SIP de la operadora y pasa a ver las llamadas en Llamadas." },
   "Telefonia por SIP": { es: "Telefonía por SIP" },
   "Atender e ligar por telefone de verdade, com agente de voz.": { es: "Atender y llamar por teléfono de verdad, con agente de voz." },
   "No servidor, telefonia em COMPOSE_PROFILES e os arquivos do Asterisk. Este app não enxerga isso.": { es: "En el servidor, telefonia en COMPOSE_PROFILES y los archivos de Asterisk. Esta app no lo puede ver." },
@@ -17288,6 +17422,12 @@ export const DICIONARIO: Traducoes = {
   "A importação parou por um erro.": { es: "La importación se detuvo por un error." },
   "Detalhe: {erro}": { es: "Detalle: {erro}" },
   "A importação mudou enquanto você olhava. A tela foi atualizada com o estado atual.": { es: "La importación cambió mientras la mirabas. La pantalla se actualizó con el estado actual." },
+  "Só contatos do CRM": { es: "Solo contactos del CRM" },
+  "Traz só as conversas de quem já tem ficha no CRM, sem criar fichas novas.": { es: "Trae solo las conversaciones de quienes ya tienen ficha en el CRM, sin crear fichas nuevas." },
+  "Recuperando as conversas da queda ({desde} a {ate})": { es: "Recuperando las conversaciones de la caída ({desde} a {ate})" },
+  "Importando agora.": { es: "Importando ahora." },
+  "Esperando sua vez na fila de importação.": { es: "Esperando su turno en la cola de importación." },
+  "A importação manual fica disponível quando a recuperação da queda terminar.": { es: "La importación manual estará disponible cuando termine la recuperación de la caída." },
 
   // ─── Cobrança do revendedor — Central (PR 3a) ───
   "Plano e cobrança da empresa precisam de atenção": { es: "El plan y la facturación de la empresa necesitan atención" },
