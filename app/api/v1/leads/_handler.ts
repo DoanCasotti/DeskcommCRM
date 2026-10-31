@@ -619,9 +619,9 @@ export async function createLeadHandler(
   // As DUAS réguas desta criação leem o MESMO `settings` de funil — os campos
   // exigidos (#2295, logo abaixo) e o PADRÃO do valor (#2730) — então a linha é
   // perguntada UMA vez só. E nenhuma quando não há o que perguntar: o webhook de
-  // captação, isento das duas, continua sem tocar em `crm_pipelines`, byte a
-  // byte como antes. O valor herdado de outro negócio não é julgado (ver
-  // `custom_fields_da_origem`), só o que difere dele.
+  // captação, isento das duas, só lê o funil quando traz `custom_fields`, por
+  // causa da régua de opção abaixo. O valor herdado de outro negócio não é
+  // julgado (ver `custom_fields_da_origem`), só o que difere dele.
   //
   // A OPÇÃO do campo de seleção (#3508) é a TERCEIRA régua a ler este `settings`
   // — e a razão de a leitura agora acontecer também na captação: um formulário
