@@ -53,6 +53,7 @@ vi.mock("@/lib/logger", () => ({
 const ORG = "11111111-1111-4111-8111-111111111111";
 const CONVERSA = "44444444-4444-4444-8444-444444444444";
 const ATENDENTE = "22222222-2222-4222-8222-222222222222";
+const COLEGA = "33333333-3333-4333-8333-333333333333";
 
 const CONVERSA_FECHADA = {
   id: CONVERSA,
@@ -145,7 +146,7 @@ describe("close — 'Devolver ao automático ao fechar' (o padrão marcado)", ()
     const [deps, input] = vi.mocked(devolverAtendimentoAoAgente).mock.calls[0]!;
     expect(deps.organizationId).toBe(ORG);
     expect(deps.actor).toEqual({ type: "user", id: ATENDENTE, role: "agent" });
-    expect(input).toEqual({ conversationId: CONVERSA });
+    expect(input).toEqual({ conversationId: CONVERSA, expectedAssignee: null });
     // Nenhuma origem automática: quem devolveu foi a pessoa, no gesto de fechar.
     expect(input.origem).toBeUndefined();
   });
@@ -190,5 +191,66 @@ describe("close — 'Devolver ao automático ao fechar' (o padrão marcado)", ()
 
     expect(res.status).toBe(409);
     expect(devolverAtendimentoAoAgente, "devolver uma conversa que não fechou desfaria o 409").not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * A MESMA REGRA DE DONO DO BOTÃO "Devolver ao automático" (#3436).
+ *
+ * `reactivate-bot` só devolve conversa de outro atendente pela mão de um
+ * `manager` ou acima, e passa o dono lido como `expectedAssignee`. Fechar com
+ * "devolver" marcado é o mesmo gesto por outra porta: sem a regra aqui, o
+ * agente que não pode clicar o botão conseguiria o mesmo efeito fechando.
+ *
+ * SABOTAGEM: tirar a guarda de dono da rota faz o primeiro caso acusar (a regra
+ * é chamada e a devolução sai `ok: true`); tirar o `expectedAssignee` faz o
+ * segundo acusar.
+ */
+describe("close — devolver ao fechar segue a regra de dono do botão", () => {
+  function conversaDoColega(papel: "agent" | "manager") {
+    vi.mocked(requireRole).mockResolvedValue({
+      ok: true,
+      user: { id: ATENDENTE, idioma: "pt-BR" },
+      org: { orgId: ORG, role: papel },
+    } as Awaited<ReturnType<typeof requireRole>>);
+    vi.mocked(createClient).mockResolvedValue({
+      from: () => ({
+        select: () => ({
+          eq: () => ({
+            eq: () => ({
+              maybeSingle: async () => ({
+                data: { ...CONVERSA_FECHADA, assigned_to_user_id: COLEGA },
+                error: null,
+              }),
+            }),
+          }),
+        }),
+      }),
+      // Quem pode ver pode encerrar: o fechamento em si não é o que se recusa.
+      rpc: async () => ({ data: true, error: null }),
+    } as unknown as Awaited<ReturnType<typeof createClient>>);
+  }
+
+  it("agente fechando conversa de colega com 'devolver': fecha, mas a trava NÃO é solta", async () => {
+    conversaDoColega("agent");
+
+    const res = await chamar({ expected_revision: 7, devolver_ao_automatico: true });
+    const corpo = (await res.json()) as Resposta;
+
+    expect(res.status).toBe(200);
+    expect(corpo.data.devolucao).toEqual({ ok: false, motivo: "conversa_de_outro_atendente" });
+    expect(devolverAtendimentoAoAgente, "agente não devolve conversa de colega").not.toHaveBeenCalled();
+  });
+
+  it("gerente fechando conversa de colega devolve, exigindo que o dono ainda seja o lido", async () => {
+    conversaDoColega("manager");
+
+    const res = await chamar({ expected_revision: 7, devolver_ao_automatico: true });
+    const corpo = (await res.json()) as Resposta;
+
+    expect(res.status).toBe(200);
+    expect(corpo.data.devolucao).toEqual({ ok: true });
+    const [, input] = vi.mocked(devolverAtendimentoAoAgente).mock.calls[0]!;
+    expect(input).toEqual({ conversationId: CONVERSA, expectedAssignee: COLEGA });
   });
 });

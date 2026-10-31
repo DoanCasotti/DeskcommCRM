@@ -48,6 +48,7 @@ import { type NextRequest } from "next/server";
 import { audit } from "@/lib/audit";
 import { ok, fail } from "@/lib/api/wrappers";
 import { requireRole } from "@/lib/auth/require-role";
+import { roleAtLeast } from "@/lib/auth/types";
 import { devolverAtendimentoAoAgente, type RetomadaResultado } from "@/lib/escalacao/retomada";
 import { logger } from "@/lib/logger";
 import type { Actor } from "@/lib/api/handlers/types";
@@ -129,15 +130,26 @@ export async function POST(req: NextRequest, ctx: RouteCtx): Promise<Response> {
   // do release (`claimed → open`) não muda atendimento nenhum, e o fechamento
   // que vem depois é a ÚNICA transição que conta. É o que a tela descreve:
   // encerra o atendimento e, no mesmo gesto, devolve o contato ao automático.
-  const devolucao = parsed.data.devolver_ao_automatico === true
-    ? await devolverAntesDeFechar({
-        supabase,
-        conversationId: id,
-        organizationId: visible.organization_id,
-        actor: { type: "user", id: user.id, role: authz.org.role },
-        requestId,
-      })
-    : null;
+  //
+  // A MESMA regra de dono do botão "Devolver ao automático" (#3436, em
+  // `reactivate-bot/route.ts`): conversa com dono que NÃO é quem fecha só volta
+  // ao agente pela mão de um `manager` ou acima. Aqui a recusa não é 403 — fechar
+  // é o gesto pedido e segue —, mas a devolução não acontece e o motivo viaja no
+  // corpo. E o dono lido vai como `expectedAssignee`: se alguém assumiu a
+  // conversa entre a leitura e a devolução, ela recusa (`assignment_conflict`).
+  const dono = visible.assigned_to_user_id ?? null;
+  const devolucao: DesfechoDaDevolucao | null = parsed.data.devolver_ao_automatico !== true
+    ? null
+    : dono !== null && dono !== user.id && !roleAtLeast(authz.org.role, "manager")
+      ? { ok: false, motivo: "conversa_de_outro_atendente" }
+      : await devolverAntesDeFechar({
+          supabase,
+          conversationId: id,
+          organizationId: visible.organization_id,
+          actor: { type: "user", id: user.id, role: authz.org.role },
+          requestId,
+          expectedAssignee: dono,
+        });
 
   // (3) E FECHA, com a MESMA revisão que o cliente mandou (ou a que foi lida
   // quando ele não mandou nenhuma). O CAS da `fn_service_status` (PT409) segue
@@ -187,6 +199,7 @@ async function devolverAntesDeFechar(deps: {
   organizationId: string;
   actor: Actor;
   requestId: string;
+  expectedAssignee: string | null;
 }): Promise<DesfechoDaDevolucao> {
   const resultado: RetomadaResultado = await devolverAtendimentoAoAgente(
     {
@@ -195,7 +208,7 @@ async function devolverAntesDeFechar(deps: {
       actor: deps.actor,
       requestId: deps.requestId,
     },
-    { conversationId: deps.conversationId },
+    { conversationId: deps.conversationId, expectedAssignee: deps.expectedAssignee },
   );
 
   if (resultado.ok) return { ok: true };

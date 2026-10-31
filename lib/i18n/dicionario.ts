@@ -8608,6 +8608,9 @@ export const DICIONARIO: Traducoes = {
   "Conversa encerrada, mas não consegui devolver o atendimento ao automático — a trava continua. Use Devolver ao automático na conversa para tentar de novo.": {
     es: "Conversación cerrada, pero no pude devolver la atención al automático: el bloqueo continúa. Usa Devolver al automático en la conversación para intentarlo de nuevo.",
   },
+  "Conversa encerrada. A IA não voltou neste contato: a conversa é de outro atendente, e só um gerente pode devolvê-la ao automático.": {
+    es: "Conversación cerrada. La IA no volvió en este contacto: la conversación es de otro atendente, y solo un gerente puede devolverla al automático.",
+  },
   "Arquivar encerra este atendimento e guarda a conversa no histórico. Se o cliente escrever de novo, ela volta.": {
     es: "Archivar cierra esta atención y guarda la conversación en el historial. Si el cliente vuelve a escribir, ella vuelve.",
   },

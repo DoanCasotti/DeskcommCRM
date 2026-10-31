@@ -75,6 +75,17 @@ export function useCloseConversation() {
         );
         return;
       }
+      // Regra de dono do botão "Devolver ao automático" (#3436): a conversa é
+      // de outro atendente e quem fechou não é gerente — tentar de novo pelo
+      // botão recusaria igual, então a frase aponta quem pode.
+      if (devolucao.motivo === "conversa_de_outro_atendente") {
+        toast.info(
+          t(
+            "Conversa encerrada. A IA não voltou neste contato: a conversa é de outro atendente, e só um gerente pode devolvê-la ao automático.",
+          ),
+        );
+        return;
+      }
       toast.warning(
         t(
           "Conversa encerrada, mas não consegui devolver o atendimento ao automático — a trava continua. Use Devolver ao automático na conversa para tentar de novo.",
