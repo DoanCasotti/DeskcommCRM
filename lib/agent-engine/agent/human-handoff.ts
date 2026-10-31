@@ -587,6 +587,10 @@ export async function performHumanHandoff(
          from (select id from adendo union all select id from criado) central
         where $5::uuid is not null
           and exists (select 1 from config_aviso_de_caso where organization_id = $1 and ligado)
+          -- Opção própria das transferências (ligada por padrão): a mesma régua de
+          -- avisoDeTransferenciaLigado — só o booleano false desliga.
+          and exists (select 1 from organizations where id = $1
+                        and (settings->'crm'->'avisar_transferencia_no_whatsapp') is distinct from 'false'::jsonb)
           and exists (select 1 from conversations where organization_id = $1 and id = $4
                         and metadata->>$8::text = $5::text
                         and metadata->>$7::text is distinct from $5::text)

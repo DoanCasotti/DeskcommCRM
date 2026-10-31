@@ -25,6 +25,7 @@ type Linhas = {
   conversations: { id: string; organization_id: string; contact_id: string; status: string;
     bot_silenced_until: string | null; metadata: Record<string, unknown> }[];
   agent_inbox_items: { id: string; organization_id: string; ref_kind: string; ref_id: string; body: string }[];
+  organizations: { id: string; settings: Record<string, unknown> }[];
 };
 type Linha = Linhas[keyof Linhas][number];
 type Alteracao = { metadata?: Record<string, { estado?: string }>; body?: string };
@@ -71,6 +72,8 @@ function fixture() {
       status: 'pending', bot_silenced_until: 'infinity', metadata: { [MARCA_EPISODIO_HANDOFF]: EVENT } }],
     agent_inbox_items: [{ id: CENTRAL, organization_id: ORG, ref_kind: 'conversation', ref_id: CONV,
       body: 'Uma pessoa precisa assumir esta conversa.' }],
+    // Sem a chave: ausente é ligado, como o aviso de Propostas.
+    organizations: [{ id: ORG, settings: { crm: {} } }],
   });
   const config: ConfigDoAviso = { organization_id: ORG, channel_session_id: CHANNEL,
     telefone_destino: '+5511999990000', destino_jid: null, ligado: true, resposta_whatsapp_habilitada: false };
@@ -178,6 +181,23 @@ test('opt-in retirado na releitura impede envio', async () => {
   assert.equal(f.chamadas.length, 0); assert.equal(f.marca()!.estado, 'cancelado');
 });
 
+test('transferências desligadas na organização cancelam antes da reserva', async () => {
+  const f = fixture();
+  f.admin.linhas.organizations[0]!.settings = { crm: { avisar_transferencia_no_whatsapp: false } };
+  const r = await aplicaAvisoHandoff(f.deps, f.row);
+  assert.equal(r.detail, 'desligado_em_transferencias');
+  assert.equal(f.chamadas.length, 0); assert.equal(f.pacing.length, 0);
+  assert.equal(f.marca()!.estado, 'cancelado');
+});
+
+test('só o booleano false desliga as transferências; lixo e ausência continuam ligados', async () => {
+  for (const crm of [{}, { avisar_transferencia_no_whatsapp: 'false' }, { avisar_transferencia_no_whatsapp: null }]) {
+    const f = fixture(); f.admin.linhas.organizations[0]!.settings = { crm };
+    assert.equal((await aplicaAvisoHandoff(f.deps, f.row)).status, 'ok', JSON.stringify(crm));
+    assert.equal(f.chamadas.length, 1);
+  }
+});
+
 test('evento de outra organização não lê nem grava dados desta', async () => {
   const f = fixture();
   await assert.rejects(aplicaAvisoHandoff(f.deps, { ...f.row, organization_id: 'outra-org' }));
@@ -187,7 +207,11 @@ test('evento de outra organização não lê nem grava dados desta', async () =>
 test('todas as leituras e escritas do adapter carregam organization_id', async () => {
   const f = fixture(); await aplicaAvisoHandoff(f.deps, f.row);
   assert.ok(f.admin.consultas.length > 6);
-  for (const q of f.admin.consultas) assert.ok(q.filtros.some(([col, val]) => col === 'organization_id' && val === ORG));
+  // `organizations` é a própria organização: a chave dela é `id`.
+  for (const q of f.admin.consultas) {
+    const coluna = q.tabela === 'organizations' ? 'id' : 'organization_id';
+    assert.ok(q.filtros.some(([col, val]) => col === coluna && val === ORG));
+  }
 });
 
 test('marcador ilegível falha fechado e não libera novo envio', async () => {

@@ -1,6 +1,7 @@
 import type { EventRow, HandlerResult } from '@/lib/event-log/dispatcher';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { AvisoDb, PacingDoAviso, TransporteDoAviso } from './aviso-ao-suporte';
+import { avisoDeTransferenciaLigado } from '@/lib/schemas/settings';
 
 /** Opt-in: usa somente o destinatário que o administrador já configurou. */
 export const EVENTO_AVISO_HANDOFF = 'ai.handoff_aviso_solicitado';
@@ -33,6 +34,8 @@ export interface AvisoHandoffDeps {
   origemDoDreno(): 'worker' | 'request';
   contexto(org: string, conversa: string): Promise<ContextoAvisoHandoff | null>;
   estado(row: EventRow): Promise<EstadoEnvioHandoff | null>;
+  /** `settings.crm.avisar_transferencia_no_whatsapp`; ausente = ligado. */
+  transferenciasLigadas(org: string): Promise<boolean>;
   /** Compare-and-set durável: só o vencedor pode chamar o transporte. */
   reservar(row: EventRow, em: string): Promise<boolean>;
   concluir(row: EventRow, estado: EstadoEnvioHandoff): Promise<void>;
@@ -112,9 +115,11 @@ export async function aplicaAvisoHandoff(deps: AvisoHandoffDeps, row: EventRow):
   const pacing = await deps.pacing.decide(row.organization_id, canal.id, agora);
   if (!pacing.liberado) return resposta('retry', pacing.motivo, pacing.liberaEm);
   // Releitura antes da reserva: retirada do opt-in ou atendimento retomado vence.
-  const [configAtual, contextoAtual] = await Promise.all([
+  const [configAtual, contextoAtual, transferencias] = await Promise.all([
     deps.db.carregaConfig(row.organization_id), deps.contexto(row.organization_id, conversa),
+    deps.transferenciasLigadas(row.organization_id),
   ]);
+  if (!transferencias) return cancelar('desligado_em_transferencias');
   if (!configAtual?.ligado || configAtual.channel_session_id !== config.channel_session_id ||
       configAtual.telefone_destino !== config.telefone_destino) return cancelar('configuracao_alterada');
   if (!contextoAtual?.emHandoff || contextoAtual.episodio !== row.id) return cancelar('episodio_encerrado');
@@ -152,7 +157,8 @@ function lerEstado(metadata: Metadata): EstadoEnvioHandoff | null {
 }
 
 /** Só este consumidor altera a metadata deste tipo de evento; o dreno altera status/attempts. */
-export function criarPersistenciaAvisoHandoff(admin: Admin): Pick<AvisoHandoffDeps, 'contexto' | 'estado' | 'reservar' | 'concluir'> {
+export function criarPersistenciaAvisoHandoff(admin: Admin): Pick<AvisoHandoffDeps,
+  'contexto' | 'estado' | 'reservar' | 'concluir' | 'transferenciasLigadas'> {
   async function metadataDoEvento(row: EventRow): Promise<Metadata> {
     const { data, error } = await admin.from('event_log').select('metadata')
       .eq('organization_id', row.organization_id).eq('id', row.id)
@@ -207,6 +213,14 @@ export function criarPersistenciaAvisoHandoff(admin: Admin): Pick<AvisoHandoffDe
       };
     },
     async estado(row) { return lerEstado(await metadataDoEvento(row)); },
+    async transferenciasLigadas(org) {
+      // Erro de leitura LANÇA (o handler devolve error e o dreno tenta de novo):
+      // nunca vira "ligado" para autorizar uma chamada externa.
+      const { data, error } = await admin.from('organizations').select('settings')
+        .eq('id', org).maybeSingle();
+      if (error || !data) throw new Error('aviso_handoff_opcao_indisponivel');
+      return avisoDeTransferenciaLigado((data as { settings?: unknown }).settings);
+    },
     async reservar(row, em) {
       const anterior = await metadataDoEvento(row);
       if (lerEstado(anterior)) return false;
