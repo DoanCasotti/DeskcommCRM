@@ -199,6 +199,18 @@ async function fixtureAutomática() {
   const f = await replyFixture(pool);
   orgsCriadas.push(f.org);
   await pool.query(`update ai_agents set operation_mode='automatic' where id=$1`, [f.agent]);
+  // O relógio é REAL (ver `deps`), então a janela de RESPOSTA do canal tem de
+  // cobrir o dia inteiro: com a padrão (7h-22h), rodar de madrugada no fuso do
+  // canal fazia o `outside_window` vetar a proposta e o teste ficar vermelho
+  // pela hora do relógio, não pelo motor. Mesmo recurso de
+  // `janela-de-resposta-no-turno.test.ts`.
+  await pool.query(
+    `insert into channel_knobs (organization_id, channel_session_id, resposta_start_hour, resposta_end_hour, allow_sunday)
+     values ($1, $2, 0, 24, true)
+     on conflict (organization_id, channel_session_id)
+     do update set resposta_start_hour = 0, resposta_end_hour = 24, allow_sunday = true`,
+    [f.org, f.channel],
+  );
   return f;
 }
 
@@ -443,6 +455,12 @@ describe("Sugerir resposta propõe quando o agente automático calaria (#3281)",
         await pool.query(`insert into llm_calls
           (organization_id,purpose,provider,model,cost_cents,status)
           values($1,'fixture_budget_control','anthropic','test-model',2000,'ok')`, [f.org]);
+        // O gate só bloqueia quem JÁ foi avisado neste mês (`decidirOrcamento`,
+        // regra 7: o primeiro cruzamento avisa e segue). Sem o aviso anterior,
+        // a recuperação seria exatamente esse primeiro cruzamento e passaria.
+        await pool.query(`insert into agent_inbox_items
+          (organization_id,kind,severity,title,body)
+          values($1,'budget_warning','warn','O gasto de IA passou do aviso','fixture')`, [f.org]);
       },
     }), {
       organizationId: f.org,
