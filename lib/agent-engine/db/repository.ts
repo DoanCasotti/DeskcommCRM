@@ -133,6 +133,11 @@ export type InboxKind =
   // único parcial de aberto, e é o banco que fecha a corrida.
   | 'recuperacao_da_queda'
   | 'cliente_sem_resposta_na_queda'
+  // (migration 9027, issue #3371) A conta da assinatura do ChatGPT desconectou
+  // e a renovação foi recusada: 107 turnos com 401 no cliente Obralivre, ~26 h
+  // sem resposta e a Central vazia. UM item por incidente (índice único
+  // parcial), fechado sozinho quando o login volta pela tela de Credenciais.
+  | 'assinatura_desconectada'
   | 'other';
 
 export interface InboxItemRow {

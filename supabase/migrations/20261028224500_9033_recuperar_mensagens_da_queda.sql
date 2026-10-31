@@ -103,6 +103,7 @@ alter table public.agent_inbox_items
     'email_de_login_trocado',
     'task_due',
     'task_overdue',
+    'assinatura_desconectada',
     'recuperacao_da_queda',
     'cliente_sem_resposta_na_queda',
     'other'

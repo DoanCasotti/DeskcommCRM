@@ -124,6 +124,11 @@ export const KIND_LABEL = {
   recuperacao_da_queda: "A conexão voltou de uma queda — recuperação das conversas",
   // Diz o que o CLIENTE viveu: escreveu, o número estava fora, e ninguém respondeu.
   cliente_sem_resposta_na_queda: "Um cliente escreveu enquanto o número estava fora e ainda não teve resposta",
+  // Diz o que o CLIENTE vive: a conta que respondia por assinatura do ChatGPT
+  // foi recusada e a IA parou. "Token expirado" é vocabulário de quem instalou;
+  // "parou de responder" é o que faz quem lê a Central agir — e a ação é uma
+  // só, reconectar em Credenciais.
+  assinatura_desconectada: "A conta do ChatGPT desconectou — a IA parou de responder",
   other: "Aviso do assistente",
 } as const satisfies Record<InboxKind, string>;
 
