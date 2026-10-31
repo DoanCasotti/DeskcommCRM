@@ -60566,6 +60566,20 @@ create policy tenant_isolation_crm_lead_attachments_write on public.crm_lead_att
 -- O `alter default privileges` do baseline dá ALL a `anon` em tabela nova.
 revoke all on public.crm_lead_attachments from anon;
 
+-- ---- aviso do anexo da nota apagado por retenção (migration 9050, issue #3756) ----
+-- Espelho idempotente da 9050: o passo 2c da poda zerava os três ponteiros da
+-- nota sem deixar rastro, e a nota que perdeu o anexo ficava idêntica a uma nota
+-- que nunca teve. As duas colunas são o que a tela lê; nascem `null` (nenhum
+-- backfill: nota que já perdeu o anexo antes desta versão continua sem aviso).
+alter table public.conversation_notes
+  add column if not exists media_expired_at timestamptz,
+  add column if not exists media_retention_days integer;
+
+comment on column public.conversation_notes.media_expired_at is
+  'Quando a retenção por idade apagou o anexo (passo 2c de fn_enfileirar_midia_vencida). Null = nota sem anexo apagado; é o que a tela lê para avisar (#3756).';
+comment on column public.conversation_notes.media_retention_days is
+  'Os dias da política vigentes no instante da remoção (já com o piso de 30) — o aviso cita o número, como o da mensagem.';
+
 -- A poda de mídia passa a enxergar o anexo de negócio (passo 2b). O corpo é a
 -- ÚLTIMA definição da cadeia (0572, com o passo 2c da nota viva) mais só este
 -- delta: `'leads'` no segundo segmento e o `not exists` em crm_lead_attachments.
@@ -60802,6 +60816,13 @@ begin
   --     #1887 cobra (e que reprova se a condição de idade sumir).
   --     Os três ponteiros são zerados como no passo 6d da 0483: a nota fica
   --     com o texto e sem card apontando para arquivo que já saiu do bucket.
+  --     E, junto deles, o RASTRO que a tela lê (#3756): `media_expired_at` e
+  --     `media_retention_days`, o MESMO par que a 0557 grava na `metadata` da
+  --     mensagem. Os três ponteiros zerados não dizem POR QUÊ: sem a marca, a
+  --     nota que perdeu o anexo fica idêntica a uma nota que nunca teve — e o
+  --     operador lê o texto sem saber que ali havia um arquivo. Gravar os dias
+  --     segue a régua do passo 1: "por política", sem o número, é promessa sem
+  --     medida.
   --     Arquivo já removido à mão não quebra a rodada: a linha entra como
   --     `pending` e o worker a fecha como `skipped`, como no passo 1.
   --     Aqui não existe o "nenhuma OUTRA mensagem usa" do passo 1: o caminho
@@ -60811,7 +60832,8 @@ begin
   --     acontece); nesse caso a mais nova perde o anexo quando a mais velha
   --     vence — caso raro, aceito na decisão.
   with vencidas_da_nota as (
-    select n.id, n.organization_id, n.media_storage_path as caminho
+    select n.id, n.organization_id, n.media_storage_path as caminho,
+           greatest(coalesce(o.media_retention_days, 365), 30) as retencao_dias
       from public.conversation_notes n
       join public.organizations o on o.id = n.organization_id
      where n.media_storage_path is not null
@@ -60839,7 +60861,11 @@ begin
     returning 1
   ), limpas_da_nota as (
     update public.conversation_notes n
-       set media_storage_path = null, media_mime = null, media_size_bytes = null
+       set media_storage_path = null,
+           media_mime = null,
+           media_size_bytes = null,
+           media_expired_at = now(),
+           media_retention_days = v.retencao_dias
       from vencidas_da_nota v
      where n.id = v.id
     returning 1
