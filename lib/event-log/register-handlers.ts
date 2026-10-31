@@ -17,6 +17,7 @@ import { automationRulesHandler } from "@/lib/automation/engine.handler";
 import { followupReactivityHandler } from "@/lib/followup/reactivity.handler";
 import { campanhaRespostaHandler } from "@/lib/campanhas/resposta.handler";
 import { followupGatilhoEtapaHandler } from "@/lib/followup/gatilho-etapa.handler";
+import { followupSaidaDaEtapaHandler } from "@/lib/followup/saida-da-etapa.handler";
 import { followupGatilhoLeadHandler } from "@/lib/followup/gatilho-lead.handler";
 import { followupGatilhoCasoHandler } from "@/lib/followup/gatilho-caso.handler";
 import { casoNaCentralHandler } from "@/lib/escalacao/caso-na-central.handler";
@@ -60,6 +61,14 @@ export function ensureHandlersRegistered(): void {
   registerHandler(lgpdExportHandler);
   registerHandler(lgpdRedactHandler);
   registerHandler(automationRulesHandler);
+  // A outra metade do mesmo evento: saiu da etapa, o toque que ela armou morre
+  // (escrita curta no banco, idempotente pela linha do event_log). A ORDEM IMPORTA:
+  // a saída roda ANTES do gatilho porque o índice `idx_followup_enrollments_one_live`
+  // admite um único toque vivo por contato. Na ordem inversa, o card que vai de uma
+  // etapa com fluxo para outra etapa com fluxo bate no índice ao armar o fluxo novo
+  // (o antigo ainda vivo), e logo depois a saída cancela o antigo: o contato fica
+  // sem follow-up nenhum. Vigiado em `tests/unit/followup-por-etapa.test.ts`.
+  registerHandler(followupSaidaDaEtapaHandler);
   registerHandler(followupGatilhoEtapaHandler);
   // Escrita curta no banco (um item na Central), vizinha do gatilho de etapa
   // que consome o mesmo evento.
