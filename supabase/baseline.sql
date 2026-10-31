@@ -60575,6 +60575,20 @@ create policy tenant_isolation_crm_lead_attachments_write on public.crm_lead_att
 -- O `alter default privileges` do baseline dá ALL a `anon` em tabela nova.
 revoke all on public.crm_lead_attachments from anon;
 
+-- ---- aviso do anexo da nota apagado por retenção (migration 9050, issue #3756) ----
+-- Espelho idempotente da 9050: o passo 2c da poda zerava os três ponteiros da
+-- nota sem deixar rastro, e a nota que perdeu o anexo ficava idêntica a uma nota
+-- que nunca teve. As duas colunas são o que a tela lê; nascem `null` (nenhum
+-- backfill: nota que já perdeu o anexo antes desta versão continua sem aviso).
+alter table public.conversation_notes
+  add column if not exists media_expired_at timestamptz,
+  add column if not exists media_retention_days integer;
+
+comment on column public.conversation_notes.media_expired_at is
+  'Quando a retenção por idade apagou o anexo (passo 2c de fn_enfileirar_midia_vencida). Null = nota sem anexo apagado; é o que a tela lê para avisar (#3756).';
+comment on column public.conversation_notes.media_retention_days is
+  'Os dias da política vigentes no instante da remoção (já com o piso de 30) — o aviso cita o número, como o da mensagem.';
+
 -- A poda de mídia passa a enxergar o anexo de negócio (passo 2b). O corpo é a
 -- ÚLTIMA definição da cadeia (0572, com o passo 2c da nota viva) mais só este
 -- delta: `'leads'` no segundo segmento e o `not exists` em crm_lead_attachments.
@@ -60811,6 +60825,13 @@ begin
   --     #1887 cobra (e que reprova se a condição de idade sumir).
   --     Os três ponteiros são zerados como no passo 6d da 0483: a nota fica
   --     com o texto e sem card apontando para arquivo que já saiu do bucket.
+  --     E, junto deles, o RASTRO que a tela lê (#3756): `media_expired_at` e
+  --     `media_retention_days`, o MESMO par que a 0557 grava na `metadata` da
+  --     mensagem. Os três ponteiros zerados não dizem POR QUÊ: sem a marca, a
+  --     nota que perdeu o anexo fica idêntica a uma nota que nunca teve — e o
+  --     operador lê o texto sem saber que ali havia um arquivo. Gravar os dias
+  --     segue a régua do passo 1: "por política", sem o número, é promessa sem
+  --     medida.
   --     Arquivo já removido à mão não quebra a rodada: a linha entra como
   --     `pending` e o worker a fecha como `skipped`, como no passo 1.
   --     Aqui não existe o "nenhuma OUTRA mensagem usa" do passo 1: o caminho
@@ -60820,7 +60841,8 @@ begin
   --     acontece); nesse caso a mais nova perde o anexo quando a mais velha
   --     vence — caso raro, aceito na decisão.
   with vencidas_da_nota as (
-    select n.id, n.organization_id, n.media_storage_path as caminho
+    select n.id, n.organization_id, n.media_storage_path as caminho,
+           greatest(coalesce(o.media_retention_days, 365), 30) as retencao_dias
       from public.conversation_notes n
       join public.organizations o on o.id = n.organization_id
      where n.media_storage_path is not null
@@ -60848,7 +60870,11 @@ begin
     returning 1
   ), limpas_da_nota as (
     update public.conversation_notes n
-       set media_storage_path = null, media_mime = null, media_size_bytes = null
+       set media_storage_path = null,
+           media_mime = null,
+           media_size_bytes = null,
+           media_expired_at = now(),
+           media_retention_days = v.retencao_dias
       from vencidas_da_nota v
      where n.id = v.id
     returning 1
@@ -62155,6 +62181,72 @@ revoke execute on function public.fn_numero_da_transferencia(uuid, uuid, uuid)
 grant execute on function public.fn_numero_da_transferencia(uuid, uuid, uuid)
   to service_role;
 
+-- ---- a conversa que continua (migration 9054, #3732) ----
+create or replace function public.fn_conversa_que_continua(
+  p_organization_id uuid,
+  p_conversation_id uuid,
+  p_user_id uuid
+)
+returns uuid
+language sql
+stable
+set search_path = ''
+as $$
+  with conversa as (
+    select c.id, c.organization_id, c.contact_id, c.channel_session_id, atual.provider
+      from public.conversations c
+      join public.channel_sessions atual
+        on atual.organization_id = c.organization_id and atual.id = c.channel_session_id
+     where c.id = p_conversation_id
+       and c.organization_id = p_organization_id
+       and c.is_group = false
+       and p_user_id is not null
+  ),
+  responsaveis_do_atual as (
+    select r.user_id
+      from conversa
+      join public.channel_routing_policies p
+        on p.organization_id = conversa.organization_id
+       and p.channel_session_id = conversa.channel_session_id
+      join public.channel_routing_responsibles r
+        on r.organization_id = p.organization_id and r.policy_id = p.id
+  ),
+  numero_do_destino as (
+    select cs.id
+      from conversa
+      join public.channel_routing_responsibles r
+        on r.organization_id = conversa.organization_id and r.user_id = p_user_id
+      join public.channel_routing_policies p
+        on p.organization_id = r.organization_id and p.id = r.policy_id
+      join public.channel_sessions cs
+        on cs.organization_id = p.organization_id and cs.id = p.channel_session_id
+     where exists (select 1 from responsaveis_do_atual)
+       and not exists (select 1 from responsaveis_do_atual a where a.user_id = p_user_id)
+       and cs.provider = conversa.provider
+       and cs.archived_at is null
+       and cs.status = 'WORKING'
+       and coalesce(cs.metadata ->> 'disabled', 'false') <> 'true'
+     order by cs.created_at, cs.id
+     limit 1
+  )
+  select o.id
+    from conversa
+    join numero_do_destino n on true
+    join public.conversations o
+      on o.organization_id = conversa.organization_id
+     and o.contact_id = conversa.contact_id
+     and o.is_group = false
+     and o.id <> conversa.id
+     and o.channel_session_id = n.id
+   order by o.updated_at desc, o.id
+   limit 1;
+$$;
+
+revoke execute on function public.fn_conversa_que_continua(uuid, uuid, uuid)
+  from public, anon, authenticated;
+grant execute on function public.fn_conversa_que_continua(uuid, uuid, uuid)
+  to service_role;
+
 -- ---- claim livre exige motivo e CAS (migration 9017) ----
 -- manifest: Restringe a exceção de atribuição da 0776 ao claim para si com CAS (#3479). Transferência, roteamento e escrita sem lock otimista continuam exigindo visibilidade; preserva filtros de organização, elegibilidade e grants. Substitui na árvore final a proposta 0776, inédita na main e com timestamp colidido; seus bytes e autoria permanecem no ancestor original. A 9017 redefine a função completa, sem depender da proposta.
 -- 9017 — a conversa livre invisível só é assumida pelo claim com CAS.
@@ -62172,6 +62264,7 @@ declare
   v_conv public.conversations%rowtype;
   v_numero uuid;
   v_trocou_de_numero boolean := false;
+  v_continua uuid;
 begin
   if not public.fn_support_write_allowed(p_organization_id) then raise exception 'support_readonly' using errcode='42501'; end if;
   if auth.uid() is not null
@@ -62242,6 +62335,32 @@ begin
   v_numero := public.fn_numero_da_transferencia(p_organization_id, p_conversation_id, p_to_user_id);
   v_trocou_de_numero := v_numero is not null;
 
+  -- ─── #3732: e quando o número NÃO pode seguir ──────────────────────────────
+  -- O caso que a 9039 deixou em pé: o contato já tem conversa no número do dono
+  -- novo, então o número fica, e a conversa ficava presa com o dono novo num
+  -- número que não é dele (envio em 409, "transfira para você" — já feito).
+  --
+  -- A conversa que está NESSE número passa para o dono novo quando estava sem
+  -- dono ou com o dono ANTERIOR: é a metade que faltava para ele ter onde
+  -- responder. Conversa que já é de uma TERCEIRA pessoa não é tomada — quem a
+  -- assumiu no meio continua com ela, e o aviso do envio diz o nome dele. A
+  -- adoção passa por esta mesma função, então o evento da linha do tempo e o
+  -- resto vão junto.
+  if not v_trocou_de_numero and p_to_user_id is not null then
+    select o.id into v_continua
+      from public.conversations o
+     where o.id = public.fn_conversa_que_continua(
+             p_organization_id, p_conversation_id, p_to_user_id)
+       and (o.assigned_to_user_id is null
+            or o.assigned_to_user_id is not distinct from v_from)
+       and o.assigned_to_user_id is distinct from p_to_user_id
+       -- Doc 237, escolha 3-B: a conversa que a IA está atendendo fica com a
+       -- IA. Sem esta condição, conversa sem dono e com a IA ativa era adotada
+       -- e calada sem prazo (`bot_silenced_until = 'infinity'`), inclusive por
+       -- tabela numa troca de carteira, que pula essa conversa de propósito.
+       and public.comando_da_conversa(o) <> 'automatico';
+  end if;
+
   update public.conversations
      set assigned_to_user_id = p_to_user_id,
          -- Desnormalizado JUNTO com o dono, na mesma transação: nunca existe
@@ -62281,12 +62400,20 @@ begin
   values
     (p_organization_id, p_conversation_id, v_from, p_to_user_id, auth.uid(), p_reason);
 
+  -- #3732: a conversa que continua no número do dono novo vai junto (depois do
+  -- evento da conversa transferida, para a linha do tempo contar na ordem).
+  if v_continua is not null then
+    perform public.fn_conversation_assign(p_organization_id, v_continua, p_to_user_id, 'transfer');
+  end if;
+
   return next v_conv;
 end;
 $function$;
 
-revoke all     on function public.fn_conversation_assign(uuid, uuid, uuid, text, uuid, boolean) from public, anon;
-grant  execute on function public.fn_conversation_assign(uuid, uuid, uuid, text, uuid, boolean) to authenticated, service_role;
+revoke all     on function public.fn_conversation_assign(uuid, uuid, uuid, text, uuid, boolean) from public;
+revoke execute on function public.fn_conversation_assign(uuid, uuid, uuid, text, uuid, boolean) from anon;
+grant  execute on function public.fn_conversation_assign(uuid, uuid, uuid, text, uuid, boolean)
+  to authenticated, service_role;
 
 
 
@@ -65668,6 +65795,98 @@ begin
   );
 end;
 $function$;
+
+-- ---- O ledger de envio guarda mídia já sintetizada (migration 9051) ----
+-- Espelho idêntico da 9051 (o porquê está no cabeçalho dela): o lugar onde o
+-- envio de nota de voz do agente registra o áudio já sintetizado por (job_id, seq).
+alter table public.send_ledger
+  add column if not exists media_storage_path text;
+
+comment on column public.send_ledger.media_storage_path is
+  'Migration 9051. Caminho no Storage do áudio JÁ sintetizado para este '
+  '(job_id, seq) — preenchido uma vez, antes do envio, para um retry não '
+  'resintetizar (e pagar) de novo pela mesma mensagem lógica. NULL para toda '
+  'mensagem que não é voz, e para voz cuja síntese ainda não terminou.';
+
+-- ---- O agente aprende a falar: voz_enabled + voz_quando (migration 9052) ----
+-- Espelho idêntico da 9052 (o porquê está no cabeçalho dela). Fica ANTES da
+-- VARREDURA anon porque recria `fn_ai_agent_version_content_immutable`; o corpo
+-- é o da 0616 (a última definição acima) mais as duas colunas de voz.
+alter table public.ai_agent_versions
+  add column if not exists voz_enabled boolean not null default false;
+
+alter table public.ai_agent_versions
+  add column if not exists voz_quando text not null default 'espelhar';
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint where conname = 'ai_agent_versions_voz_quando_check'
+  ) then
+    alter table public.ai_agent_versions
+      add constraint ai_agent_versions_voz_quando_check
+      check (voz_quando in ('nunca', 'espelhar', 'sempre'));
+  end if;
+end $$;
+
+comment on column public.ai_agent_versions.voz_enabled is
+  'Migration 9052. A resposta do agente pode saír como nota de voz nesta versão. '
+  'Default FALSE preserva o comportamento de toda organização existente. '
+  'Também precisa de organizations.settings.voz.voice_id e da credencial ElevenLabs.';
+
+comment on column public.ai_agent_versions.voz_quando is
+  'Migration 9052. ''nunca'' (nunca fala, mesmo com voz_enabled=true — existe '
+  'para desligar sem apagar a config), ''espelhar'' (fala só quando o CLIENTE '
+  'mandou áudio nesta mensagem — o default) ou ''sempre''. Decidido em '
+  'lib/agent-engine/agent/voz-do-turno.ts.';
+
+create or replace function fn_ai_agent_version_content_immutable() returns trigger
+-- search_path fixo na PRÓPRIA definição: um create or replace sem a cláusula
+-- apaga o alter function ... set search_path da 0521 (invariante
+-- tests/invariants/avisos-do-security-advisor.test.ts).
+language plpgsql set search_path = '' as $fn$
+begin
+  if old.status <> 'draft' and (
+       new.system_prompt          is distinct from old.system_prompt
+    or new.provider               is distinct from old.provider
+    or new.model                  is distinct from old.model
+    or new.credential_id          is distinct from old.credential_id
+    or new.tool_ids               is distinct from old.tool_ids
+    or new.trigger_config         is distinct from old.trigger_config
+    or new.channel_session_id     is distinct from old.channel_session_id
+    or new.max_steps              is distinct from old.max_steps
+    or new.token_budget           is distinct from old.token_budget
+    or new.cost_budget_cents      is distinct from old.cost_budget_cents
+    or new.history_message_window is distinct from old.history_message_window
+    or new.history_token_window   is distinct from old.history_token_window
+    or new.handoff_keywords       is distinct from old.handoff_keywords
+    or new.handoff_tool_enabled   is distinct from old.handoff_tool_enabled
+    or new.handoff_legal_enabled  is distinct from old.handoff_legal_enabled
+    or new.followup               is distinct from old.followup
+    or new.multimodal_input       is distinct from old.multimodal_input
+    or new.video_frames_enabled   is distinct from old.video_frames_enabled
+    or new.split_messages         is distinct from old.split_messages
+    or new.split_max_chars        is distinct from old.split_max_chars
+    or new.cases_enabled          is distinct from old.cases_enabled
+    or new.operator_enabled       is distinct from old.operator_enabled
+    or new.operator_model         is distinct from old.operator_model
+    or new.operator_tool_ids      is distinct from old.operator_tool_ids
+    or new.pipeline_ids           is distinct from old.pipeline_ids
+    or new.knowledge_source_ids   is distinct from old.knowledge_source_ids
+    or new.proposal_ai_draft_enabled is distinct from old.proposal_ai_draft_enabled
+    or new.inbound_debounce_ms    is distinct from old.inbound_debounce_ms
+    or new.voz_enabled            is distinct from old.voz_enabled
+    or new.voz_quando             is distinct from old.voz_quando
+    or new.version_number         is distinct from old.version_number
+    or new.agent_id               is distinct from old.agent_id
+    or new.organization_id        is distinct from old.organization_id
+  ) then
+    raise exception 'ai_agent_versions % é imutável (status=%): mudança de conteúdo = versão draft nova; rollback = revert (clona + publica)',
+      old.id, old.status;
+  end if;
+  return new;
+end;
+$fn$;
 
 -- ---- VARREDURA anon: função nova nasce exposta em quem ATUALIZA (migration 0116) ----
 --

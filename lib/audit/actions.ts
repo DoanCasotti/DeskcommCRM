@@ -258,6 +258,8 @@ export const AUDIT_ACTIONS = [
   /** Provedor/modelo de um ponto do sistema que usa IA foi trocado no painel. */
   "ai.purpose_binding_updated",
   "ai.org_default_updated",
+  /** Voz da organização (voice_id/model_id do ElevenLabs) trocada no painel — plano de voz, Fase 7. */
+  "ai.voz_settings_updated",
   // Ligar/desligar uma das duas verificações que consultam modelo. Auditável
   // porque muda o que o sistema confere antes de falar com o cliente — e porque
   // custa dinheiro por mensagem.
