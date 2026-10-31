@@ -145,7 +145,32 @@ export function PipelinePageClient({
   );
   const router = useRouter();
   const pathname = usePathname();
-  const filters = useMemo(() => filtersFromParams(searchParams), [searchParams]);
+  /**
+   * ⚠️ O FILTRO PEDIDO VALE ANTES DE A URL CHEGAR NELE.
+   *
+   * `router.replace` só muda o `useSearchParams` depois da ida ao servidor
+   * (o payload RSC da página). Lendo o filtro só da URL, o segundo clique feito
+   * nessa janela partia do filtro VELHO: desmarcar a etiqueta A e marcar a B
+   * virava "A e B", e o quadro ficava vazio. Medido no e2e (#1208, CI de
+   * 30/10): o RSC levou 118 ms e o segundo clique veio 43 ms depois — numa VPS
+   * lenta a janela é de quem clica, não só do robô.
+   *
+   * Então o filtro pedido vale até a URL mudar. O `router.replace` seguinte
+   * DESCARTA o anterior ainda em voo (`actionQueue.pending.discarded` no Next
+   * 16), então a URL nunca para num pedido intermediário: quando ela muda, ou é
+   * o último pedido, ou é navegação de fora (voltar, link) — e a URL manda.
+   */
+  const [pedido, setPedido] = useState<LeadFilters | null>(null);
+  const urlAtual = searchParams.toString();
+  const [urlAnterior, setUrlAnterior] = useState(urlAtual);
+  if (urlAtual !== urlAnterior) {
+    setUrlAnterior(urlAtual);
+    setPedido(null);
+  }
+  const filters = useMemo(
+    () => pedido ?? filtersFromParams(searchParams),
+    [pedido, searchParams],
+  );
   const setFilters = useCallback(
     (next: LeadFilters) => {
       const p = new URLSearchParams(filtersToParams(next));
@@ -159,6 +184,7 @@ export function PipelinePageClient({
       const visaoPedida = searchParams.get("visao");
       if (visaoPedida) p.set("visao", visaoPedida);
       const qs = p.toString();
+      setPedido(next);
       router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
     },
     [router, pathname, searchParams],

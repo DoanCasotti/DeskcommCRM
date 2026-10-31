@@ -480,6 +480,14 @@ export function PainelDeMarcacao({
    * desse primeiro tipo a gastava ("sem jornada, fica") e a do tipo escolhido,
    * com outubro esgotado, chegava sem decidir nada: o mês morto de volta, em
    * 9 specs do e2e às 16h45 de sexta 30/10/2026.
+   *
+   * E só uma resposta que DECIDE gasta a decisão (#3777, @paulolimajr77):
+   * resposta sem jornada ou com erro deixa a decisão pendente. No MESMO tipo a
+   * consulta é refeita — a duração entra na chave dela, e uma falha pode passar
+   * —, e a resposta seguinte, com jornada e o mês esgotado, ainda precisa
+   * poder levar ao mês seguinte. Quem navega pelas setas decide por si: a
+   * decisão pendente não sobrevive a elas (senão a resposta que chega depois
+   * jogaria a pessoa de volta ao mês seguinte contra a volta à mão).
    */
   // Ajuste de estado DURANTE o render, não num efeito: o mês morto nem chega a
   // ser pintado (https://react.dev/learn/you-might-not-need-an-effect).
@@ -585,12 +593,10 @@ export function PainelDeMarcacao({
     } else if (publicouHorarios && !erroAoCarregar) {
       // `false` = o teto já foi gasto: a tela fica onde está.
       if (!saltarParaOMesSeguinte()) setAberturaDecidida(true);
-    } else {
-      // Sem jornada publicada (ou com erro na consulta) não há o que procurar
-      // adiante, e o aviso é o próximo passo.
-      setAberturaDecidida(true);
-      setSaltoDoPainel(false);
     }
+    // Sem jornada publicada (ou com erro na consulta) a resposta não decide
+    // nada: a decisão fica PENDENTE (#3777) e a próxima resposta do mesmo tipo,
+    // com jornada, ainda pode levar ao mês seguinte. O aviso aparece enquanto isso.
   }
 
   /**
