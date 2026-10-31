@@ -28,7 +28,7 @@ Se você roda o DeskcommCRM numa VPS, **leia a seção da versão para a qual es
 
 - **Avise a equipe na transferência humana e preencha nomes informados no atendimento** O número interno configurado em **Central de alertas → Aviso no WhatsApp** também pode receber um aviso quando o assistente transfere uma conversa para atendimento humano. Quem já deixou esse aviso ligado passa a receber as transferências: há uma tentativa por episódio, com link para o CRM e sem nome ou resumo da conversa; resultado incerto não é reenviado automaticamente. Para receber só os avisos de casos, desligue **Avisar também nas transferências para atendimento humano** na mesma tela. Em **Configurações → Distribuição de atendimento**, uma nova opção, desligada por padrão, permite preencher o nome vazio da ficha quando o cliente informa seu próprio nome por texto e o assistente usa a capacidade **Anotar dado que o cliente informou**. O nome preenchido assim aparece na linha do tempo do contato. Nome existente continua exigindo revisão; a seleção pelo assistente pode errar e a ficha deve ser conferida. Nenhuma variável ou alteração manual na VPS é necessária. Contribuição de @SerusoNakamoto.
 
-- **Conversas da queda do número voltam sozinhas** Quando o WhatsApp da empresa cai e volta com QR novo, as mensagens trocadas pelo celular nesse período agora voltam para o CRM sozinhas, sem ninguém apertar botão. Só entram as conversas de quem já tem ficha no CRM; quem não tem ficha continua fora, e nenhuma ficha nova é criada. As mensagens aparecem na conversa e sobem a caixa com a não lida, mas a IA não responde a elas, e nenhuma automação ou aviso dispara por causa delas. Se a equipe não respondeu ao cliente nesse período, a Central avisa. A importação manual do histórico ganha a opção "Só contatos do CRM", ligada por padrão. Nada a fazer na VPS.
+- **Conversas da queda do número voltam sozinhas** Quando o WhatsApp da empresa cai e volta com QR novo, as mensagens trocadas pelo celular nesse período agora voltam para o CRM sozinhas, sem ninguém apertar botão. Só entram as conversas de quem já tem ficha no CRM; quem não tem ficha continua fora, e nenhuma ficha nova é criada. As mensagens aparecem na conversa e sobem a caixa com a não lida, mas a IA não responde a elas, e nenhuma automação ou aviso dispara por causa delas. Se a equipe não respondeu ao cliente nesse período, a Central avisa. A importação manual do histórico ganha a opção "Só contatos do CRM", ligada por padrão. Nada a fazer na VPS. Contribuição de @paulolimajr77.
 
 - **A planilha de produtos aceita a foto por URL** A importação de produtos ganhou a coluna de foto. Cada linha pode trazer um
   link ou até cinco, separados por barra vertical, na ordem em que o atendente de
@@ -48,7 +48,7 @@ Se você roda o DeskcommCRM numa VPS, **leia a seção da versão para a qual es
   ElevenLabs em **Agente de IA → Credenciais**, escolha a voz em **Agente de IA → Provedores**
   (dá para ouvir uma prévia antes de decidir), e ligue "Responder falando" na versão
   do agente, em **Agente de IA → Editar agente**. Você escolhe
-  quando: sempre, nunca, ou só quando o cliente mandar áudio primeiro (o padrão).
+  quando: sempre, nunca, ou só quando o cliente mandar áudio primeiro (o padrão). Contribuição de @advglauberpires.
 
   Respostas com link ou longas continuam saindo em texto, para o cliente não perder
   o link nem o fim da mensagem. Nas conexões pela API oficial do WhatsApp (e pelos
@@ -169,7 +169,7 @@ Se você roda o DeskcommCRM numa VPS, **leia a seção da versão para a qual es
   resposta. Horário que a busca não trouxe é barrado, e o assistente refaz a
   resposta consultando a agenda do dia. A mesma conferência barra "sua consulta
   está agendada" quando nenhuma marcação foi gravada. Se o assistente insistir no
-  erro, a orientação passa a ser não citar horário e chamar a equipe.
+  erro, a orientação passa a ser não citar horário e chamar a equipe. Contribuição de @fillipeagra-cyber.
 
   Lembrar ao cliente a consulta que ele já tem continua permitido. Só vale para
   agentes com ferramenta de agenda e para texto escrito pelo modelo; não pede
