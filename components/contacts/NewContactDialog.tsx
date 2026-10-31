@@ -127,6 +127,12 @@ export function NewContactDialog({
   });
 
   const cpfError = form.formState.errors.cpf;
+  // ENQUANTO O DOCUMENTO ESTIVER INVÁLIDO, O ENVIO FICA IMPEDIDO (#3496).
+  // Avisar no campo e deixar o clique seguir faria o aviso virar decoração: o
+  // botão é a segunda testemunha do mesmo erro, e não a primeira. Quem digitou
+  // errado e nunca saiu do campo ainda é barrado pelo `handleSubmit`, que
+  // valida tudo de novo — o botão desabilitado é conveniência, não a defesa.
+  const documentoInvalido = Boolean(cpfError);
   const tags = useWatch({ control: form.control, name: "tags" }) ?? [];
 
   async function onSubmit(values: FormShape) {
@@ -331,13 +337,13 @@ export function NewContactDialog({
               <Button
                 type="button"
                 variant="secondary"
-                disabled={create.isPending}
+                disabled={create.isPending || documentoInvalido}
                 onClick={form.handleSubmit((values) => void salvar(values, true))}
               >
                 {t("Salvar e iniciar conversa")}
               </Button>
             )}
-            <Button type="submit" disabled={create.isPending}>
+            <Button type="submit" disabled={create.isPending || documentoInvalido}>
               {create.isPending ? t("Criando…") : t("Criar contato")}
             </Button>
           </DialogFooter>
