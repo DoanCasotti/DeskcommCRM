@@ -947,6 +947,11 @@ const HOSTS_DECLARADOS: Record<string, EntradaDeHost> = {
     motivo:
       "endpoint da API da DeepSeek (OpenAI-compatível) no registry de produção, no runtime de ensaio, no validador de chave e na prova de crédito. É o destino do request, não texto de interface; trocar pelo domínio do revendedor faria a chamada não chegar.",
   },
+  "api.elevenlabs.io": {
+    categoria: "FORNECEDOR",
+    motivo:
+      "endpoint da API do ElevenLabs nos três caminhos que falam com ela: síntese da voz do agente (`lib/ai/voz/sintetizar.ts`), transcrição pelo Scribe (`lib/messaging/media/transcription-elevenlabs.ts`) e validação da chave (`GET /v1/voices`, em lib/ai/provider-validators.ts). É o destino do request, com a chave da PRÓPRIA organização; trocar pelo domínio do revendedor faria a chamada não chegar.",
+  },
   "router.requesty.ai": {
     categoria: "FORNECEDOR",
     motivo:
@@ -1025,6 +1030,11 @@ const HOSTS_DECLARADOS: Record<string, EntradaDeHost> = {
   "console.anthropic.com": {
     categoria: "CONSOLE",
     motivo: "painel de chaves da Anthropic. Mesmo caso: é de onde a credencial do usuário sai.",
+  },
+  "elevenlabs.io": {
+    categoria: "CONSOLE",
+    motivo:
+      "painel onde o usuário gera a PRÓPRIA chave do ElevenLabs (`ondePegarAChave` de PROVEDORES_DE_SERVICO em lib/ai/pontos/provedores-de-servico.ts). Endereço do fornecedor, não nosso.",
   },
   "console.typesafe.ai": {
     categoria: "CONSOLE",
@@ -1369,6 +1379,9 @@ describe("catraca de host de terceiro no código que embarca", () => {
       // CONSOLE — o link "Onde pegar a chave" da tela de Credenciais.
       "console.typesafe.ai",
       "deskcomm.app",
+      // Decisão escrita: painel de chaves do ElevenLabs, o mesmo caso dos outros
+      // CONSOLE — o link "Onde pegar a chave" da tela de Credenciais.
+      "elevenlabs.io",
       // Decisão escrita (#3587): o modelo de planilha do catálogo
       // (`GET /api/v1/products/import`) ensina a coluna `foto` com duas URLs de
       // exemplo, e esse CSV chega baixado na mão de quem importa. É amostra de
