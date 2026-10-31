@@ -45,10 +45,45 @@ interface Props {
  * UTC, que no Brasil aparece como 25/10 às 21h. O prazo do aprendizado é um dia,
  * não um momento: monta-se a data no calendário local, sem fuso no meio.
  */
-function formatDateOnly(dia: string, idioma: string): string {
+/**
+ * Campo "Vale até" da linha. Grava ao SAIR do campo, e só se mudou: o navegador
+ * emite um valor completo a cada segmento digitado ("0002-11-15" no primeiro
+ * dígito do ano), e gravar a cada `onChange` salvava essa data pela metade e
+ * tirava o foco no meio da digitação. A `key` de quem usa remonta o campo quando
+ * o servidor devolve outro valor.
+ */
+export function ValidadeDaLinha({
+  id,
+  valor,
+  onSalvar,
+}: {
+  id: string;
+  valor: string;
+  onSalvar: (dia: string) => void;
+}) {
+  return (
+    <Input
+      id={id}
+      type="date"
+      defaultValue={valor}
+      onBlur={(e) => {
+        if (e.target.value !== valor) onSalvar(e.target.value);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") e.currentTarget.blur();
+      }}
+      className="w-full sm:w-44"
+    />
+  );
+}
+
+export function formatDateOnly(dia: string, idioma: string): string {
   const [ano, mes, diaDoMes] = dia.split("-").map(Number);
   if (!ano || !mes || !diaDoMes) return dia;
-  return new Date(ano, mes - 1, diaDoMes).toLocaleDateString(idioma, {
+  // `new Date(2, …)` lê o ano 2 como 1902; setFullYear não reinterpreta.
+  const data = new Date(2000, mes - 1, diaDoMes);
+  data.setFullYear(ano);
+  return data.toLocaleDateString(idioma, {
     day: "2-digit",
     month: "2-digit",
     year: "numeric",
@@ -354,13 +389,11 @@ export function OrgMemoryClient({ initialState }: Props) {
                         {t("Vale até")}
                       </Label>
                       <div className="flex flex-wrap items-center gap-2">
-                        <Input
+                        <ValidadeDaLinha
+                          key={`${entry.id}-${entry.valid_until ?? ""}`}
                           id={`entry-validade-${entry.id}`}
-                          type="date"
-                          value={entry.valid_until ?? ""}
-                          disabled={setValidity.isPending}
-                          onChange={(e) => handleSetValidity(entry.id, e.target.value)}
-                          className="w-full sm:w-44"
+                          valor={entry.valid_until ?? ""}
+                          onSalvar={(dia) => handleSetValidity(entry.id, dia)}
                         />
                         <Badge variant={entry.valid_until ? "info" : "neutral"} className="text-[10px]">
                           {entry.valid_until
